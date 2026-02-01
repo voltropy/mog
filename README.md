@@ -11,6 +11,7 @@ A TypeScript-based compiler for AlgolScript, a modern programming language with 
 - **Full test suite** (307 tests, all passing)
 - **Modern syntax** with lowercase keywords and curly braces
 - **Optional outer braces** - write code at file level without wrapping in `{ }`
+- **main() function support** - define a `fn main() -> i64` entry point with exit codes
 
 ## Installation
 
@@ -36,21 +37,30 @@ Run the compiled executable:
 
 ### Program Structure
 
-AlgolScript programs can be written with or without outer braces:
+AlgolScript programs can be written in two styles:
+
+**Style 1: Script-style (no main function)**
 
 ```algol
-# With outer braces (optional)
-{
-  x: i64 = 10;
-  return x;
-}
-
-# Without outer braces (modern style)
+# Script-style - runs top-level statements
 x: i64 = 10;
-return x;
+y: i64 = 20;
+result: i64 = x + y;
 ```
 
-Both styles are valid and equivalent.
+**Style 2: main() function (with exit code)**
+
+```algol
+# main() function style - returns exit code
+fn main() -> i64 {
+  x: i64 = 10;
+  y: i64 = 20;
+  result: i64 = x + y;
+  return result;
+}
+```
+
+When using `main()`, the return value becomes the program's exit code (truncated from i64 to i32).
 
 ### Variable Declaration
 

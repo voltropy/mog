@@ -12,6 +12,7 @@ combined_features
 counter_loop
 factorial_recursive
 fibonacci_tco
+main_example
 nested_operations
 simple_loop
 while_loop

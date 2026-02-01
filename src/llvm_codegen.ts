@@ -44,23 +44,44 @@ class LLVMIRGenerator {
 
     const functionDeclarations = this.collectFunctionDeclarations(ast)
 
+    // Check if user has defined a main() function
+    const hasMain = functionDeclarations.some((f: any) => f.name === "main" && f.params.length === 0)
+
     ir.push("; Function declarations")
     for (const funcDecl of functionDeclarations) {
+      // Rename user's main() to @program_user to avoid conflict
+      if (funcDecl.name === "main") {
+        funcDecl.name = "program_user"
+      }
       this.generateFunctionDeclaration(ir, funcDecl)
     }
     ir.push("")
 
-    ir.push("define void @program() {")
-    ir.push("entry:")
+    if (hasMain) {
+      // User defined main() - generate wrapper at @main
+      ir.push("; Main entry point (calls user's main)")
+      ir.push("define i32 @main() {")
+      ir.push("entry:")
+      ir.push("  call void @gc_init()")
+      ir.push("  %result = call i64 @program_user()")
+      ir.push("  %truncated = trunc i64 %result to i32")
+      ir.push("  ret i32 %truncated")
+      ir.push("}")
+    } else {
+      // No main() - use program() entry point
+      ir.push("define void @program() {")
+      ir.push("entry:")
 
-    for (const statement of ast.statements) {
-      this.generateStatement(ir, statement)
+      for (const statement of ast.statements) {
+        this.generateStatement(ir, statement)
+      }
+
+      ir.push("  ret void")
+      ir.push("}")
+
+      this.setupMainFunction(ir)
     }
 
-    ir.push("  ret void")
-    ir.push("}")
-
-    this.setupMainFunction(ir)
     this.generateRuntimeFunctions(ir)
 
     return ir.join("\n")

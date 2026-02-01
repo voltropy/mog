@@ -1,0 +1,12 @@
+fn main() -> i64 {
+  # Example using main() function with return value as exit code
+  x: i64 = 100;
+  y: i64 = 200;
+  result: i64 = x + y;
+
+  while (result > 0) {
+    result := result - 50;
+  }
+
+  return 42;
+}

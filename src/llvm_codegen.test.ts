@@ -631,7 +631,7 @@ describe("LLVM IR Generator", () => {
         statements: [
           {
             type: "FunctionDeclaration",
-            name: "main",
+            name: "simple",
             params: [],
             returnType: i64,
             body: {
@@ -647,7 +647,7 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("define i64 @main()")
+      expect(ir).toContain("define i64 @simple()")
     })
   })
 
