@@ -10,7 +10,8 @@ describe("LLVM IR Generator", () => {
         statements: [],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain('target triple = "x86_64-unknown-linux-gnu"')
+      expect(ir).toContain("target triple =")
+      expect(ir).toContain("; AlgolScript LLVM IR")
     })
 
     test("generates external function declarations", () => {

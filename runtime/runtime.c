@@ -264,3 +264,19 @@ void* matrix_mul(void* a, void* b, uint64_t rows_a, uint64_t cols_a, uint64_t co
   
   return result;
 }
+
+/* CLI Argument Helpers */
+
+uint64_t get_argc_value(void* cli_table) {
+  if (!cli_table) return 0;
+  return table_get(cli_table, "argc", 4);
+}
+
+uint64_t get_argv_value(void* cli_table, uint64_t index) {
+  if (!cli_table) return 0;
+  
+  Array* args_array = (Array*)table_get(cli_table, "args", 4);
+  if (!args_array) return 0;
+  
+  return array_get((void*)args_array, index);
+}
