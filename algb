@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+if [ $# -lt 1 ]; then
+  echo "Usage: ./algb <file.algol> [args...]"
+  exit 1
+fi
+
+ALGOL_FILE="$1"
+shift
+
+BUN_EXE=$(command -v bun)
+LLC="/opt/homebrew/opt/llvm/bin/llc"
+CLANG=$(command -v clang)
+RUNTIME="./build/runtime.a"
+
+if [ ! -f "$ALGOL_FILE" ]; then
+  echo "Error: File not found: $ALGOL_FILE"
+  exit 1
+fi
+
+BASENAME=$(basename "$ALGOL_FILE" .algol)
+BUILD_DIR="./build"
+LL_FILE="$BUILD_DIR/temp.ll"
+O_FILE="$BUILD_DIR/temp.o"
+EXE_FILE="$BASENAME"
+
+echo "Compiling $ALGOL_FILE..."
+$BUN_EXE ./compile "$ALGOL_FILE" > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+  exit 1
+fi
+
+echo "Building object file..."
+$LLC -filetype=obj "$LL_FILE" -o "$O_FILE"
+
+echo "Linking executable..."
+$CLANG "$O_FILE" "$RUNTIME" -o "$EXE_FILE" 2>&1 | grep -v "no platform load command"
+
+echo "Running $EXE_FILE..."
+./"$EXE_FILE" "$@"
+echo "Exit code: $?"
