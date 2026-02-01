@@ -91,5 +91,29 @@ describe("Compiler Integration Tests", () => {
         expect(error.message).toBeTruthy()
       }
     })
+
+    test("detects assignment in if condition", async () => {
+      const source = `{
+  x: i64 = 10;
+  if (x := 5) {
+    y: i64 = 20;
+  }
+}`
+      const result = await compile(source)
+      expect(result.errors.length).toBeGreaterThan(0)
+      expect(result.errors.some(e => e.message.includes("Assignment") && e.message.includes("condition"))).toBe(true)
+    })
+
+    test("detects assignment in while condition", async () => {
+      const source = `{
+  x: i64 = 10;
+  while (x := x - 1) {
+    y: i64 = 20;
+  }
+}`
+      const result = await compile(source)
+      expect(result.errors.length).toBeGreaterThan(0)
+      expect(result.errors.some(e => e.message.includes("Assignment") && e.message.includes("condition"))).toBe(true)
+    })
   })
 })

@@ -42,7 +42,7 @@ AlgolScript programs can be written in two styles:
 **Style 1: Script-style (no main function)**
 
 ```algol
-# Script-style - runs top-level statements
+// Script-style - runs top-level statements
 x: i64 = 10;
 y: i64 = 20;
 result: i64 = x + y;
@@ -51,7 +51,7 @@ result: i64 = x + y;
 **Style 2: main() function (with exit code)**
 
 ```algol
-# main() function style - returns exit code
+// main() function style - returns exit code
 fn main() -> i64 {
   x: i64 = 10;
   y: i64 = 20;
@@ -118,7 +118,7 @@ for variable := start to end {
 
 - **Arithmetic**: `+`, `-`, `*`, `/`, `%`
 - **Bitwise**: `&`, `|`
-- **Comparison**: `<`, `>`, `=`, `!=`, `<=`, `>=`
+- **Comparison**: `<`, `>`, `==`, `!=`, `<=`, `>=`
 - **Logical**: `not`, `!` (logical NOT)
 - **Assignment**: `:=`
 

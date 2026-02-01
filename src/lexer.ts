@@ -96,7 +96,7 @@ class Lexer {
   tokenize(): Token[] {
     const tokens: Token[] = []
     const whitespaceRegex = /\s+/y
-    const commentRegex = /#.*/y
+    const commentRegex = /#.*|\/\/.*/y
     const fnRegex = /fn\b/y
     const returnRegex = /return\b/y
     const ifRegex = /if\b/y
@@ -108,6 +108,7 @@ class Lexer {
     const notRegex = /not\b/y
     const llmRegex = /LLM\b/y
     const notEqualRegex = /!=/y
+    const equalEqualRegex = /==/y
     const assignRegex = /:=/y
     const lessEqualRegex = /<=/y
     const greaterEqualRegex = />=/y
@@ -290,6 +291,18 @@ class Lexer {
       value = this.match(notEqualRegex)
       if (value) {
         type = "NOT_EQUAL"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(equalEqualRegex)
+      if (value) {
+        type = "EQUAL"
         this.advance(value.length)
         tokens.push({
           type,

@@ -1,34 +1,35 @@
-# Test variable declarations and arithmetic
-x: i64 = 10;
-y: i64 = 20;
-z: i64 = x + y;
-
-# Test if statements
-if (x < y) {
-  z := z * 2;
-}
-
-# Test while loops
-i: i64 = 0;
-while (i < 5) {
-  i := i + 1;
-}
-
-# Test functions
 fn add(a: i64, b: i64) -> i64 {
   return a + b;
 }
 
 fn factorial(n: i64) -> i64 {
-  if (n = 0) {
+  if (n == 0) {
     return 1;
   }
-return n * factorial(n - 1);
+  return n * factorial(n - 1);
 }
 
-# Test function calls
-result: i64 = add(100, 200);
-fib_result: i64 = factorial(5);
+fn main() -> i64 {
+  x: i64 = 10;
+  y: i64 = 20;
+  z: i64 = x + y;
 
-# Test modulo
-mod_result: i64 = 17 % 5;
+  z1: i64 = 0;
+  if (x < y) {
+    z1 := z * 2;
+  } else {
+    z1 := z;
+  }
+
+  i: i64 = 0;
+  while (i < 5) {
+    i := i + 1;
+  }
+
+  result: i64 = add(100, 200);
+  fib_result: i64 = factorial(5);
+
+  mod_result: i64 = 17 % 5;
+
+  return 0;
+}

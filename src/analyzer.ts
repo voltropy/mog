@@ -451,6 +451,13 @@ class SemanticAnalyzer {
   private visitConditional(node: ConditionalNode): void {
     const conditionType = this.visitExpression(node.condition)
 
+    if (node.condition.type === "AssignmentExpression") {
+      this.emitError(
+        "Assignment (:=) cannot be used as a condition. Use == for comparison.",
+        node.condition.position,
+      )
+    }
+
     if (conditionType) {
       if (!isIntegerType(conditionType) && !isUnsignedType(conditionType)) {
         this.emitError(
@@ -469,6 +476,13 @@ class SemanticAnalyzer {
 
   private visitWhileLoop(node: WhileLoopNode): void {
     const conditionType = this.visitExpression(node.test)
+
+    if (node.test.type === "AssignmentExpression") {
+      this.emitError(
+        "Assignment (:=) cannot be used as a condition. Use == for comparison.",
+        node.test.position,
+      )
+    }
 
     if (conditionType) {
       if (!isIntegerType(conditionType) && !isUnsignedType(conditionType)) {
@@ -687,7 +701,7 @@ class SemanticAnalyzer {
 
     const arithmeticOperators = ["+", "-", "*", "/", "%", "&", "|", "TIMES", "DIVIDE"]
 
-    const comparisonOperators = ["=", "!=", "<", ">", "<=", ">="]
+    const comparisonOperators = ["==", "!=", "<", ">", "<=", ">="]
 
     const logicalOperators = ["&&", "||", "and", "or", "AND", "OR"]
 
