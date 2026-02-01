@@ -576,7 +576,7 @@ describe("LLVM IR Generator", () => {
               type: "Block",
               statements: [
                 {
-                  type: "return",
+                  type: "Return",
                   value: {
                     type: "BinaryExpression",
                     operator: "+",
@@ -638,7 +638,7 @@ describe("LLVM IR Generator", () => {
               type: "Block",
               statements: [
                 {
-                  type: "return",
+                  type: "Return",
                   value: { type: "NumberLiteral", value: "0", literalType: i64 },
                 },
               ],
@@ -665,7 +665,7 @@ describe("LLVM IR Generator", () => {
               type: "Block",
               statements: [
                 {
-                  type: "return",
+                  type: "Return",
                   value: { type: "NumberLiteral", value: "1", literalType: i64 },
                 },
               ],
@@ -691,7 +691,7 @@ describe("LLVM IR Generator", () => {
               type: "Block",
               statements: [
                 {
-                  type: "return",
+                  type: "Return",
                   value: {
                     type: "BinaryExpression",
                     operator: "*",
