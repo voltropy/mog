@@ -1,0 +1,16 @@
+BEGIN
+  FUNCTION add(a: i64, b: i64) -> i64
+    RETURN a + b;
+  END
+
+  FUNCTION factorial(n: i64) -> i64
+    IF n = 0 THEN
+      RETURN 1;
+    FI
+    RETURN n * factorial(n - 1);
+  END
+
+  sum: i64 = add(100, 200);
+  fib: i64 = factorial(10);
+
+END

@@ -1,0 +1,31 @@
+# Build outputs
+build/
+*.o
+fib
+loop
+test_arithmetic
+test_complex
+test_comprehensive
+test_ultimate
+
+# Debug files
+debug_*.ts
+test_*.txt
+*.ll
+
+# Node
+node_modules/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Test output
+test_str.mjs
+temp.*
+
+# Images
+*.png

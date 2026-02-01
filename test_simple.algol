@@ -1,0 +1,8 @@
+BEGIN
+  i: i64 = 0;
+  WHILE i < 5 DO
+    i := i + 1;
+  OD
+
+  # This program should exit cleanly
+END

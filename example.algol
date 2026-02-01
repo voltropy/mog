@@ -1,0 +1,15 @@
+BEGIN
+  FUNCTION fibonacci(n: i64, a: i64, b: i64) -> i64
+    IF n = 0 THEN
+      RETURN a;
+    FI;
+    IF n = 1 THEN
+      RETURN b;
+    FI;
+    i64 next := a + b;
+    RETURN fibonacci(n - 1, b, next);
+  END;
+
+  i64 x := 10;
+  i64 result := fibonacci(x, 0, 1);
+END

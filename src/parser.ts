@@ -1,0 +1,730 @@
+import type { Token } from "./lexer.js"
+import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
+import { IntegerType, UnsignedType, FloatType, ArrayType, TableType, VoidType } from "./types.js"
+
+type ParseResult<T> = T | null
+
+class Parser {
+  private tokens: Token[]
+  private current = 0
+
+  constructor(tokens: Token[]) {
+    this.tokens = tokens
+  }
+
+  parse(): ProgramNode {
+    const statements: StatementNode[] = []
+
+    while (!this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        statements.push(stmt)
+      }
+    }
+
+    const unwrappedStatements = this.getUnwrappedStatements(statements)
+
+    return {
+      type: "Program",
+      statements: unwrappedStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private getUnwrappedStatements(statements: StatementNode[]): StatementNode[] {
+    if (statements.length === 1 && statements[0].type === "Block") {
+      const block = statements[0] as any
+      if (block.statements.length === 1) {
+        return block.statements
+      }
+    }
+    return statements
+  }
+
+  private statement(): StatementNode | null {
+    while (this.matchType("SEMICOLON")) {}
+
+    if (
+      this.checkType("END") ||
+      this.checkType("OD") ||
+      this.checkType("FI") ||
+      this.checkType("ELIF") ||
+      this.isAtEnd()
+    ) {
+      return null
+    }
+
+    if (this.matchType("BEGIN")) {
+      return this.blockStatement()
+    }
+    if (this.matchType("FUNCTION")) {
+      return this.functionDeclaration()
+    }
+    if (this.matchType("RETURN")) {
+      return this.returnStatement()
+    }
+    if (this.matchType("IF")) {
+      return this.ifStatement()
+    }
+    if (this.matchType("WHILE")) {
+      return this.whileStatement()
+    }
+    if (this.matchType("FOR")) {
+      return this.forStatement()
+    }
+    if (
+      this.checkType("VARIABLE") ||
+      this.checkType("TYPE") ||
+      (this.checkType("IDENTIFIER") && this.peekNext()?.type === "COLON")
+    ) {
+      return this.variableDeclaration()
+    }
+
+    const expr = this.expression()
+    this.matchType("SEMICOLON")
+    return {
+      type: "ExpressionStatement",
+      expression: expr,
+      position: expr.position,
+    }
+  }
+
+  private functionDeclaration(): StatementNode {
+    const name = this.consume("IDENTIFIER", "Expected function name").value
+    this.consume("LPAREN", "Expected ( after function name")
+
+    const params: any[] = []
+    if (!this.checkType("RPAREN")) {
+      do {
+        const paramName = this.consume("IDENTIFIER", "Expected parameter name").value
+        this.consume("COLON", "Expected : after parameter name")
+        const paramToken = this.consume("TYPE", "Expected parameter type")
+        const paramType = this.parseType(paramToken.value)
+        params.push({ name: paramName, paramType })
+      } while (this.matchType("COMMA"))
+    }
+    this.consume("RPAREN", "Expected ) after parameters")
+
+    this.consume("ARROW", "Expected -> after parameter list")
+    const returnToken = this.consume("TYPE", "Expected return type")
+    const returnType = this.parseType(returnToken.value)
+
+    const bodyStatements: StatementNode[] = []
+    while (!this.checkType("END") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        bodyStatements.push(stmt)
+      }
+    }
+    this.consume("END", "Expected END after function body")
+
+    const body: BlockNode = {
+      type: "Block",
+      statements: bodyStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+
+    return {
+      type: "FunctionDeclaration",
+      name,
+      params,
+      returnType,
+      body,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private returnStatement(): StatementNode {
+    let value: ExpressionNode | null = null
+    if (!this.checkType("SEMICOLON")) {
+      value = this.expression()
+    }
+    this.consume("SEMICOLON", "Expected ; after return")
+
+    return {
+      type: "Return",
+      value,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private ifStatement(): StatementNode {
+    const condition = this.expression()
+    this.consume("THEN", "Expected THEN after condition")
+
+    const trueBranchStatements: StatementNode[] = []
+    while (!this.checkType("FI") && !this.checkType("ELSE") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        trueBranchStatements.push(stmt)
+      }
+    }
+
+    const trueBranch: BlockNode = {
+      type: "Block",
+      statements: trueBranchStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+
+    let falseBranch: BlockNode | null = null
+    if (this.matchType("ELSE")) {
+      const falseBranchStatements: StatementNode[] = []
+      while (!this.checkType("FI") && !this.isAtEnd()) {
+        const stmt = this.statement()
+        if (stmt) {
+          falseBranchStatements.push(stmt)
+        }
+      }
+      falseBranch = {
+        type: "Block",
+        statements: falseBranchStatements,
+        position: {
+          start: { line: 1, column: 1, index: 0 },
+          end: this.lastPosition(),
+        },
+      }
+    }
+
+    this.consume("FI", "Expected FI to close IF statement")
+
+    return {
+      type: "Conditional",
+      condition,
+      trueBranch,
+      falseBranch,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private whileStatement(): StatementNode {
+    const test = this.expression()
+
+    this.consume("DO", "Expected DO after while condition")
+
+    const bodyStatements: StatementNode[] = []
+    while (!this.checkType("OD") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        bodyStatements.push(stmt)
+      }
+    }
+
+    this.consume("OD", "Expected OD to close WHILE loop")
+
+    const body: BlockNode = {
+      type: "Block",
+      statements: bodyStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+
+    return {
+      type: "WhileLoop",
+      test,
+      body,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private forStatement(): StatementNode {
+    const variable = this.consume("IDENTIFIER", "Expected variable name after FOR").value
+    this.consume("ASSIGN", "Expected := after variable name")
+    const start = this.expression()
+    this.consume("TO", "Expected TO after start value")
+    const end = this.expression()
+
+    const bodyStatements: StatementNode[] = []
+    while (!this.checkType("END") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        bodyStatements.push(stmt)
+      }
+    }
+
+    this.consume("END", "Expected END to close FOR loop")
+
+    const body: BlockNode = {
+      type: "Block",
+      statements: bodyStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+
+    return {
+      type: "ForLoop",
+      variable,
+      start,
+      end,
+      body,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private blockStatement(): BlockNode {
+    const statements: StatementNode[] = []
+
+    while (!this.checkType("END") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        statements.push(stmt)
+      }
+    }
+
+    this.consume("END", "Expected END after block")
+
+    return {
+      type: "Block",
+      statements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private variableDeclaration(): StatementNode {
+    const name = this.consume("IDENTIFIER", "Expected variable name").value
+    this.consume("COLON", "Expected : after variable name")
+    const typeToken = this.consume("TYPE", "Expected type annotation")
+    const varType = this.parseType(typeToken.value)
+    this.consume("EQUAL", "Expected = after type")
+    this.matchType("ASSIGN")
+
+    const value: ExpressionNode = this.expression()
+
+    this.consume("SEMICOLON", "Expected ; after variable declaration")
+
+    return {
+      type: "VariableDeclaration",
+      name,
+      varType,
+      value,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private expression(): ExpressionNode {
+    return this.assignment()
+  }
+
+  private assignment(): ExpressionNode {
+    const expr = this.conditional()
+
+    if (this.matchType("ASSIGN")) {
+      const value = this.assignment()
+      if (expr.type === "Identifier") {
+        return {
+          type: "AssignmentExpression",
+          name: expr.name,
+          value,
+          position: this.combinePositions(expr, value),
+        }
+      }
+      throw new Error("Invalid assignment target")
+    }
+
+    return expr
+  }
+
+  private conditional(): ExpressionNode {
+    const expr = this.logicalOr()
+
+    if (this.matchType("QUESTION")) {
+      const thenExpr = this.expression()
+      this.consume("COLON", "Expected : in conditional expression")
+      const elseExpr = this.expression()
+      return {
+        type: "Conditional",
+        condition: expr,
+        trueBranch: thenExpr,
+        falseBranch: elseExpr,
+        position: this.combinePositions(expr, elseExpr),
+      }
+    }
+
+    return expr
+  }
+
+  private logicalOr(): ExpressionNode {
+    let expr = this.logicalAnd()
+
+    while (this.matchType("BITWISE_OR")) {
+      const operator = this.previous()
+      const right = this.logicalAnd()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private logicalAnd(): ExpressionNode {
+    let expr = this.equality()
+
+    while (this.matchType("BITWISE_AND")) {
+      const operator = this.previous()
+      const right = this.equality()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private equality(): ExpressionNode {
+    let expr = this.comparison()
+
+    while (this.matchType("EQUAL") || this.matchType("NOT_EQUAL")) {
+      const operator = this.previous()
+      const right = this.comparison()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private comparison(): ExpressionNode {
+    let expr = this.additive()
+
+    while (
+      this.matchType("LESS") ||
+      this.matchType("LESS_EQUAL") ||
+      this.matchType("GREATER") ||
+      this.matchType("GREATER_EQUAL")
+    ) {
+      const operator = this.previous()
+      const right = this.additive()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private additive(): ExpressionNode {
+    let expr = this.multiplicative()
+
+    while (this.matchType("PLUS") || this.matchType("MINUS")) {
+      const operator = this.previous()
+      const right = this.multiplicative()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private multiplicative(): ExpressionNode {
+    let expr = this.unary()
+
+    while (
+      this.matchType("TIMES") ||
+      this.matchType("DIVIDE") ||
+      this.matchType("MODULO")
+    ) {
+      const operator = this.previous()
+      const right = this.unary()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private unary(): ExpressionNode {
+    if (this.matchType("MINUS") || this.matchType("BANG") || this.matchType("NOT")) {
+      const operator = this.previous()
+      const argument = this.unary()
+      return {
+        type: "UnaryExpression",
+        operator: operator.value,
+        argument,
+        position: this.combinePositions({ position: operator.position }, argument),
+      }
+    }
+
+    return this.primary()
+  }
+
+  private primary(): ExpressionNode {
+    if (this.matchType("NUMBER")) {
+      const token = this.previous()
+      return {
+        type: "NumberLiteral",
+        value: parseFloat(token.value),
+        literalType: new IntegerType("i64"),
+        position: token.position,
+      }
+    }
+
+    if (this.matchType("STRING")) {
+      const token = this.previous()
+      return {
+        type: "StringLiteral",
+        value: token.value.slice(1, -1),
+        position: token.position,
+      }
+    }
+
+    if (this.matchType("IDENTIFIER")) {
+      const token = this.previous()
+      const name = token.value
+
+      if (this.matchType("LPAREN")) {
+        const callArgs: ExpressionNode[] = []
+        if (!this.checkType("RPAREN")) {
+          do {
+            callArgs.push(this.expression())
+          } while (this.matchType("COMMA"))
+        }
+        this.consume("RPAREN", "Expected ) after arguments")
+
+        return {
+          type: "CallExpression",
+          callee: { type: "Identifier", name, position: token.position },
+          args: callArgs,
+          position: this.combinePositions({ position: token.position }, this.previous()),
+        }
+      }
+
+      if (this.matchType("DOT")) {
+        const property = this.consume("IDENTIFIER", "Expected property name").value
+        return {
+          type: "MemberExpression",
+          object: { type: "Identifier", name, position: token.position },
+          property,
+          position: this.combinePositions({ position: token.position }, this.previous()),
+        }
+      }
+
+      if (this.matchType("LBRACKET")) {
+        const index = this.expression()
+        this.consume("RBRACKET", "Expected ] after index")
+        return {
+          type: "IndexExpression",
+          object: { type: "Identifier", name, position: token.position },
+          index,
+          position: this.combinePositions({ position: token.position }, this.previous()),
+        }
+      }
+
+      return {
+        type: "Identifier",
+        name,
+        position: token.position,
+      }
+    }
+
+    if (this.matchType("LBRACKET")) {
+      return this.arrayLiteral()
+    }
+
+    if (this.matchType("LBRACE")) {
+      return this.tableLiteral()
+    }
+
+    if (this.matchType("LPAREN")) {
+      const expr = this.expression()
+      this.consume("RPAREN", "Expected ) after expression")
+      return expr
+    }
+
+    const token = this.peek()
+    throw new Error(`Unexpected token: ${token.type} at line ${token.position.start.line}`)
+  }
+
+  private arrayLiteral(): ExpressionNode {
+    const start = this.previous().position.start
+    const elements: ExpressionNode[] = []
+
+    if (!this.checkType("RBRACKET")) {
+      do {
+        elements.push(this.expression())
+      } while (this.matchType("COMMA"))
+    }
+
+    this.consume("RBRACKET", "Expected ] after array elements")
+
+    return {
+      type: "ArrayLiteral",
+      elements,
+      position: {
+        start,
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private tableLiteral(): ExpressionNode {
+    const start = this.previous().position.start
+    const columns: any[] = []
+
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      const key = this.consume("IDENTIFIER", "Expected key in table literal")
+
+      this.consume("COLON", "Expected : after key")
+
+      const values: ExpressionNode[] = []
+      values.push(this.expression())
+
+      columns.push({ name: key.value, values, columnType: null })
+
+      this.matchType("COMMA")
+    }
+
+    this.consume("RBRACE", "Expected } after table literal")
+
+    return {
+      type: "TableLiteral",
+      columns,
+      position: {
+        start,
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private parseType(typeName: string): any {
+    if (typeName.startsWith("i")) {
+      return new IntegerType(typeName as any)
+    }
+    if (typeName.startsWith("u")) {
+      return new UnsignedType(typeName as any)
+    }
+    if (typeName.startsWith("f")) {
+      return new FloatType(typeName as any)
+    }
+    if (typeName.startsWith("[")) {
+      return new ArrayType(new IntegerType("i64"), [])
+    }
+    return new VoidType()
+  }
+
+  private consume(type: string, message: string): Token {
+    if (this.checkType(type)) {
+      return this.advance()
+    }
+    const token = this.peek()
+    throw new Error(`${message} at line ${token.position.start.line}`)
+  }
+
+  private checkType(type: string): boolean {
+    if (this.isAtEnd()) return false
+    return this.peek().type === type
+  }
+
+  private skipWhitespace(): void {}
+
+  private matchType(type: string): boolean {
+    if (this.checkType(type)) {
+      this.advance()
+      return true
+    }
+    return false
+  }
+
+  private advance(steps: number = 1): Token {
+    this.current += steps
+    return this.tokens[this.current - steps]
+  }
+
+  private previous(): Token {
+    return this.tokens[this.current - 1]
+  }
+
+  private peek(): Token {
+    return this.tokens[this.current]
+  }
+
+  private peekNext(): Token | null {
+    if (this.current + 1 >= this.tokens.length) return null
+    return this.tokens[this.current + 1]
+  }
+
+  private isAtEnd(): boolean {
+    return this.current >= this.tokens.length
+  }
+
+  private lastPosition(): Position {
+    if (this.tokens.length > 0) {
+      return this.tokens[this.tokens.length - 1].position.end
+    }
+    return { line: 1, column: 1, index: 0 }
+  }
+
+  private combinePositions(a: any, b: any): any {
+    return {
+      start: a.position.start,
+      end: b.position.end,
+    }
+  }
+}
+
+export function parseTokens(tokens: Token[]): ProgramNode {
+  const parser = new Parser(tokens)
+  return parser.parse()
+}
+
+export { Parser }
