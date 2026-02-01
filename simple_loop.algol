@@ -1,8 +1,6 @@
-{
-  i: i64 = 0;
-  while (i < 5) {
-    i := i + 1;
-  }
-
-  # This program should exit cleanly
+i: i64 = 0;
+while (i < 5) {
+  i := i + 1;
 }
+
+# This program should exit cleanly

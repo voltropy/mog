@@ -1,15 +1,13 @@
-{
-  fn fibonacci(n: i64, a: i64, b: i64) -> i64 {
-    if (n = 0) {
-      return a;
-    }
-    if (n = 1) {
-      return b;
-    }
-    next: i64 = a + b;
-    return fibonacci(n - 1, b, next);
+fn fibonacci(n: i64, a: i64, b: i64) -> i64 {
+  if (n = 0) {
+    return a;
   }
-
-  x: i64 = 10;
-  result: i64 = fibonacci(x, 0, 1);
+if (n = 1) {
+  return b;
 }
+next: i64 = a + b;
+return fibonacci(n - 1, b, next);
+}
+
+x: i64 = 10;
+result: i64 = fibonacci(x, 0, 1);

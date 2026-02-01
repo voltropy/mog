@@ -1,6 +1,6 @@
 # AlgolScript
 
-A TypeScript-based compiler for AlgolScript, an Algol-68 style programming language that compiles to LLVM IR.
+A TypeScript-based compiler for AlgolScript, a modern programming language with Algol-68 roots that compiles to LLVM IR.
 
 ## Features
 
@@ -8,7 +8,9 @@ A TypeScript-based compiler for AlgolScript, an Algol-68 style programming langu
 - **Semantic analysis** with type checking
 - **LLVM IR code generation**
 - **Runtime library** with GC, arrays, and tables
-- **Full test suite** (306 tests, all passing)
+- **Full test suite** (307 tests, all passing)
+- **Modern syntax** with lowercase keywords and curly braces
+- **Optional outer braces** - write code at file level without wrapping in `{ }`
 
 ## Installation
 
@@ -21,84 +23,145 @@ bun install
 Compile an AlgolScript program:
 
 ```bash
-bun run src/compiler.ts input.algol
+bun run src/index.ts input.algol
 ```
 
-Run the compiler script directly:
+Run the compiled executable:
 
 ```bash
-bun run build_program.sh input.algol
+./input  # (if your file was named input.algol)
 ```
 
 ## Language Syntax
 
-### Basic Structure
+### Program Structure
 
+AlgolScript programs can be written with or without outer braces:
+
+```algol
+# With outer braces (optional)
+{
+  x: i64 = 10;
+  return x;
+}
+
+# Without outer braces (modern style)
+x: i64 = 10;
+return x;
 ```
-BEGIN
-  <statements>;
-END
-```
+
+Both styles are valid and equivalent.
 
 ### Variable Declaration
 
-```
-name: type = value
+```algol
+name: type = value;
 ```
 
 Supported types: `i8`, `i16`, `i32`, `i64`, `i128`, `i256`, `u8`, `u16`, `u32`, `u64`, `u128`, `u256`, `f32`, `f64`
 
 ### Functions
 
+```algol
+fn name(param: type) -> return_type {
+  return value;
+}
 ```
-FUNCTION name(param: type): type
-BEGIN
-  <body>;
-  RETURN value;
-END
+
+Example with multiple parameters:
+
+```algol
+fn add(a: i64, b: i64) -> i64 {
+  return a + b;
+}
 ```
 
 ### Control Flow
 
-```
-IF (condition) THEN
-  <statements>;
-FI
+#### If Statement
 
-WHILE (condition) DO
-  <statements>;
-OD
+```algol
+if (condition) {
+  statements;
+} else {
+  statements;
+}
+```
+
+#### While Loop
+
+```algol
+while (condition) {
+  statements;
+}
+```
+
+#### For Loop
+
+```algol
+for variable := start to end {
+  statements;
+}
 ```
 
 ### Operators
 
-- Arithmetic: `+`, `-`, `*`, `/`, `%`
-- Bitwise: `&`, `|`
-- Comparison: `<`, `>`, `=`, `!=`, `<=`, `>=`
-- Logical: `AND`, `OR`, `not`, `!`
-- Assignment: `:=`
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%`
+- **Bitwise**: `&`, `|`
+- **Comparison**: `<`, `>`, `=`, `!=`, `<=`, `>=`
+- **Logical**: `not`, `!` (logical NOT)
+- **Assignment**: `:=`
 
 ### Arrays
 
-```
-arr: [1, 2, 3]
+```algol
+arr: [1, 2, 3];
+element: i64 = arr[0];
 ```
 
 ### Tables
 
-```
-table: { a: 1, b: 2 }
+```algol
+table: { a: 1, b: 2 };
+value: i64 = table["a"];
 ```
 
 ## Examples
 
-See `example.algol` for a comprehensive example program.
+The repository includes several example programs:
+
+- `basic_features.algol` - Demonstrates variables, arithmetic, if/else, while, functions
+- `combined_features.algol` - All features combined without nested functions
+- `nested_operations.algol` - Nested loops, functions, conditionals
+- `fibonacci_tco.algol` - Tail-call optimized fibonacci
+- `simple_loop.algol` - Minimal loop example
+- `while_loop.algol` - While loop demonstration
+- `factorial_recursive.algol` - Recursive factorial
+- `counter_loop.algol` - Simple counter loop
+- `test_arithmetic.algol` - Arithmetic operations
+
+Try compiling one:
+
+```bash
+bun run src/index.ts basic_features.algol
+./basic_features
+```
 
 ## Testing
 
 ```bash
 bun test
 ```
+
+## Formatting
+
+Use the included formatter to ensure consistent indentation:
+
+```bash
+python3 format_algol.py
+```
+
+This formats all `.algol` files with 2-space indentation based on brace nesting.
 
 ## Architecture
 

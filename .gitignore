@@ -7,6 +7,14 @@ test_arithmetic
 test_complex
 test_comprehensive
 test_ultimate
+basic_features
+combined_features
+counter_loop
+factorial_recursive
+fibonacci_tco
+nested_operations
+simple_loop
+while_loop
 
 # Debug files
 debug_*.ts
