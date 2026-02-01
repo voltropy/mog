@@ -34,6 +34,7 @@ interface ASTNode {
 interface ProgramNode extends ASTNode {
   type: "Program"
   statements: StatementNode[]
+  scopeId: string
 }
 
 type StatementNode =
@@ -69,6 +70,7 @@ interface ExpressionStatementNode extends ASTNode {
 interface BlockNode extends ASTNode {
   type: "Block"
   statements: StatementNode[]
+  scopeId: string
 }
 
 interface ReturnNode extends ASTNode {
@@ -126,6 +128,7 @@ type ExpressionNode =
   | LLMExpressionNode
   | LambdaNode
   | BlockExpressionNode
+  | CastExpressionNode
 
 interface IdentifierNode extends ASTNode {
   type: "Identifier"
@@ -216,6 +219,12 @@ interface LambdaNode extends ASTNode {
 interface BlockExpressionNode extends ASTNode {
   type: "BlockExpression"
   block: BlockNode
+}
+
+interface CastExpressionNode extends ASTNode {
+  type: "CastExpression"
+  targetType: Type
+  value: ExpressionNode
 }
 
 interface SemanticError {
@@ -537,6 +546,8 @@ class SemanticAnalyzer {
         return this.visitLambda(node as LambdaNode)
       case "BlockExpression":
         return this.visitBlockExpression(node as BlockExpressionNode)
+      case "CastExpression":
+        return this.visitCastExpression(node as CastExpressionNode)
       case "AssignmentExpression":
         this.visitAssignment(node as any)
         return new IntegerType("i64")
@@ -741,14 +752,80 @@ class SemanticAnalyzer {
     }
 
     if (operator === "-" || operator === "+") {
-      if (!isNumericType(operandType)) {
+      if (!isNumericType(argumentType)) {
         this.emitError(`Operator '${operator}' requires numeric type`, node.position)
       }
-      return operandType
+      return argumentType
     }
 
     this.emitError(`Unknown unary operator '${operator}'`, node.position)
-    return operandType
+      return argumentType
+  }
+
+  private visitCastExpression(node: CastExpressionNode): Type | null {
+    const valueType = this.visitExpression(node.value)
+
+    if (!valueType) {
+      return null
+    }
+
+    const targetType = node.targetType
+
+    if (!(isIntegerType(targetType) || isUnsignedType(targetType) || isFloatType(targetType))) {
+      this.emitError(`Cast target must be a numeric type, got ${targetType.toString()}`, node.position)
+      return null
+    }
+
+    if (!(isIntegerType(valueType) || isUnsignedType(valueType) || isFloatType(valueType))) {
+      this.emitError(`Cast source must be a numeric type, got ${valueType.toString()}`, node.position)
+      return null
+    }
+
+    const sourceUnsigned = isUnsignedType(valueType)
+    const sourceSigned = isIntegerType(valueType)
+    const targetUnsigned = isUnsignedType(targetType)
+    const targetSigned = isIntegerType(targetType)
+    const sourceFloat = isFloatType(valueType)
+    const targetFloat = isFloatType(targetType)
+    const sourceBits = valueType.bits
+    const targetBits = targetType.bits
+
+    if (sourceUnsigned && targetUnsigned) {
+      if (sourceBits > targetBits) {
+        this.emitError(
+          `Lossy cast from ${valueType.toString()} to ${targetType.toString()}: would lose precision`,
+          node.position
+        )
+      }
+    } else if (sourceSigned && targetSigned) {
+      if (sourceBits > targetBits) {
+        this.emitError(
+          `Lossy cast from ${valueType.toString()} to ${targetType.toString()}: would lose precision`,
+          node.position
+        )
+      }
+    } else if ((sourceSigned || sourceUnsigned) && targetFloat) {
+      return targetType
+    } else if (sourceFloat && (targetSigned || targetUnsigned)) {
+      this.emitError(
+        `Precision loss warning: casting from ${valueType.toString()} to ${targetType.toString()} may lose precision`,
+        node.position
+      )
+    } else if (sourceUnsigned && targetSigned) {
+      if (sourceBits > targetBits) {
+        this.emitError(
+          `Lossy cast from ${valueType.toString()} to ${targetType.toString()}: would lose precision`,
+          node.position
+        )
+      }
+    } else if (sourceSigned && targetUnsigned) {
+      this.emitError(
+        `Signed to unsigned cast from ${valueType.toString()} to ${targetType.toString()} may change sign semantics`,
+        node.position
+      )
+    }
+
+    return targetType
   }
 
   private visitCallExpression(node: CallExpressionNode): Type | null {
@@ -942,8 +1019,9 @@ export type {
   LLMExpressionNode,
   LambdaNode,
   BlockExpressionNode,
-  BlockNode,
+BlockNode,
   ReturnNode,
   ConditionalNode,
   ExpressionStatementNode,
+  CastExpressionNode,
 }

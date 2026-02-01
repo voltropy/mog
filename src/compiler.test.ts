@@ -4,11 +4,11 @@ import { compile, type CompileError } from "./compiler"
 describe("Compiler Integration Tests", () => {
   describe("Valid Programs", () => {
     test("simple arithmetic", async () => {
-      const source = `BEGIN
+      const source = `{
   x: i64 = 42;
   y: i64 = 10;
   z: i64 = (x + y) * 2;
-END`
+}`
       const result = await compile(source)
       expect(result.errors).toEqual([])
       expect(result.llvmIR).toContain("define i32 @main()")
@@ -17,22 +17,22 @@ END`
     })
 
     test("number literal expression", async () => {
-      const source = `BEGIN
+      const source = `{
   x: i64 = 42;
-END`
+}`
       const result = await compile(source)
       expect(result.errors).toEqual([])
       expect(result.llvmIR).toContain("define i32 @main()")
     })
 
     test("function declaration and call", async () => {
-      const source = `BEGIN
-  FUNCTION add(a: i64, b: i64) -> i64
-    RETURN a + b;
-  END
+      const source = `{
+  fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+  }
 
   add(10, 20);
-END`
+}`
       const result = await compile(source)
       expect(result.errors).toEqual([])
       expect(result.llvmIR).toContain("define i64 @add")
@@ -40,12 +40,12 @@ END`
     })
 
     test("while loop", async () => {
-      const source = `BEGIN
+      const source = `{
   i: i64 = 0;
-  WHILE i < 10 DO
+  while (i < 10) {
     i := i + 1;
-  OD
-END`
+  }
+}`
       const result = await compile(source)
       expect(result.errors).toEqual([])
       expect(result.llvmIR).toContain("label")
@@ -54,26 +54,26 @@ END`
 
   describe("Error Programs", () => {
     test("detects syntax error", async () => {
-      const source = `BEGIN
-  i64 x := ;
-END`
+      const source = `{
+  x: i64 = ;
+}`
       const result = await compile(source)
       expect(result.errors.length).toBeGreaterThan(0)
     })
 
     test("detects undeclared variable", async () => {
-      const source = `BEGIN
+      const source = `{
   x := y;
-END`
+}`
       const result = await compile(source)
       expect(result.errors.length).toBeGreaterThan(0)
     })
 
     test("detects type mismatch", async () => {
-      const source = `BEGIN
+      const source = `{
   x: i64 = 42;
   x := "hello";
-END`
+}`
       const result = await compile(source)
       expect(result.errors.length).toBeGreaterThan(0)
     })
@@ -81,9 +81,9 @@ END`
 
   describe("Error Reporting", () => {
     test("reports error location correctly", async () => {
-      const source = `BEGIN
+      const source = `{
   1 + + 2;
-END`
+}`
       const result = await compile(source)
       if (result.errors.length > 0) {
         const error = result.errors[0] as CompileError

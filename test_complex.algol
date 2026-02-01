@@ -1,33 +1,33 @@
 # Complex AlgolScript Test Program
 # Tests multiple language features together
 
-BEGIN
+{
   # Test 1: Nested loops with arithmetic
   sum: i64 = 0;
   i: i64 = 0;
-  WHILE i < 10 DO
+  while (i < 10) {
     j: i64 = 0;
-    WHILE j < 10 DO
+    while (j < 10) {
       sum := sum + i * j;
       j := j + 1;
-    OD;
+    }
     i := i + 1;
-  OD;
+  }
 
   # Test 2: Nested functions
-  FUNCTION square(x: i64) -> i64
-    RETURN x * x;
-  END;
+  fn square(x: i64) -> i64 {
+    return x * x;
+  }
 
-  FUNCTION cube(x: i64) -> i64
-    RETURN x * square(x);
-  END;
+  fn cube(x: i64) -> i64 {
+    return x * square(x);
+  }
 
   # Test 3: Conditional with function calls
   result: i64 = square(5);
-  IF result > 20 THEN
+  if (result > 20) {
     result := cube(3);
-  FI;
+  }
 
   # Test 4: Modulo operations
   a: i64 = 17;
@@ -41,31 +41,31 @@ BEGIN
 
   # Test 6: Nested if statements
   nested_test: i64 = 0;
-  IF x > 5 THEN
-    IF y > 15 THEN
+  if (x > 5) {
+    if (y > 15) {
       nested_test := 1;
-    FI;
-  FI;
+    }
+  }
 
   # Test 7: Function with multiple parameters
-  FUNCTION combine(a: i64, b: i64, c: i64, d: i64) -> i64
-    RETURN a + b * c - d;
-  END;
+  fn combine(a: i64, b: i64, c: i64, d: i64) -> i64 {
+    return a + b * c - d;
+  }
 
   final_result: i64 = combine(1, 2, 3, 4);
 
   # Test 8: Recursion depth test
-  FUNCTION fibonacci(n: i64) -> i64
-    IF n = 0 THEN
-      RETURN 0;
-    FI;
-    IF n = 1 THEN
-      RETURN 1;
-    FI;
-    RETURN fibonacci(n - 1) + fibonacci(n - 2);
-  END;
+  fn fibonacci(n: i64) -> i64 {
+    if (n = 0) {
+      return 0;
+    }
+    if (n = 1) {
+      return 1;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+  }
 
   fib_10: i64 = fibonacci(10);
 
   # All tests completed - program should exit cleanly
-END
+}

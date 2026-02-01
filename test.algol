@@ -1,6 +1,6 @@
-BEGIN
+{
   i: i64 = 0;
-  WHILE i < 10 DO
+  while (i < 10) {
     i := i + 1;
-  OD
-END
+  }
+}

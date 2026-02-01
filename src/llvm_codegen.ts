@@ -196,6 +196,8 @@ class LLVMIRGenerator {
         return this.generateLLMCall(ir, expr)
       case "MapExpression":
         return this.generateMapExpression(ir, expr)
+      case "CastExpression":
+        return this.generateCastExpression(ir, expr)
       default:
         return ""
     }
@@ -348,6 +350,53 @@ class LLVMIRGenerator {
     return collection
   }
 
+  private generateCastExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    const sourceType = this.toLLVMType(expr.sourceType)
+    const targetType = this.toLLVMType(expr.targetType)
+    const isSourceSigned = expr.sourceType?.type === "IntegerType"
+    const isTargetSigned = expr.targetType?.type === "IntegerType"
+    const reg = `%${this.valueCounter++}`
+
+    const sourceIsInt = sourceType.startsWith("i")
+    const targetIsInt = targetType.startsWith("i")
+    const sourceIsFloat = sourceType.startsWith("f")
+    const targetIsFloat = targetType.startsWith("f")
+
+    if (sourceIsInt && targetIsInt) {
+      const sourceBits = this.getIntBits(sourceType)
+      const targetBits = this.getIntBits(targetType)
+
+      if (targetBits > sourceBits) {
+        const op = isSourceSigned ? "sext" : "zext"
+        ir.push(`  ${reg} = ${op} ${sourceType} ${value} to ${targetType}`)
+      } else if (targetBits < sourceBits) {
+        ir.push(`  ${reg} = trunc ${sourceType} ${value} to ${targetType}`)
+      } else {
+        return value
+      }
+    } else if (sourceIsInt && targetIsFloat) {
+      const op = isSourceSigned ? "sitofp" : "uitofp"
+      ir.push(`  ${reg} = ${op} ${sourceType} ${value} to ${targetType}`)
+    } else if (sourceIsFloat && targetIsInt) {
+      const op = isTargetSigned ? "fptosi" : "fptoui"
+      ir.push(`  ${reg} = ${op} ${sourceType} ${value} to ${targetType}`)
+    } else if (sourceIsFloat && targetIsFloat) {
+      const sourceBits = this.getFloatBits(sourceType)
+      const targetBits = this.getFloatBits(targetType)
+
+      if (targetBits > sourceBits) {
+        ir.push(`  ${reg} = fpext ${sourceType} ${value} to ${targetType}`)
+      } else if (targetBits < sourceBits) {
+        ir.push(`  ${reg} = fptrunc ${sourceType} ${value} to ${targetType}`)
+      } else {
+        return value
+      }
+    }
+
+    return reg
+  }
+
   private generateBlock(ir: string[], statement: any): void {
     for (const stmt of statement.statements) {
       this.generateStatement(ir, stmt)
@@ -395,10 +444,14 @@ class LLVMIRGenerator {
     if (statement.type === "Block") {
       const lastStmt = statement.statements[statement.statements.length - 1]
       if (lastStmt && lastStmt.type === "Return") {
-        this.generateBlock(ir, statement)
+        for (const stmt of statement.statements) {
+          this.generateStatement(ir, stmt)
+        }
         return true
       }
-      this.generateBlock(ir, statement)
+      for (const stmt of statement.statements) {
+        this.generateStatement(ir, stmt)
+      }
       return false
     } else {
       if (statement.type === "Return") {
@@ -575,9 +628,18 @@ class LLVMIRGenerator {
         return "ptr"
       case "VoidType":
         return "void"
-      default:
+default:
         return "i64"
     }
+  }
+
+private getIntBits(type: LLVMType): number {
+    const match = type.match(/i(\d+)/)
+    return match ? parseInt(match[1]) : 64
+  }
+
+  private getFloatBits(type: LLVMType): number {
+    return type === "f64" || type === "double" ? 64 : 32
   }
 }
 

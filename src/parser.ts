@@ -47,32 +47,26 @@ class Parser {
   private statement(): StatementNode | null {
     while (this.matchType("SEMICOLON")) {}
 
-    if (
-      this.checkType("END") ||
-      this.checkType("OD") ||
-      this.checkType("FI") ||
-      this.checkType("ELIF") ||
-      this.isAtEnd()
-    ) {
+    if (this.checkType("RBRACE") || this.isAtEnd()) {
       return null
     }
 
-    if (this.matchType("BEGIN")) {
+    if (this.matchType("LBRACE")) {
       return this.blockStatement()
     }
-    if (this.matchType("FUNCTION")) {
+    if (this.matchType("fn")) {
       return this.functionDeclaration()
     }
-    if (this.matchType("RETURN")) {
+    if (this.matchType("return")) {
       return this.returnStatement()
     }
-    if (this.matchType("IF")) {
+    if (this.matchType("if")) {
       return this.ifStatement()
     }
-    if (this.matchType("WHILE")) {
+    if (this.matchType("while")) {
       return this.whileStatement()
     }
-    if (this.matchType("FOR")) {
+    if (this.matchType("for")) {
       return this.forStatement()
     }
     if (
@@ -112,14 +106,16 @@ class Parser {
     const returnToken = this.consume("TYPE", "Expected return type")
     const returnType = this.parseType(returnToken.value)
 
+    this.consume("LBRACE", "Expected { after function signature")
+
     const bodyStatements: StatementNode[] = []
-    while (!this.checkType("END") && !this.isAtEnd()) {
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
       const stmt = this.statement()
       if (stmt) {
         bodyStatements.push(stmt)
       }
     }
-    this.consume("END", "Expected END after function body")
+    this.consume("RBRACE", "Expected } after function body")
 
     const body: BlockNode = {
       type: "Block",
@@ -161,16 +157,20 @@ class Parser {
   }
 
   private ifStatement(): StatementNode {
+    this.consume("LPAREN", "Expected ( after if")
     const condition = this.expression()
-    this.consume("THEN", "Expected THEN after condition")
+    this.consume("RPAREN", "Expected ) after condition")
+
+    this.consume("LBRACE", "Expected { after if condition")
 
     const trueBranchStatements: StatementNode[] = []
-    while (!this.checkType("FI") && !this.checkType("ELSE") && !this.isAtEnd()) {
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
       const stmt = this.statement()
       if (stmt) {
         trueBranchStatements.push(stmt)
       }
     }
+    this.consume("RBRACE", "Expected } after if body")
 
     const trueBranch: BlockNode = {
       type: "Block",
@@ -182,14 +182,16 @@ class Parser {
     }
 
     let falseBranch: BlockNode | null = null
-    if (this.matchType("ELSE")) {
+    if (this.matchType("else")) {
+      this.consume("LBRACE", "Expected { after else")
       const falseBranchStatements: StatementNode[] = []
-      while (!this.checkType("FI") && !this.isAtEnd()) {
+      while (!this.checkType("RBRACE") && !this.isAtEnd()) {
         const stmt = this.statement()
         if (stmt) {
           falseBranchStatements.push(stmt)
         }
       }
+      this.consume("RBRACE", "Expected } after else body")
       falseBranch = {
         type: "Block",
         statements: falseBranchStatements,
@@ -199,8 +201,6 @@ class Parser {
         },
       }
     }
-
-    this.consume("FI", "Expected FI to close IF statement")
 
     return {
       type: "Conditional",
@@ -215,19 +215,21 @@ class Parser {
   }
 
   private whileStatement(): StatementNode {
+    this.consume("LPAREN", "Expected ( after while")
     const test = this.expression()
+    this.consume("RPAREN", "Expected ) after while condition")
 
-    this.consume("DO", "Expected DO after while condition")
+    this.consume("LBRACE", "Expected { after while condition")
 
     const bodyStatements: StatementNode[] = []
-    while (!this.checkType("OD") && !this.isAtEnd()) {
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
       const stmt = this.statement()
       if (stmt) {
         bodyStatements.push(stmt)
       }
     }
 
-    this.consume("OD", "Expected OD to close WHILE loop")
+    this.consume("RBRACE", "Expected } after while loop")
 
     const body: BlockNode = {
       type: "Block",
@@ -250,21 +252,23 @@ class Parser {
   }
 
   private forStatement(): StatementNode {
-    const variable = this.consume("IDENTIFIER", "Expected variable name after FOR").value
+    const variable = this.consume("IDENTIFIER", "Expected variable name after for").value
     this.consume("ASSIGN", "Expected := after variable name")
     const start = this.expression()
-    this.consume("TO", "Expected TO after start value")
+    this.consume("to", "Expected to after start value")
     const end = this.expression()
 
+    this.consume("LBRACE", "Expected { after for header")
+
     const bodyStatements: StatementNode[] = []
-    while (!this.checkType("END") && !this.isAtEnd()) {
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
       const stmt = this.statement()
       if (stmt) {
         bodyStatements.push(stmt)
       }
     }
 
-    this.consume("END", "Expected END to close FOR loop")
+    this.consume("RBRACE", "Expected } after for loop")
 
     const body: BlockNode = {
       type: "Block",
@@ -291,14 +295,14 @@ class Parser {
   private blockStatement(): BlockNode {
     const statements: StatementNode[] = []
 
-    while (!this.checkType("END") && !this.isAtEnd()) {
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
       const stmt = this.statement()
       if (stmt) {
         statements.push(stmt)
       }
     }
 
-    this.consume("END", "Expected END after block")
+    this.consume("RBRACE", "Expected } after block")
 
     return {
       type: "Block",
@@ -494,7 +498,7 @@ class Parser {
   }
 
   private unary(): ExpressionNode {
-    if (this.matchType("MINUS") || this.matchType("BANG") || this.matchType("NOT")) {
+    if (this.matchType("MINUS") || this.matchType("BANG") || this.matchType("not")) {
       const operator = this.previous()
       const argument = this.unary()
       return {

@@ -1,18 +1,13 @@
 type TokenType =
-  | "BEGIN"
-  | "END"
-  | "FUNCTION"
-  | "RETURN"
-  | "IF"
-  | "THEN"
-  | "ELSE"
-  | "FI"
-  | "WHILE"
-  | "DO"
-  | "OD"
-  | "FOR"
-  | "TO"
-  | "NOT"
+  | "fn"
+  | "return"
+  | "if"
+  | "else"
+  | "while"
+  | "for"
+  | "to"
+  | "cast"
+  | "not"
   | "PLUS"
   | "MINUS"
   | "TIMES"
@@ -102,19 +97,14 @@ class Lexer {
     const tokens: Token[] = []
     const whitespaceRegex = /\s+/y
     const commentRegex = /#.*/y
-    const beginRegex = /BEGIN\b/y
-    const endRegex = /END\b/y
-    const functionRegex = /FUNCTION\b/y
-    const returnRegex = /RETURN\b/y
-    const ifRegex = /IF\b/y
-    const thenRegex = /THEN\b/y
-    const elseRegex = /ELSE\b/y
-    const fiRegex = /FI\b/y
-    const whileRegex = /WHILE\b/y
-    const doRegex = /DO\b/y
-    const odRegex = /OD\b/y
-    const forRegex = /FOR\b/y
-    const toRegex = /TO\b/y
+    const fnRegex = /fn\b/y
+    const returnRegex = /return\b/y
+    const ifRegex = /if\b/y
+    const elseRegex = /else\b/y
+    const whileRegex = /while\b/y
+    const forRegex = /for\b/y
+    const toRegex = /to\b/y
+    const castRegex = /cast\b/y
     const notRegex = /not\b/y
     const llmRegex = /LLM\b/y
     const notEqualRegex = /!=/y
@@ -177,33 +167,9 @@ class Lexer {
         continue
       }
 
-      value = this.match(beginRegex)
+      value = this.match(fnRegex)
       if (value) {
-        type = "BEGIN"
-        this.advance(value.length)
-        tokens.push({
-          type,
-          value,
-          position: { start: startPos, end: this.currentPosition() },
-        })
-        continue
-      }
-
-      value = this.match(endRegex)
-      if (value) {
-        type = "END"
-        this.advance(value.length)
-        tokens.push({
-          type,
-          value,
-          position: { start: startPos, end: this.currentPosition() },
-        })
-        continue
-      }
-
-      value = this.match(functionRegex)
-      if (value) {
-        type = "FUNCTION"
+        type = "fn"
         this.advance(value.length)
         tokens.push({
           type,
@@ -215,7 +181,7 @@ class Lexer {
 
       value = this.match(returnRegex)
       if (value) {
-        type = "RETURN"
+        type = "return"
         this.advance(value.length)
         tokens.push({
           type,
@@ -227,19 +193,7 @@ class Lexer {
 
       value = this.match(ifRegex)
       if (value) {
-        type = "IF"
-        this.advance(value.length)
-        tokens.push({
-          type,
-          value,
-          position: { start: startPos, end: this.currentPosition() },
-        })
-        continue
-      }
-
-      value = this.match(thenRegex)
-      if (value) {
-        type = "THEN"
+        type = "if"
         this.advance(value.length)
         tokens.push({
           type,
@@ -251,19 +205,7 @@ class Lexer {
 
       value = this.match(elseRegex)
       if (value) {
-        type = "ELSE"
-        this.advance(value.length)
-        tokens.push({
-          type,
-          value,
-          position: { start: startPos, end: this.currentPosition() },
-        })
-        continue
-      }
-
-      value = this.match(fiRegex)
-      if (value) {
-        type = "FI"
+        type = "else"
         this.advance(value.length)
         tokens.push({
           type,
@@ -275,31 +217,7 @@ class Lexer {
 
       value = this.match(whileRegex)
       if (value) {
-        type = "WHILE"
-        this.advance(value.length)
-        tokens.push({
-          type,
-          value,
-          position: { start: startPos, end: this.currentPosition() },
-        })
-        continue
-      }
-
-      value = this.match(doRegex)
-      if (value) {
-        type = "DO"
-        this.advance(value.length)
-        tokens.push({
-          type,
-          value,
-          position: { start: startPos, end: this.currentPosition() },
-        })
-        continue
-      }
-
-      value = this.match(odRegex)
-      if (value) {
-        type = "OD"
+        type = "while"
         this.advance(value.length)
         tokens.push({
           type,
@@ -311,7 +229,7 @@ class Lexer {
 
       value = this.match(forRegex)
       if (value) {
-        type = "FOR"
+        type = "for"
         this.advance(value.length)
         tokens.push({
           type,
@@ -323,7 +241,19 @@ class Lexer {
 
       value = this.match(toRegex)
       if (value) {
-        type = "TO"
+        type = "to"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(castRegex)
+      if (value) {
+        type = "cast"
         this.advance(value.length)
         tokens.push({
           type,
@@ -335,7 +265,7 @@ class Lexer {
 
       value = this.match(notRegex)
       if (value) {
-        type = "NOT"
+        type = "not"
         this.advance(value.length)
         tokens.push({
           type,

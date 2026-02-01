@@ -3,24 +3,35 @@ import { tokenize, Lexer } from "./lexer"
 
 describe("Lexer", () => {
   describe("BASIC tokens", () => {
-    test("tokenizes BEGIN", () => {
-      const tokens = tokenize("BEGIN")
+    test("tokenizes fn keyword", () => {
+      const tokens = tokenize("fn")
       expect(tokens).toEqual([
         {
-          type: "BEGIN",
-          value: "BEGIN",
-          position: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 6, index: 5 } },
+          type: "fn",
+          value: "fn",
+          position: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 3, index: 2 } },
         },
       ])
     })
 
-    test("tokenizes END", () => {
-      const tokens = tokenize("END")
+    test("tokenizes LBRACE", () => {
+      const tokens = tokenize("{")
       expect(tokens).toEqual([
         {
-          type: "END",
-          value: "END",
-          position: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 4, index: 3 } },
+          type: "LBRACE",
+          value: "{",
+          position: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 2, index: 1 } },
+        },
+      ])
+    })
+
+    test("tokenizes RBRACE", () => {
+      const tokens = tokenize("}")
+      expect(tokens).toEqual([
+        {
+          type: "RBRACE",
+          value: "}",
+          position: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 2, index: 1 } },
         },
       ])
     })
@@ -37,11 +48,11 @@ describe("Lexer", () => {
     })
 
     test("tokenizes control flow keywords", () => {
-      const tokens = tokenize("IF THEN ELSE FI WHILE DO OD FOR FUNCTION RETURN")
+      const tokens = tokenize("if else while for to return cast")
       expect(tokens).toEqual([
         {
-          type: "IF",
-          value: "IF",
+          type: "if",
+          value: "if",
           position: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 3, index: 2 } },
         },
         {
@@ -50,8 +61,8 @@ describe("Lexer", () => {
           position: { start: { line: 1, column: 3, index: 2 }, end: { line: 1, column: 4, index: 3 } },
         },
         {
-          type: "THEN",
-          value: "THEN",
+          type: "else",
+          value: "else",
           position: { start: { line: 1, column: 4, index: 3 }, end: { line: 1, column: 8, index: 7 } },
         },
         {
@@ -60,49 +71,39 @@ describe("Lexer", () => {
           position: { start: { line: 1, column: 8, index: 7 }, end: { line: 1, column: 9, index: 8 } },
         },
         {
-          type: "ELSE",
-          value: "ELSE",
-          position: { start: { line: 1, column: 9, index: 8 }, end: { line: 1, column: 13, index: 12 } },
+          type: "while",
+          value: "while",
+          position: { start: { line: 1, column: 9, index: 8 }, end: { line: 1, column: 14, index: 13 } },
         },
         {
           type: "WHITESPACE",
           value: " ",
-          position: { start: { line: 1, column: 13, index: 12 }, end: { line: 1, column: 14, index: 13 } },
+          position: { start: { line: 1, column: 14, index: 13 }, end: { line: 1, column: 15, index: 14 } },
         },
         {
-          type: "FI",
-          value: "FI",
-          position: { start: { line: 1, column: 14, index: 13 }, end: { line: 1, column: 16, index: 15 } },
-        },
-        {
-          type: "WHITESPACE",
-          value: " ",
-          position: { start: { line: 1, column: 16, index: 15 }, end: { line: 1, column: 17, index: 16 } },
-        },
-        {
-          type: "WHILE",
-          value: "WHILE",
-          position: { start: { line: 1, column: 17, index: 16 }, end: { line: 1, column: 22, index: 21 } },
+          type: "for",
+          value: "for",
+          position: { start: { line: 1, column: 15, index: 14 }, end: { line: 1, column: 18, index: 17 } },
         },
         {
           type: "WHITESPACE",
           value: " ",
-          position: { start: { line: 1, column: 22, index: 21 }, end: { line: 1, column: 23, index: 22 } },
+          position: { start: { line: 1, column: 18, index: 17 }, end: { line: 1, column: 19, index: 18 } },
         },
         {
-          type: "DO",
-          value: "DO",
-          position: { start: { line: 1, column: 23, index: 22 }, end: { line: 1, column: 25, index: 24 } },
+          type: "to",
+          value: "to",
+          position: { start: { line: 1, column: 19, index: 18 }, end: { line: 1, column: 21, index: 20 } },
         },
         {
           type: "WHITESPACE",
           value: " ",
-          position: { start: { line: 1, column: 25, index: 24 }, end: { line: 1, column: 26, index: 25 } },
+          position: { start: { line: 1, column: 21, index: 20 }, end: { line: 1, column: 22, index: 21 } },
         },
         {
-          type: "OD",
-          value: "OD",
-          position: { start: { line: 1, column: 26, index: 25 }, end: { line: 1, column: 28, index: 27 } },
+          type: "return",
+          value: "return",
+          position: { start: { line: 1, column: 22, index: 21 }, end: { line: 1, column: 28, index: 27 } },
         },
         {
           type: "WHITESPACE",
@@ -110,29 +111,9 @@ describe("Lexer", () => {
           position: { start: { line: 1, column: 28, index: 27 }, end: { line: 1, column: 29, index: 28 } },
         },
         {
-          type: "FOR",
-          value: "FOR",
-          position: { start: { line: 1, column: 29, index: 28 }, end: { line: 1, column: 32, index: 31 } },
-        },
-        {
-          type: "WHITESPACE",
-          value: " ",
-          position: { start: { line: 1, column: 32, index: 31 }, end: { line: 1, column: 33, index: 32 } },
-        },
-        {
-          type: "FUNCTION",
-          value: "FUNCTION",
-          position: { start: { line: 1, column: 33, index: 32 }, end: { line: 1, column: 41, index: 40 } },
-        },
-        {
-          type: "WHITESPACE",
-          value: " ",
-          position: { start: { line: 1, column: 41, index: 40 }, end: { line: 1, column: 42, index: 41 } },
-        },
-        {
-          type: "RETURN",
-          value: "RETURN",
-          position: { start: { line: 1, column: 42, index: 41 }, end: { line: 1, column: 48, index: 47 } },
+          type: "cast",
+          value: "cast",
+          position: { start: { line: 1, column: 29, index: 28 }, end: { line: 1, column: 33, index: 32 } },
         },
       ])
     })
@@ -532,17 +513,17 @@ test("tokenizes mixed whitespace", () => {
     })
 
     test("tokenizes code followed by comment", () => {
-      const tokens = tokenize("BEGIN # start program")
-      expect(tokens.filter((t) => t.type === "BEGIN")[0].type).toBe("BEGIN")
+      const tokens = tokenize("{ # start block")
+      expect(tokens.filter((t) => t.type === "LBRACE")[0].type).toBe("LBRACE")
       expect(tokens.filter((t) => t.type === "WHITESPACE")[0].type).toBe("WHITESPACE")
       expect(tokens.filter((t) => t.type === "COMMENT")[0].type).toBe("COMMENT")
     })
 
     test("tokenizes comment followed by code", () => {
-      const tokens = tokenize("# comment\nEND")
+      const tokens = tokenize("# comment\n}")
       expect(tokens.filter((t) => t.type === "COMMENT")[0].type).toBe("COMMENT")
       expect(tokens.filter((t) => t.type === "WHITESPACE")[0].type).toBe("WHITESPACE")
-      expect(tokens.filter((t) => t.type === "END")[0].type).toBe("END")
+      expect(tokens.filter((t) => t.type === "RBRACE")[0].type).toBe("RBRACE")
     })
   })
 
@@ -622,9 +603,9 @@ test("tokenizes mixed whitespace", () => {
     })
 
     test("tokenizes block delimiters", () => {
-      const tokens = tokenize("BEGIN x := 5 END")
+      const tokens = tokenize("{ x := 5 }")
       const nonWhitespace = tokens.filter((t) => t.type !== "WHITESPACE")
-      expect(nonWhitespace.map((t) => t.type)).toEqual(["BEGIN", "IDENTIFIER", "ASSIGN", "NUMBER", "END"])
+      expect(nonWhitespace.map((t) => t.type)).toEqual(["LBRACE", "IDENTIFIER", "ASSIGN", "NUMBER", "RBRACE"])
     })
 
     test("tokenizes a complex expression", () => {
@@ -750,16 +731,16 @@ test("tokenizes only whitespace", () => {
     })
   })
 
-  describe("Multi-line programs", () => {
+describe("Multi-line programs", () => {
     test("tokenizes multi-line program", () => {
-      const code = `BEGIN
+      const code = `{
   x := 42
   result := x * 2
-END`
+}`
       const tokens = tokenize(code)
-      expect(tokens.some((t) => t.type === "BEGIN" && t.position.start.line === 1)).toBe(true)
+      expect(tokens.some((t) => t.type === "LBRACE" && t.position.start.line === 1)).toBe(true)
       expect(tokens.some((t) => t.type === "IDENTIFIER" && t.value === "x" && t.position.start.line === 2)).toBe(true)
-      expect(tokens.some((t) => t.value === "END")).toBe(true)
+      expect(tokens.some((t) => t.type === "RBRACE" && t.position.start.line === 4)).toBe(true)
     })
 
     test("tracks line numbers correctly in multi-line program", () => {
@@ -780,23 +761,23 @@ line3`
     })
 
     test("tracks positions correctly", () => {
-      const tokens = tokenize("BEGIN\n  x := 5\nEND")
-      const beginToken = tokens.find((t) => t.type === "BEGIN")
-      const endToken = tokens.find((t) => t.type === "END")
+      const tokens = tokenize("{\n  x := 5\n}")
+      const lbraceToken = tokens.find((t) => t.type === "LBRACE")
+      const rbraceToken = tokens.find((t) => t.type === "RBRACE")
 
-      expect(beginToken?.position.start.line).toBe(1)
-      expect(beginToken?.position.start.column).toBe(1)
-      expect(endToken?.position.start.line).toBe(3)
-      expect(endToken?.position.start.column).toBe(1)
+      expect(lbraceToken?.position.start.line).toBe(1)
+      expect(lbraceToken?.position.start.column).toBe(1)
+      expect(rbraceToken?.position.start.line).toBe(3)
+      expect(rbraceToken?.position.start.column).toBe(1)
     })
   })
 
   describe("Lexer class API", () => {
     test("is instantiable with Lexer class", () => {
-      const lexer = new Lexer("BEGIN")
+      const lexer = new Lexer("fn")
       const tokens = lexer.tokenize()
       expect(tokens).toHaveLength(1)
-      expect(tokens[0].type).toBe("BEGIN")
+      expect(tokens[0].type).toBe("fn")
     })
 
     test("tokenizes multiple times with new instance", () => {
@@ -807,8 +788,8 @@ line3`
     })
 
     test("tokenizes with tokenize() function", () => {
-      const tokens = tokenize("BEGIN")
-      expect(tokens[0].type).toBe("BEGIN")
+      const tokens = tokenize("fn")
+      expect(tokens[0].type).toBe("fn")
     })
   })
 })

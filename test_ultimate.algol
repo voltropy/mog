@@ -1,7 +1,7 @@
 # Comprehensive Test Without Nested Functions
 # Tests every feature working together
 
-BEGIN
+{
   # Feature 1: Basic variables and arithmetic
   a: i64 = 100;
   b: i64 = 50;
@@ -14,47 +14,47 @@ BEGIN
   # Feature 3: While loop with nested operations
   counter: i64 = 0;
   accumulator: i64 = 0;
-  WHILE counter < 10 DO
+  while (counter < 10) {
     accumulator := accumulator + counter;
     counter := counter + 1;
-  OD;
+  }
 
   # Feature 4: If statements with comparison
   comparison_result: i64 = 0;
-  IF a > b THEN
+  if (a > b) {
     comparison_result := 1;
-  FI;
+  }
 
   # Feature 5: Nested if
   nested_result: i64 = 0;
-  IF a > b THEN
-    IF b > 25 THEN
+  if (a > b) {
+    if (b > 25) {
       nested_result := 42;
-    FI;
-  FI;
+    }
+  }
 
   # Feature 6: Functions with multiple parameters
-  FUNCTION complex_op(x: i64, y: i64, z: i64) -> i64
-    RETURN x * y + z;
-  END;
+  fn complex_op(x: i64, y: i64, z: i64) -> i64 {
+    return x * y + z;
+  }
 
-  FUNCTION helper(a: i64, b: i64) -> i64
-    RETURN a * b;
-  END;
+  fn helper(a: i64, b: i64) -> i64 {
+    return a * b;
+  }
 
   op_result: i64 = complex_op(2, 3, 4);
   helper_result: i64 = helper(5, 6);
 
   # Feature 7: Recursive functions with conditional
-  FUNCTION is_even(n: i64) -> i64
-    IF n = 0 THEN
-      RETURN 1;
-    FI;
-    IF n = 1 THEN
-      RETURN 0;
-    FI;
-    RETURN is_even(n - 2);
-  END;
+  fn is_even(n: i64) -> i64 {
+    if (n = 0) {
+      return 1;
+    }
+    if (n = 1) {
+      return 0;
+    }
+    return is_even(n - 2);
+  }
 
   even_test: i64 = is_even(8);
 
@@ -71,14 +71,14 @@ BEGIN
   # Feature 10: All loops working together
   outer: i64 = 0;
   outer_total: i64 = 0;
-  WHILE outer < 3 DO
+  while (outer < 3) {
     inner: i64 = 0;
-    WHILE inner < 3 DO
+    while (inner < 3) {
       outer_total := outer_total + outer * 10 + inner;
       inner := inner + 1;
-    OD;
+    }
     outer := outer + 1;
-  OD;
+  }
 
   # All features tested successfully
-END
+}

@@ -205,19 +205,18 @@ describe("parser array literals", () => {
 
 describe("parser table literals", () => {
   test("empty table", () => {
-    const ast = parse("{ t = {}; }")
+    const ast = parse("{ {}; }")
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.right.type).toBe("TableLiteral")
-    expect(stmt.expression.right.columns.length).toBe(0)
+    expect(stmt.expression.type).toBe("TableLiteral")
+    expect(stmt.expression.columns.length).toBe(0)
   })
 
   test("table with columns", () => {
-    const ast = parse("{ t = { a: 1, b: 2 }; }")
+    const ast = parse("{ { a: 1, b: 2 }; }")
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.right.type).toBe("TableLiteral")
-    expect(stmt.expression.right.columns.length).toBe(2)
-    expect(stmt.expression.right.columns[0].name).toBe("a")
-    expect(stmt.expression.right.columns[1].name).toBe("b")
+    expect(stmt.expression.columns.length).toBe(2)
+    expect(stmt.expression.columns[0].name).toBe("a")
+    expect(stmt.expression.columns[1].name).toBe("b")
   })
 })
 
@@ -231,7 +230,7 @@ describe("parser if statements", () => {
   })
 
   test("if with else", () => {
-    const ast = parse("{ if (x > y) { x := 1; } else { x := -1; } }")
+    const ast = parse("{ if (x > y) { x := 1; ELSE x := -1; } }")
     const stmt = ast.statements[0] as any
     expect(stmt.type).toBe("Conditional")
     expect(stmt.falseBranch).not.toBeNull()
