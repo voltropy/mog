@@ -182,6 +182,133 @@ table_set(tbl, "key", 3, 42);
 val: i64 = table_get(tbl, "key", 3);
 ```
 
+### POSIX Filesystem Operations
+
+AlgolScript provides direct access to POSIX filesystem functions for low-level file operations.
+
+**Note:** On macOS ARM64, `open()` with `O_CREAT` has calling convention issues. Use `creat()` instead for creating files.
+
+#### Basic File Operations
+
+```algol
+# Open, write, and close a file
+fd: i64 = open("output.txt", O_CREAT | O_WRONLY, 0644);
+if (fd == -1) {
+  return 1;  # Error handling
+}
+write(fd, "Hello World\n", 12);
+close(fd);
+
+# Read from a file
+fd = open("output.txt", O_RDONLY, 0);
+buf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];  # Buffer array
+bytes_read: i64 = read(fd, buf, 12);
+close(fd);
+
+# Alternative: Use creat() on macOS instead of open() with O_CREAT
+fd = creat("newfile.txt", 0644);
+write(fd, "data", 4);
+close(fd);
+```
+
+Common open flags: `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`, `O_APPEND`
+
+#### Directory Operations
+
+```algol
+# Create and remove directories
+result: i64 = mkdir("mydir", 0755);
+if (result == -1) {
+  return 1;
+}
+rmdir("mydir");
+
+# Open and read directory entries
+dir: ptr = opendir("mydir");
+if (dir != 0) {
+  # Process directory entries...
+  rewinddir(dir);  # Reset to beginning
+  closedir(dir);
+}
+```
+
+#### File Metadata
+
+```algol
+# stat - get file information
+statbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                  0, 0, 0];
+result: i64 = stat("file.txt", statbuf);
+
+# lstat - get symlink info (not target)
+lstatbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0];
+result = lstat("symlink.txt", lstatbuf);
+
+# fstat - get info from file descriptor
+fd: i64 = open("file.txt", O_RDONLY, 0);
+fstatbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0];
+result = fstat(fd, fstatbuf);
+close(fd);
+
+# Change permissions
+chmod("file.txt", 0644);       # By path
+fchmod(fd, 0755);              # By file descriptor
+```
+
+#### Working with Buffers
+
+Buffers for POSIX functions are created as i64 arrays. Pass the array directly (no cast needed):
+
+```algol
+# Small buffer for string operations
+small_buf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+# Large buffer for file reading
+read_buf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0, 0];
+bytes: i64 = read(fd, read_buf, 512);
+```
+
+#### Common Patterns and Best Practices
+
+```algol
+# Pattern 1: Always check for errors
+fd: i64 = open("file.txt", O_RDONLY, 0);
+if (fd == -1) {
+  return 1;  # Handle error
+}
+
+# Pattern 2: Cleanup on error
+dir_result: i64 = mkdir("test_dir", 0755);
+if (dir_result == -1) {
+  return 1;
+}
+fd = open("test_dir/file.txt", O_CREAT | O_WRONLY, 0644);
+if (fd == -1) {
+  rmdir("test_dir");  # Cleanup
+  return 2;
+}
+
+# Pattern 3: Close files before unlinking
+write(fd, "data", 4);
+close(fd);  # Close first
+unlink("file.txt");  # Then remove
+
+# Pattern 4: Cleanup files after tests
+unlink("temp_file.txt");
+rmdir("temp_dir");
+```
+
 ## Examples
 
 The repository includes several example programs:
@@ -228,6 +355,29 @@ This formats all `.algol` files with 2-space indentation based on brace nesting.
 - `src/compiler.ts` - Compiler orchestration
 - `src/llvm_codegen.ts` - LLVM IR code generation
 - `runtime/` - C runtime library
+
+## POSIX
+
+### Platform Notes
+
+#### macOS ARM64 Variadic Function Limitation
+
+On macOS ARM64, the `open()` system call with the `O_CREAT` flag may fail due to variadic calling convention differences. The `open()` function is variadic (takes variable arguments), and the extra arguments required by `O_CREAT` (file mode/permissions) may not be passed correctly.
+
+**Workaround**: Use `creat()` instead when creating files:
+
+```algol
+// This may fail on macOS ARM64
+// fd: i32 = open("file.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+// Use creat() instead for file creation
+fd: i32 = creat("file.txt", 0644);
+
+// Later, re-open with open() if you need different flags
+// fd = open("file.txt", O_RDONLY);
+```
+
+This limitation affects any variadic C library function when called from AlgolScript on macOS ARM64.
 
 ## License
 
