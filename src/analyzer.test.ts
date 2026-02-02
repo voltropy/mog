@@ -285,7 +285,7 @@ describe("Semantic Analyzer - Type Checking: Assignments", () => {
   })
 
   test("allows assignment with type inference", () => {
-    const ast = program(varDecl("x", null, num(5, null)), assign("x", num(10, new IntegerType("i32"))))
+    const ast = program(varDecl("x", null, num(5, null)), assign("x", num(10, new IntegerType("i64"))))
     const analyzer = new SemanticAnalyzer()
     const errors = analyzer.analyze(ast)
     expect(errors).toEqual([])

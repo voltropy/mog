@@ -1,0 +1,27 @@
+// Test nested loops with 2D array
+fn main() -> i64 {
+  mat: i64[][] = [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9]
+  ];
+
+  sum: i64 = 0;
+  i: i64 = 0;
+  while (i < 3) {
+    j: i64 = 0;
+    while (j < 3) {
+      sum := sum + mat[i][j];
+      j := j + 1;
+    }
+    i := i + 1;
+  }
+
+  expected: i64 = 45;
+
+  if (sum == expected) {
+    return 0;
+  } else {
+    return 1;
+  }
+}

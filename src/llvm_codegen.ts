@@ -29,6 +29,7 @@ class LLVMIRGenerator {
   private blockCounter = 0
   private valueCounter = 0
   private labelCounter = 0
+  private stringConstants: string[] = []
 
   generate(ast: ProgramNode): string {
     const ir: string[] = []
@@ -44,6 +45,16 @@ class LLVMIRGenerator {
     ir.push("")
 
     this.setupDeclarations(ir)
+
+    // First: collect all string constants from AST
+    this.collectStringConstants(ast)
+
+    // Emit string constants
+    ir.push("; String constants")
+    for (const str of this.stringConstants) {
+      ir.push(str)
+    }
+    ir.push("")
 
     const functionDeclarations = this.collectFunctionDeclarations(ast)
 
@@ -192,10 +203,12 @@ class LLVMIRGenerator {
       case "VariableDeclaration": {
         const llvmType = this.toLLVMType(statement.varType)
         const reg = `%${statement.name}`
-        ir.push(`  ${reg} = alloca ${llvmType}`)
+        const allocaType = statement.varType?.type === "ArrayType" ? "ptr" : llvmType
+        ir.push(`  ${reg} = alloca ${allocaType}`)
         if (statement.value) {
           const value = this.generateExpression(ir, statement.value)
-          ir.push(`  store ${llvmType} ${value}, ptr ${reg}`)
+          const storeType = statement.varType?.type === "ArrayType" ? "ptr" : llvmType
+          ir.push(`  store ${storeType} ${value}, ptr ${reg}`)
         }
         break
       }
@@ -214,7 +227,8 @@ class LLVMIRGenerator {
       case "Return":
         if (statement.value) {
           const value = this.generateExpression(ir, statement.value)
-          ir.push(`  ret i64 ${value}`)
+          const returnType = this.currentFunction?.returnType || "i64"
+          ir.push(`  ret ${returnType} ${value}`)
         } else {
           ir.push(`  ret void`)
         }
@@ -281,11 +295,39 @@ class LLVMIRGenerator {
     }
   }
 
-  private generateStringLiteral(ir: string[], value: string): string {
+private generateStringLiteral(ir: string[], value: string): string {
     const name = `@str${this.valueCounter++}`
     const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-    ir.push(`${name} = private unnamed_addr constant [${value.length + 1} x i8] c"${escaped}\\00"`)
+    const strDef = `${name} = private unnamed_addr constant [${value.length + 1} x i8] c"${escaped}\\00"`
+    this.stringConstants.push(strDef)
     return name
+  }
+
+  private collectStringFromNode(node: any): void {
+    if (!node) return
+
+    if (node.type === "StringLiteral") {
+      const name = `@str${this.valueCounter++}`
+      const escaped = node.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+      const strDef = `${name} = private unnamed_addr constant [${node.value.length + 1} x i8] c"${escaped}\\00"`
+      this.stringConstants.push(strDef)
+      return
+    }
+
+    // Recursively collect from child nodes
+    for (const key in node) {
+      if (key === 'position' || key.startsWith('_')) continue
+      const value = node[key]
+      if (Array.isArray(value)) {
+        value.forEach(child => this.collectStringFromNode(child))
+      } else if (typeof value === 'object' && value !== null) {
+        this.collectStringFromNode(value)
+      }
+    }
+  }
+
+  private collectStringConstants(ast: any): void {
+    this.collectStringFromNode(ast)
   }
 
   private generateBinaryExpression(ir: string[], expr: any): string {
@@ -308,6 +350,8 @@ class LLVMIRGenerator {
       "!=": ["icmp ne i64", "fcmp one"],
       "&&": ["and i64", "and"],
       "||": ["or i64", "or"],
+      "|": ["or i64", "or"],
+      "&": ["and i64", "and"],
     }
 
     const [intOp, floatOp] = opMap[expr.operator]
@@ -367,7 +411,12 @@ class LLVMIRGenerator {
 
   private generateArrayLiteral(ir: string[], expr: any): string {
     const elementReg = `%${this.valueCounter++}`
-    ir.push(`  ${elementReg} = call ptr @array_alloc(i64 %size, i64 %dim_count, i64 %dimensions)`)
+    const size = expr.elements.length || 0
+    const dimensionsReg = `%${this.valueCounter++}`
+    ir.push(`  ${dimensionsReg} = alloca [1 x i64]`)
+    ir.push(`  ${dimensionsReg}_0 = getelementptr [1 x i64], ptr ${dimensionsReg}, i64 0, i64 0`)
+    ir.push(`  store i64 ${size}, ptr ${dimensionsReg}_0`)
+    ir.push(`  ${elementReg} = call ptr @array_alloc(i64 8, i64 1, ptr ${dimensionsReg})`)
 
     for (let i = 0; i < expr.elements.length; i++) {
       const value = this.generateExpression(ir, expr.elements[i])
@@ -381,7 +430,8 @@ class LLVMIRGenerator {
 
   private generateTableLiteral(ir: string[], expr: any): string {
     const tableReg = `%${this.valueCounter++}`
-    ir.push(`  ${tableReg} = call ptr @table_new(i64 %capacity)`)
+    const capacity = expr.entries.length > 0 ? expr.entries.length * 2 : 4
+    ir.push(`  ${tableReg} = call ptr @table_new(i64 ${capacity})`)
 
     for (let i = 0; i < expr.entries.length; i++) {
       const { key, value } = expr.entries[i]
@@ -649,7 +699,7 @@ class LLVMIRGenerator {
 
     if (!hasReturn) {
       if (returnType !== "void") {
-        ir.push("  ret i64 0")
+        ir.push(`  ret ${llvmReturnType} 0`)
       } else {
         ir.push("  ret void")
       }
@@ -664,7 +714,8 @@ class LLVMIRGenerator {
   private generateReturn(ir: string[], statement: any): void {
     if (statement.value) {
       const reg = this.generateExpression(ir, statement.value)
-      ir.push(`  ret i64 ${reg}`)
+      const returnType = this.currentFunction?.returnType || "i64"
+      ir.push(`  ret ${returnType} ${reg}`)
     } else {
       ir.push("  ret void")
     }

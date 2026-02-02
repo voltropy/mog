@@ -1,0 +1,18 @@
+// Test 1D array
+fn main() -> i64 {
+  arr: i64[] = [1, 2, 3, 4, 5];
+
+  x: i64 = arr[0];
+  y: i64 = arr[2];
+  z: i64 = arr[4];
+
+  arr[1] := 10;
+
+  result: i64 = arr[1];
+
+  if (result == 10) {
+    return 0;
+  } else {
+    return 1;
+  }
+}

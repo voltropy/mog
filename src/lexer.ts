@@ -1,3 +1,5 @@
+import { isPOSIXConstant } from "./posix_constants.js"
+
 type TokenType =
   | "fn"
   | "return"
@@ -38,6 +40,7 @@ type TokenType =
   | "NUMBER"
   | "STRING"
   | "TYPE"
+  | "POSIX_CONSTANT"
   | "UNKNOWN"
   | "WHITESPACE"
   | "COMMENT"
@@ -136,7 +139,7 @@ class Lexer {
     const doubleStringRegex = /"(?:[^"\\]|\\.)*"/y
     const singleStringRegex = /'(?:[^'\\]|\\.)*'/y
     const numberRegex = /\b\d+(?:\.\d*)?(?:[eE][+-]?\d+)?\b/y
-    const typeRegex = /\b(?:i|u|f)(?:8|16|32|64|128|256)\b/y
+    const typeRegex = /\b(?:i|u|f)(?:8|16|32|64|128|256)((?:\[\])*)/y
     const identifierRegex = /\b[a-zA-Z_][a-zA-Z0-9_]*\b/y
 
     while (this.pos < this.input.length) {
@@ -650,7 +653,11 @@ class Lexer {
 
       value = this.match(identifierRegex)
       if (value) {
-        type = "IDENTIFIER"
+        if (isPOSIXConstant(value)) {
+          type = "POSIX_CONSTANT"
+        } else {
+          type = "IDENTIFIER"
+        }
         this.advance(value.length)
         tokens.push({
           type,

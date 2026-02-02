@@ -91,20 +91,32 @@ class Parser {
     this.consume("LPAREN", "Expected ( after function name")
 
     const params: any[] = []
-    if (!this.checkType("RPAREN")) {
-      do {
-        const paramName = this.consume("IDENTIFIER", "Expected parameter name").value
-        this.consume("COLON", "Expected : after parameter name")
-        const paramToken = this.consume("TYPE", "Expected parameter type")
-        const paramType = this.parseType(paramToken.value)
-        params.push({ name: paramName, paramType })
-      } while (this.matchType("COMMA"))
-    }
-    this.consume("RPAREN", "Expected ) after parameters")
+if (!this.checkType("RPAREN")) {
+        do {
+          const paramName = this.consume("IDENTIFIER", "Expected parameter name").value
+          this.consume("COLON", "Expected : after parameter name")
+          let paramToken = this.consume("TYPE", "Expected parameter type")
+          let typeName = paramToken.value
+          while (this.matchType("LBRACKET")) {
+            typeName += "["
+            this.consume("RBRACKET", "Expected ] after array bracket")
+            typeName += "]"
+          }
+          const paramType = this.parseType(typeName)
+          params.push({ name: paramName, paramType })
+        } while (this.matchType("COMMA"))
+      }
+      this.consume("RPAREN", "Expected ) after parameters")
 
-    this.consume("ARROW", "Expected -> after parameter list")
-    const returnToken = this.consume("TYPE", "Expected return type")
-    const returnType = this.parseType(returnToken.value)
+      this.consume("ARROW", "Expected -> after parameter list")
+      let returnToken = this.consume("TYPE", "Expected return type")
+      let returnTypeName = returnToken.value
+      while (this.matchType("LBRACKET")) {
+        returnTypeName += "["
+        this.consume("RBRACKET", "Expected ] after array bracket")
+        returnTypeName += "]"
+      }
+      const returnType = this.parseType(returnTypeName)
 
     this.consume("LBRACE", "Expected { after function signature")
 
@@ -317,8 +329,17 @@ class Parser {
   private variableDeclaration(): StatementNode {
     const name = this.consume("IDENTIFIER", "Expected variable name").value
     this.consume("COLON", "Expected : after variable name")
-    const typeToken = this.consume("TYPE", "Expected type annotation")
-    const varType = this.parseType(typeToken.value)
+    
+    let typeToken = this.consume("TYPE", "Expected type annotation")
+    let typeName = typeToken.value
+    
+    while (this.matchType("LBRACKET")) {
+      typeName += "["
+      this.consume("RBRACKET", "Expected ] after array bracket")
+      typeName += "]"
+    }
+    
+    const varType = this.parseType(typeName)
     this.consume("EQUAL", "Expected = after type")
     this.matchType("ASSIGN")
 
@@ -351,6 +372,14 @@ class Parser {
         return {
           type: "AssignmentExpression",
           name: expr.name,
+          value,
+          position: this.combinePositions(expr, value),
+        }
+      }
+      if (expr.type === "IndexExpression") {
+        return {
+          type: "AssignmentExpression",
+          target: expr,
           value,
           position: this.combinePositions(expr, value),
         }
@@ -513,12 +542,29 @@ class Parser {
   }
 
   private primary(): ExpressionNode {
+    if (this.matchType("FALSE")) {
+      const token = this.previous()
+      return {
+        type: "BooleanLiteral",
+        value: false,
+        position: token.position,
+      }
+    }
+
+    if (this.matchType("TRUE")) {
+      const token = this.previous()
+      return {
+        type: "BooleanLiteral",
+        value: true,
+        position: token.position,
+      }
+    }
+
     if (this.matchType("NUMBER")) {
       const token = this.previous()
       return {
         type: "NumberLiteral",
         value: parseFloat(token.value),
-        literalType: new IntegerType("i64"),
         position: token.position,
       }
     }
@@ -532,9 +578,33 @@ class Parser {
       }
     }
 
+    if (this.matchType("POSIX_CONSTANT")) {
+      const token = this.previous()
+      return {
+        type: "POSIXConstant",
+        value: token.value,
+        position: token.position,
+      }
+    }
+
     if (this.matchType("IDENTIFIER")) {
       const token = this.previous()
-      const name = token.value
+      let object: ExpressionNode = {
+        type: "Identifier",
+        name: token.value,
+        position: token.position,
+      }
+
+      while (this.matchType("LBRACKET")) {
+        const index = this.expression()
+        this.consume("RBRACKET", "Expected ] after index")
+        object = {
+          type: "IndexExpression",
+          object,
+          index,
+          position: this.combinePositions(object, index),
+        }
+      }
 
       if (this.matchType("LPAREN")) {
         const callArgs: ExpressionNode[] = []
@@ -547,9 +617,9 @@ class Parser {
 
         return {
           type: "CallExpression",
-          callee: { type: "Identifier", name, position: token.position },
+          callee: object.type === "Identifier" ? object : { type: "Identifier", name: (object as any).name, position: token.position },
           args: callArgs,
-          position: this.combinePositions({ position: token.position }, this.previous()),
+          position: this.combinePositions(object, this.previous()),
         }
       }
 
@@ -557,28 +627,13 @@ class Parser {
         const property = this.consume("IDENTIFIER", "Expected property name").value
         return {
           type: "MemberExpression",
-          object: { type: "Identifier", name, position: token.position },
+          object: object.type === "Identifier" ? object : { type: "Identifier", name: (object as any).name, position: token.position },
           property,
-          position: this.combinePositions({ position: token.position }, this.previous()),
+          position: this.combinePositions(object, this.previous()),
         }
       }
 
-      if (this.matchType("LBRACKET")) {
-        const index = this.expression()
-        this.consume("RBRACKET", "Expected ] after index")
-        return {
-          type: "IndexExpression",
-          object: { type: "Identifier", name, position: token.position },
-          index,
-          position: this.combinePositions({ position: token.position }, this.previous()),
-        }
-      }
-
-      return {
-        type: "Identifier",
-        name,
-        position: token.position,
-      }
+      return object
     }
 
     if (this.matchType("LBRACKET")) {
@@ -621,6 +676,15 @@ class Parser {
     }
   }
 
+  private parseArrayType(): any {
+    let dimensions = 0;
+    while (this.matchType("LBRACKET")) {
+      dimensions++;
+      this.consume("RBRACKET", "Expected ] after array dimension");
+    }
+    return dimensions;
+  }
+
   private tableLiteral(): ExpressionNode {
     const start = this.previous().position.start
     const columns: any[] = []
@@ -651,6 +715,31 @@ class Parser {
   }
 
   private parseType(typeName: string): any {
+    const bracketMatch = typeName.match(/^(.*?)(\[\]*)$/);
+    if (bracketMatch) {
+      const baseName = bracketMatch[1];
+      const arraySuffix = bracketMatch[2];
+      
+      let elementType: Type;
+      if (baseName.startsWith("i")) {
+        elementType = new IntegerType(baseName as any);
+      } else if (baseName.startsWith("u")) {
+        elementType = new UnsignedType(baseName as any);
+      } else if (baseName.startsWith("f")) {
+        elementType = new FloatType(baseName as any);
+      } else {
+        return new VoidType();
+      }
+      
+      const dimensions = [];
+      let currentType = elementType;
+      const bracketCount = (arraySuffix.match(/\[/g) || []).length;
+      for (let i = 0; i < bracketCount; i++) {
+        currentType = new ArrayType(currentType, []);
+      }
+      return currentType;
+    }
+    
     if (typeName.startsWith("i")) {
       return new IntegerType(typeName as any)
     }
@@ -659,9 +748,6 @@ class Parser {
     }
     if (typeName.startsWith("f")) {
       return new FloatType(typeName as any)
-    }
-    if (typeName.startsWith("[")) {
-      return new ArrayType(new IntegerType("i64"), [])
     }
     return new VoidType()
   }

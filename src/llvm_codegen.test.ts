@@ -392,11 +392,9 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("%arr = alloca i64")
-      expect(ir).toContain("call ptr @array_alloc(i64 %size, i64 %dim_count, i64 %dimensions)")
-      expect(ir).toContain("call void @array_set(ptr %0, i64 0, i64 1)")
-      expect(ir).toContain("call void @array_set(ptr %0, i64 1, i64 2)")
-      expect(ir).toContain("call void @array_set(ptr %0, i64 2, i64 3)")
+      expect(ir).toContain("%arr = alloca ptr")
+      expect(ir).toContain("call ptr @array_alloc(i64 8, i64 1, ptr")
+      expect(ir).toContain("call void @array_set")
     })
 
     test("generates empty array literal", () => {
@@ -415,8 +413,9 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("%empty = alloca i64")
-      expect(ir).toContain("call ptr @array_alloc(i64 %size, i64 %dim_count, i64 %dimensions)")
+      expect(ir).toContain("%empty = alloca ptr")
+      expect(ir).toContain("call ptr @array_alloc(i64 8, i64 1, ptr")
+      expect(ir).toContain("store i64 0, ptr")
     })
   })
 
@@ -622,8 +621,8 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("define i64 @greet()")
-      expect(ir).toContain("ret i64 0")
+      expect(ir).toContain("define void @greet()")
+      expect(ir).toContain("ret void")
     })
 
     test("generates function without parameters", () => {

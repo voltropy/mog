@@ -8,6 +8,7 @@ type PrimitiveKind = IntegerKind | UnsignedKind | FloatKind
 
 class IntegerType {
   kind: IntegerKind
+  type = "IntegerType"
 
   constructor(kind: IntegerKind) {
     this.kind = kind
@@ -36,6 +37,7 @@ class IntegerType {
 
 class UnsignedType {
   kind: UnsignedKind
+  type = "UnsignedType"
 
   constructor(kind: UnsignedKind) {
     this.kind = kind
@@ -64,6 +66,7 @@ class UnsignedType {
 
 class FloatType {
   kind: FloatKind
+  type = "FloatType"
 
   constructor(kind: FloatKind) {
     this.kind = kind
@@ -81,6 +84,7 @@ class FloatType {
 class ArrayType {
   elementType: Type
   dimensions: number[]
+  type = "ArrayType"
 
   constructor(elementType: Type, dimensions: number[] = []) {
     this.elementType = elementType
@@ -104,6 +108,7 @@ class ArrayType {
 class TableType {
   keyType: Type
   valueType: Type
+  type = "TableType"
 
   constructor(keyType: Type, valueType: Type) {
     this.keyType = keyType
@@ -116,6 +121,8 @@ class TableType {
 }
 
 class VoidType {
+  type = "VoidType"
+
   toString(): string {
     return "void"
   }
@@ -193,9 +200,12 @@ function sameType(a: Type, b: Type): boolean {
   if (a instanceof UnsignedType && b instanceof UnsignedType) return a.kind === b.kind
   if (a instanceof FloatType && b instanceof FloatType) return a.kind === b.kind
   if (a instanceof ArrayType && b instanceof ArrayType) {
-    return (
-      a.rank === b.rank && a.dimensions.every((d, i) => d === b.dimensions[i]) && sameType(a.elementType, b.elementType)
-    )
+    if (a.rank !== b.rank) return false
+    if (!sameType(a.elementType, b.elementType)) return false
+    for (let i = 0; i < a.rank; i++) {
+      if (a.dimensions[i] !== b.dimensions[i]) return false
+    }
+    return true
   }
   if (a instanceof TableType && b instanceof TableType) {
     return sameType(a.keyType, b.keyType) && sameType(a.valueType, b.valueType)

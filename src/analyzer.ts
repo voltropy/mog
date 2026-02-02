@@ -137,7 +137,7 @@ interface IdentifierNode extends ASTNode {
 
 interface NumberLiteralNode extends ASTNode {
   type: "NumberLiteral"
-  value: string
+  value: string | number
   literalType: Type | null
 }
 
@@ -171,7 +171,8 @@ interface UnaryExpressionNode extends ASTNode {
 
 interface AssignmentExpressionNode extends ASTNode {
   type: "AssignmentExpression"
-  name: string
+  name?: string
+  target?: ExpressionNode
   value: ExpressionNode
 }
 
@@ -314,8 +315,68 @@ class SemanticAnalyzer {
   analyze(program: ProgramNode): SemanticError[] {
     this.symbolTable = new SymbolTable()
     this.errors = []
+    this.declarePOSIXBuiltins()
     this.visitProgram(program)
     return this.errors
+  }
+
+  private declarePOSIXBuiltins(): void {
+    const i64Type = new IntegerType("i64")
+    const voidType = new VoidType()
+
+    // POSIX filesystem functions
+    const posixFunctions: Record<string, { params: { name: string; type: string }[]; returnType: Type }> = {
+      open: { params: [{ name: "path", type: "i64" }, { name: "flags", type: "i64" }], returnType: i64Type },
+      read: { params: [{ name: "fd", type: "i64" }, { name: "buf", type: "i64" }, { name: "count", type: "i64" }], returnType: i64Type },
+      write: { params: [{ name: "fd", type: "i64" }, { name: "buf", type: "i64" }, { name: "count", type: "i64" }], returnType: i64Type },
+      pread: { params: [{ name: "fd", type: "i64" }, { name: "buf", type: "i64" }, { name: "count", type: "i64" }, { name: "offset", type: "i64" }], returnType: i64Type },
+      pwrite: { params: [{ name: "fd", type: "i64" }, { name: "buf", type: "i64" }, { name: "count", type: "i64" }, { name: "offset", type: "i64" }], returnType: i64Type },
+      lseek: { params: [{ name: "fd", type: "i64" }, { name: "offset", type: "i64" }, { name: "whence", type: "i64" }], returnType: i64Type },
+      close: { params: [{ name: "fd", type: "i64" }], returnType: i64Type },
+      fsync: { params: [{ name: "fd", type: "i64" }], returnType: i64Type },
+      fdatasync: { params: [{ name: "fd", type: "i64" }], returnType: i64Type },
+      stat: { params: [{ name: "path", type: "i64" }, { name: "buf", type: "i64" }], returnType: i64Type },
+      lstat: { params: [{ name: "path", type: "i64" }, { name: "buf", type: "i64" }], returnType: i64Type },
+      fstat: { params: [{ name: "fd", type: "i64" }, { name: "buf", type: "i64" }], returnType: i64Type },
+      access: { params: [{ name: "path", type: "i64" }, { name: "mode", type: "i64" }], returnType: i64Type },
+      faccessat: { params: [{ name: "dirfd", type: "i64" }, { name: "path", type: "i64" }, { name: "mode", type: "i64" }, { name: "flags", type: "i64" }], returnType: i64Type },
+      utimes: { params: [{ name: "path", type: "i64" }, { name: "times", type: "i64" }], returnType: i64Type },
+      futimes: { params: [{ name: "fd", type: "i64" }, { name: "times", type: "i64" }], returnType: i64Type },
+      utimensat: { params: [{ name: "dirfd", type: "i64" }, { name: "path", type: "i64" }, { name: "times", type: "i64" }, { name: "flags", type: "i64" }], returnType: i64Type },
+      chmod: { params: [{ name: "path", type: "i64" }, { name: "mode", type: "i64" }], returnType: i64Type },
+      fchmod: { params: [{ name: "fd", type: "i64" }, { name: "mode", type: "i64" }], returnType: i64Type },
+      chown: { params: [{ name: "path", type: "i64" }, { name: "owner", type: "i64" }, { name: "group", type: "i64" }], returnType: i64Type },
+      fchown: { params: [{ name: "fd", type: "i64" }, { name: "owner", type: "i64" }, { name: "group", type: "i64" }], returnType: i64Type },
+      umask: { params: [{ name: "mask", type: "i64" }], returnType: i64Type },
+      truncate: { params: [{ name: "path", type: "i64" }, { name: "length", type: "i64" }], returnType: i64Type },
+      ftruncate: { params: [{ name: "fd", type: "i64" }, { name: "length", type: "i64" }], returnType: i64Type },
+      link: { params: [{ name: "oldpath", type: "i64" }, { name: "newpath", type: "i64" }], returnType: i64Type },
+      symlink: { params: [{ name: "target", type: "i64" }, { name: "linkpath", type: "i64" }], returnType: i64Type },
+      readlink: { params: [{ name: "path", type: "i64" }, { name: "buf", type: "i64" }, { name: "bufsiz", type: "i64" }], returnType: i64Type },
+      rename: { params: [{ name: "oldpath", type: "i64" }, { name: "newpath", type: "i64" }], returnType: i64Type },
+      unlink: { params: [{ name: "path", type: "i64" }], returnType: i64Type },
+      mkdir: { params: [{ name: "path", type: "i64" }, { name: "mode", type: "i64" }], returnType: i64Type },
+      rmdir: { params: [{ name: "path", type: "i64" }], returnType: i64Type },
+      fcntl: { params: [{ name: "fd", type: "i64" }, { name: "cmd", type: "i64" }], returnType: i64Type },
+      pathconf: { params: [{ name: "path", type: "i64" }, { name: "name", type: "i64" }], returnType: i64Type },
+      fpathconf: { params: [{ name: "fd", type: "i64" }, { name: "name", type: "i64" }], returnType: i64Type },
+      dup: { params: [{ name: "fd", type: "i64" }], returnType: i64Type },
+      dup2: { params: [{ name: "fd", type: "i64" }, { name: "fd2", type: "i64" }], returnType: i64Type },
+      creat: { params: [{ name: "path", type: "i64" }, { name: "mode", type: "i64" }], returnType: i64Type },
+      mkfifo: { params: [{ name: "path", type: "i64" }, { name: "mode", type: "i64" }], returnType: i64Type },
+      mknod: { params: [{ name: "path", type: "i64" }, { name: "mode", type: "i64" }, { name: "dev", type: "i64" }], returnType: i64Type },
+      opendir: { params: [{ name: "path", type: "i64" }], returnType: i64Type },
+      readdir: { params: [{ name: "dirp", type: "i64" }], returnType: i64Type },
+      closedir: { params: [{ name: "dirp", type: "i64" }], returnType: i64Type },
+      rewinddir: { params: [{ name: "dirp", type: "i64" }], returnType: voidType },
+      chdir: { params: [{ name: "path", type: "i64" }], returnType: i64Type },
+      fchdir: { params: [{ name: "fd", type: "i64" }], returnType: i64Type },
+      getcwd: { params: [{ name: "buf", type: "i64" }, { name: "size", type: "i64" }], returnType: i64Type },
+    }
+
+    for (const [name, func] of Object.entries(posixFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
   }
 
   private emitError(message: string, position: { start: Position; end: Position }): void {
@@ -426,6 +487,59 @@ class SemanticAnalyzer {
 
   private visitExpressionStatement(node: ExpressionStatementNode): void {
     this.visitExpression(node.expression)
+  }
+
+  private visitAssignmentExpression(node: AssignmentExpressionNode): Type | null {
+    const valueType = this.visitExpression(node.value)
+
+    if (node.name !== undefined) {
+      let symbol = this.symbolTable.lookup(node.name)
+
+      if (!symbol) {
+        this.emitError(`Undefined variable '${node.name}'`, node.position)
+        return null
+      }
+
+      if (symbol.symbolType !== "variable") {
+        this.emitError(`Cannot assign to ${symbol.symbolType} '${node.name}'`, node.position)
+        return null
+      }
+
+      if (valueType && symbol.declaredType) {
+        if (!sameType(valueType, symbol.declaredType)) {
+          this.emitError(
+            `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.declaredType.toString()} (requires explicit cast)`,
+            node.position,
+          )
+        }
+      } else if (valueType && symbol.inferredType) {
+        if (!sameType(valueType, symbol.inferredType)) {
+          this.emitError(
+            `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.inferredType.toString()} (requires explicit cast)`,
+            node.position,
+          )
+        }
+      }
+    } else if (node.target !== undefined) {
+      const objectValue = this.visitExpression(node.target.object)
+      const indexValue = this.visitExpression(node.target.index)
+
+      let targetType: Type | null = null
+      if (objectValue && isArrayType(objectValue)) {
+        targetType = objectValue.elementType
+      }
+
+      if (targetType && valueType && !sameType(targetType, valueType)) {
+        this.emitError(
+          `Type mismatch: cannot assign ${valueType.toString()} to array element of type ${targetType.toString()} (requires explicit cast)`,
+          node.position,
+        )
+      }
+
+      return targetType
+    }
+
+    return valueType
   }
 
   private visitBlock(node: BlockNode): void {
@@ -563,8 +677,7 @@ class SemanticAnalyzer {
       case "CastExpression":
         return this.visitCastExpression(node as CastExpressionNode)
       case "AssignmentExpression":
-        this.visitAssignment(node as any)
-        return new IntegerType("i64")
+        return this.visitAssignmentExpression(node as AssignmentExpressionNode)
       default:
         const unknown = node as { type: string; position: { start: Position; end: Position } }
         this.emitError(`Unknown expression type: ${unknown.type}`, unknown.position)
@@ -588,13 +701,14 @@ class SemanticAnalyzer {
       return node.literalType
     }
 
-    const value = node.value.toLowerCase()
+    const value = typeof node.value === "string" ? node.value.toLowerCase() : String(node.value)
+    const isFloat = value.includes(".") || value.includes("e") || value.includes("E") || Number.isFinite(node.value) && !Number.isInteger(node.value)
 
-    if (value.includes(".") || value.toLowerCase().includes("e")) {
+    if (isFloat) {
       return new FloatType("f32")
     }
 
-    return new IntegerType("i32")
+    return new IntegerType("i64")
   }
 
   private visitStringLiteral(node: StringLiteralNode): Type | null {
@@ -916,7 +1030,15 @@ class SemanticAnalyzer {
     }
 
     if (isArrayType(objectType)) {
-      return objectType
+      const arrayType = objectType as ArrayType
+      if (arrayType.rank > 0) {
+        const newDimensions = arrayType.dimensions.slice(0, -1)
+        if (newDimensions.length === 0) {
+          return arrayType.elementType
+        }
+        return new ArrayType(arrayType.elementType, newDimensions)
+      }
+      return arrayType.elementType
     }
 
     this.emitError(`Cannot access property '${node.property}' on type ${objectType.toString()}`, node.position)
@@ -943,6 +1065,13 @@ class SemanticAnalyzer {
 
     if (isArrayType(objectType)) {
       const arrayType = objectType as ArrayType
+      if (arrayType.rank > 0) {
+        const newDimensions = arrayType.dimensions.slice(0, -1)
+        if (newDimensions.length === 0) {
+          return arrayType.elementType
+        }
+        return new ArrayType(arrayType.elementType, newDimensions)
+      }
       return arrayType.elementType
     }
 

@@ -1,0 +1,19 @@
+DESCRIPTION
+
+  malloc-2.8.6
+  written by Doug Lea
+
+LICENSE
+
+  http://creativecommons.org/publicdomain/zero/1.0/
+
+LOCAL CHANGES
+
+  - Fix MT-safety bugs in DEBUG mode
+  - Fix bug in dlmalloc_inspect_all()
+  - Define dlmalloc_requires_more_vespene_gas()
+  - Make dlmalloc scalable using sched_getcpu()
+  - Use faster two power roundup for memalign()
+  - Implemented the locking functions dlmalloc wants
+  - Use assembly _init() rather than ensure_initialization()
+  - Rather than calling mmap() 96 times from _start() just use .bss
