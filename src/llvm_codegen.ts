@@ -540,6 +540,12 @@ class LLVMIRGenerator {
       const sig = posixSignatures[funcName]
       const isVariadic = ["open", "fcntl", "mknod"].includes(funcName)
 
+      // POSIX functions that return ptr instead of i64
+      const posixReturnTypes: Record<string, string> = {
+        opendir: "ptr",
+        readdir: "ptr",
+      }
+
       let typedArgs: string[]
       if (funcInfo && funcInfo.params) {
         typedArgs = args.map((arg: string, i: number) => {
@@ -577,7 +583,7 @@ class LLVMIRGenerator {
       }
 
       const reg = `%${this.valueCounter++}`
-      const returnType = funcInfo?.returnType || "i64"
+      const returnType = funcInfo?.returnType || posixReturnTypes[funcName] || "i64"
       ir.push(`  ${reg} = call ${returnType} @${funcName}(${typedArgs.join(", ")})`)
       return reg
     }

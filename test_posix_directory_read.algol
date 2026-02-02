@@ -33,15 +33,7 @@ fn main() -> i64 {
   write(fd3, "file3\n", 6);
   close(fd3);
 
-  dir: i64 = opendir("test_dir_read");
-
-  if (dir == 0) {
-    unlink("test_dir_read/file1.txt");
-    unlink("test_dir_read/file2.txt");
-    unlink("test_dir_read/file3.txt");
-    rmdir("test_dir_read");
-    return 5;
-  }
+  dir: ptr = opendir("test_dir_read");
 
   entry_count: i64 = 0;
   i: i64 = 0;

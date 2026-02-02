@@ -17,8 +17,7 @@ fn main() -> i64 {
   }
 
   buffer: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-  buffer_ptr: i64 = cast<i64>(buffer);
-  bytes: i64 = read(fd, buffer_ptr, 512);
+  bytes: i64 = read(fd, buffer, 512);
 
   if (bytes == -1) {
     close(fd);

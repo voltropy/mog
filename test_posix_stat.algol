@@ -9,8 +9,7 @@ fn main() -> i64 {
   close(fd);
 
   statbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-  statbuf_ptr: i64 = cast<i64>(statbuf);
-  stat_result: i64 = stat("test_stat_file.txt", statbuf_ptr);
+  stat_result: i64 = stat("test_stat_file.txt", statbuf);
 
   if (stat_result == -1) {
     unlink("test_stat_file.txt");
@@ -25,8 +24,7 @@ fn main() -> i64 {
   }
 
   lstatbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-  lstatbuf_ptr: i64 = cast<i64>(lstatbuf);
-  lstat_result: i64 = lstat("test_stat_symlink.txt", lstatbuf_ptr);
+  lstat_result: i64 = lstat("test_stat_symlink.txt", lstatbuf);
 
   if (lstat_result == -1) {
     unlink("test_stat_file.txt");
@@ -43,8 +41,7 @@ fn main() -> i64 {
   }
 
   fstatbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-  fstatbuf_ptr: i64 = cast<i64>(fstatbuf);
-  fstat_result: i64 = fstat(fd, fstatbuf_ptr);
+  fstat_result: i64 = fstat(fd, fstatbuf);
 
   if (fstat_result == -1) {
     close(fd);
