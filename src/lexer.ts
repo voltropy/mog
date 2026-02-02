@@ -10,13 +10,15 @@ type TokenType =
   | "to"
   | "cast"
   | "not"
+  | "MODULO"
+  | "BITWISE_AND"
+  | "BITWISE_OR"
+  | "LOGICAL_AND"
+  | "LOGICAL_OR"
   | "PLUS"
   | "MINUS"
   | "TIMES"
   | "DIVIDE"
-  | "MODULO"
-  | "BITWISE_AND"
-  | "BITWISE_OR"
   | "LESS"
   | "GREATER"
   | "EQUAL"
@@ -121,6 +123,8 @@ class Lexer {
     const timesRegex = /\*/y
     const divideRegex = /\//y
     const moduloRegex = /%/y
+    const logicalAndRegex = /&&/y
+    const logicalOrRegex = /\|\|/y
     const bitwiseAndRegex = /&/y
     const bitwiseOrRegex = /\|/y
     const lessRegex = /</y
@@ -139,7 +143,7 @@ class Lexer {
     const doubleStringRegex = /"(?:[^"\\]|\\.)*"/y
     const singleStringRegex = /'(?:[^'\\]|\\.)*'/y
     const numberRegex = /\b\d+(?:\.\d*)?(?:[eE][+-]?\d+)?\b/y
-    const typeRegex = /\b(?:i|u|f)(?:8|16|32|64|128|256)((?:\[\])*)/y
+    const typeRegex = /\b(?:(?:i|u|f)(?:8|16|32|64|128|256)((?:\[\])*)|ptr)\b/y
     const identifierRegex = /\b[a-zA-Z_][a-zA-Z0-9_]*\b/y
 
     while (this.pos < this.input.length) {
@@ -414,6 +418,30 @@ class Lexer {
       value = this.match(moduloRegex)
       if (value) {
         type = "MODULO"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(logicalAndRegex)
+      if (value) {
+        type = "LOGICAL_AND"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(logicalOrRegex)
+      if (value) {
+        type = "LOGICAL_OR"
         this.advance(value.length)
         tokens.push({
           type,

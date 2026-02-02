@@ -120,6 +120,19 @@ class TableType {
   }
 }
 
+class PointerType {
+  type = "PointerType"
+  elementType: Type | null = null
+
+  constructor(elementType: Type | null = null) {
+    this.elementType = elementType
+  }
+
+  toString(): string {
+    return this.elementType ? `ptr<${this.elementType}>` : "ptr"
+  }
+}
+
 class VoidType {
   type = "VoidType"
 
@@ -128,7 +141,7 @@ class VoidType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | ArrayType | TableType | VoidType
+type Type = IntegerType | UnsignedType | FloatType | ArrayType | TableType | PointerType | VoidType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -187,6 +200,10 @@ function isVoidType(type: Type): type is VoidType {
   return type instanceof VoidType
 }
 
+function isPointerType(type: Type): type is PointerType {
+  return type instanceof PointerType
+}
+
 function isNumericType(type: Type): boolean {
   return isIntegerType(type) || isUnsignedType(type) || isFloatType(type)
 }
@@ -211,11 +228,30 @@ function sameType(a: Type, b: Type): boolean {
     return sameType(a.keyType, b.keyType) && sameType(a.valueType, b.valueType)
   }
   if (a instanceof VoidType && b instanceof VoidType) return true
+  if (a instanceof PointerType && b instanceof PointerType) return true
+  return false
+}
+
+function compatibleTypes(from: Type, to: Type): boolean {
+  if (sameType(from, to)) return true
+
+  if (from instanceof ArrayType && to instanceof ArrayType) {
+    // For array compatibility, check if element types are compatible
+    // and ranks match (allowing target to be unbounded)
+    if (from.rank !== to.rank && to.rank !== 0) {
+      return false
+    }
+    
+    // For nested arrays, we need to compare element types recursively
+    // but allow dimensions to differ (e.g., [i64[3]] vs [i64[]])
+    return compatibleTypes(from.elementType, to.elementType)
+  }
+
   return false
 }
 
 function canCoerce(from: Type, to: Type): boolean {
-  return sameType(from, to)
+  return compatibleTypes(from, to)
 }
 
 function getCommonType(a: Type, b: Type): Type | null {
@@ -368,6 +404,7 @@ export {
   FloatType,
   ArrayType,
   TableType,
+  PointerType,
   VoidType,
   TypeVar,
   TypeInferenceContext,
@@ -379,9 +416,11 @@ export {
   isArrayType,
   isTableType,
   isVoidType,
+  isPointerType,
   isNumericType,
   isSigned,
   sameType,
+  compatibleTypes,
   canCoerce,
   getCommonType,
   checkBounds,

@@ -1,6 +1,7 @@
 import type { Token } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, ArrayType, TableType, VoidType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, ArrayType, TableType, PointerType, VoidType } from "./types.js"
+import { getPOSIXConstant } from "./posix_constants.js"
 
 type ParseResult<T> = T | null
 
@@ -384,6 +385,14 @@ if (!this.checkType("RPAREN")) {
           position: this.combinePositions(expr, value),
         }
       }
+      if (expr.type === "MemberExpression") {
+        return {
+          type: "AssignmentExpression",
+          target: expr,
+          value,
+          position: this.combinePositions(expr, value),
+        }
+      }
       throw new Error("Invalid assignment target")
     }
 
@@ -412,7 +421,7 @@ if (!this.checkType("RPAREN")) {
   private logicalOr(): ExpressionNode {
     let expr = this.logicalAnd()
 
-    while (this.matchType("BITWISE_OR")) {
+    while (this.matchType("LOGICAL_OR")) {
       const operator = this.previous()
       const right = this.logicalAnd()
       expr = {
@@ -428,6 +437,42 @@ if (!this.checkType("RPAREN")) {
   }
 
   private logicalAnd(): ExpressionNode {
+    let expr = this.bitwiseOr()
+
+    while (this.matchType("LOGICAL_AND")) {
+      const operator = this.previous()
+      const right = this.bitwiseOr()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private bitwiseOr(): ExpressionNode {
+    let expr = this.bitwiseAnd()
+
+    while (this.matchType("BITWISE_OR")) {
+      const operator = this.previous()
+      const right = this.bitwiseAnd()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private bitwiseAnd(): ExpressionNode {
     let expr = this.equality()
 
     while (this.matchType("BITWISE_AND")) {
@@ -463,7 +508,7 @@ if (!this.checkType("RPAREN")) {
     return expr
   }
 
-  private comparison(): ExpressionNode {
+private comparison(): ExpressionNode {
     let expr = this.additive()
 
     while (
@@ -526,6 +571,64 @@ if (!this.checkType("RPAREN")) {
     return expr
   }
 
+  private additive(): ExpressionNode {
+    let expr = this.bitwise()
+
+    while (this.matchType("PLUS") || this.matchType("MINUS")) {
+      const operator = this.previous()
+      const right = this.bitwise()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private multiplicative(): ExpressionNode {
+    let expr = this.unary()
+
+    while (
+      this.matchType("TIMES") ||
+      this.matchType("DIVIDE") ||
+      this.matchType("MODULO")
+    ) {
+      const operator = this.previous()
+      const right = this.unary()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private bitwise(): ExpressionNode {
+    let expr = this.multiplicative()
+
+    while (this.matchType("BITWISE_AND") || this.matchType("BITWISE_OR")) {
+      const operator = this.previous()
+      const right = this.multiplicative()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
   private unary(): ExpressionNode {
     if (this.matchType("MINUS") || this.matchType("BANG") || this.matchType("not")) {
       const operator = this.previous()
@@ -535,6 +638,33 @@ if (!this.checkType("RPAREN")) {
         operator: operator.value,
         argument,
         position: this.combinePositions({ position: operator.position }, argument),
+      }
+    }
+
+    if (this.matchType("cast")) {
+      const castToken = this.previous()
+      this.consume("LESS", "Expected < after cast")
+
+      let typeName = this.consume("TYPE", "Expected type name after cast<").value
+      while (this.matchType("LBRACKET")) {
+        typeName += "["
+        this.consume("RBRACKET", "Expected ] after array bracket")
+        typeName += "]"
+      }
+
+      this.consume("GREATER", "Expected > after type name")
+      this.consume("LPAREN", "Expected ( after cast<type>")
+
+      const value = this.expression()
+      this.consume("RPAREN", "Expected ) after cast value")
+
+      const targetType = this.parseType(typeName)
+
+      return {
+        type: "CastExpression",
+        targetType,
+        value,
+        position: this.combinePositions({ position: castToken.position }, value),
       }
     }
 
@@ -562,9 +692,16 @@ if (!this.checkType("RPAREN")) {
 
     if (this.matchType("NUMBER")) {
       const token = this.previous()
+      let value: number
+      if (token.value.startsWith("0") && token.value.length > 1 && !token.value.includes(".")) {
+        // Parse as octal
+        value = parseInt(token.value, 8)
+      } else {
+        value = parseFloat(token.value)
+      }
       return {
         type: "NumberLiteral",
-        value: parseFloat(token.value),
+        value,
         position: token.position,
       }
     }
@@ -582,7 +719,7 @@ if (!this.checkType("RPAREN")) {
       const token = this.previous()
       return {
         type: "POSIXConstant",
-        value: token.value,
+        value: getPOSIXConstant(token.value),
         position: token.position,
       }
     }
@@ -715,10 +852,10 @@ if (!this.checkType("RPAREN")) {
   }
 
   private parseType(typeName: string): any {
-    const bracketMatch = typeName.match(/^(.*?)(\[\]*)$/);
+    const bracketMatch = typeName.match(/^(.*?)(\[\])+$/);
     if (bracketMatch) {
       const baseName = bracketMatch[1];
-      const arraySuffix = bracketMatch[2];
+      const arraySuffix = typeName.slice(baseName.length);
       
       let elementType: Type;
       if (baseName.startsWith("i")) {
@@ -748,6 +885,9 @@ if (!this.checkType("RPAREN")) {
     }
     if (typeName.startsWith("f")) {
       return new FloatType(typeName as any)
+    }
+    if (typeName === "ptr") {
+      return new PointerType()
     }
     return new VoidType()
   }

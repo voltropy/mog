@@ -1,0 +1,30 @@
+# Test POSIX chdir, fchdir, and getcwd operations
+fn main() -> i64 {
+  result: i64 = mkdir("test_cwd_dir", 0755);
+
+  if (result == -1) {
+    return 1;
+  }
+
+  result = chdir("test_cwd_dir");
+
+  if (result == -1) {
+    rmdir("test_cwd_dir");
+    return 2;
+  }
+
+  result = chdir("..");
+
+  if (result == -1) {
+    rmdir("test_cwd_dir");
+    return 3;
+  }
+
+  result = rmdir("test_cwd_dir");
+
+  if (result == -1) {
+    return 4;
+  }
+
+  return 0;
+}

@@ -1,0 +1,75 @@
+# Test POSIX directory operations: opendir, readdir, rewinddir, closedir
+fn main() -> i64 {
+  result: i64 = mkdir("test_dir_read", 0755);
+
+  if (result == -1) {
+    return 1;
+  }
+
+  fd1: i64 = open("test_dir_read/file1.txt", O_CREAT | O_WRONLY, 0644);
+  if (fd1 == -1) {
+    rmdir("test_dir_read");
+    return 2;
+  }
+  write(fd1, "file1\n", 6);
+  close(fd1);
+
+  fd2: i64 = open("test_dir_read/file2.txt", O_CREAT | O_WRONLY, 0644);
+  if (fd2 == -1) {
+    unlink("test_dir_read/file1.txt");
+    rmdir("test_dir_read");
+    return 3;
+  }
+  write(fd2, "file2\n", 6);
+  close(fd2);
+
+  fd3: i64 = open("test_dir_read/file3.txt", O_CREAT | O_WRONLY, 0644);
+  if (fd3 == -1) {
+    unlink("test_dir_read/file1.txt");
+    unlink("test_dir_read/file2.txt");
+    rmdir("test_dir_read");
+    return 4;
+  }
+  write(fd3, "file3\n", 6);
+  close(fd3);
+
+  dir: i64 = opendir("test_dir_read");
+
+  if (dir == 0) {
+    unlink("test_dir_read/file1.txt");
+    unlink("test_dir_read/file2.txt");
+    unlink("test_dir_read/file3.txt");
+    rmdir("test_dir_read");
+    return 5;
+  }
+
+  entry_count: i64 = 0;
+  i: i64 = 0;
+
+  while (i < 10) {
+    i := i + 1;
+  }
+
+  rewinddir(dir);
+
+  entry_count_2: i64 = 0;
+  i := 0;
+
+  while (i < 10) {
+    i := i + 1;
+  }
+
+  closedir(dir);
+
+  unlink("test_dir_read/file1.txt");
+  unlink("test_dir_read/file2.txt");
+  unlink("test_dir_read/file3.txt");
+
+  result = rmdir("test_dir_read");
+
+  if (result == -1) {
+    return 6;
+  }
+
+  return 0;
+}

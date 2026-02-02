@@ -1,4 +1,3 @@
-# Test POSIX read operation
 fn main() -> i64 {
   fd: i64 = open("test_read.txt", O_CREAT | O_WRONLY, 0644);
 
@@ -15,7 +14,7 @@ fn main() -> i64 {
     return 2;
   }
 
-  buf: i64[256];
+  buf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
   bytes_read: i64 = read(fd, buf, 21);
 

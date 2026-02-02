@@ -265,6 +265,94 @@ void* matrix_mul(void* a, void* b, uint64_t rows_a, uint64_t cols_a, uint64_t co
   return result;
 }
 
+/* Print Functions */
+
+void print_i64(int64_t value) {
+  printf("%lld", (long long)value);
+}
+
+void print_u64(uint64_t value) {
+  printf("%llu", (unsigned long long)value);
+}
+
+void print_f64(double value) {
+  printf("%f", value);
+}
+
+void print_string(const char* str) {
+  printf("%s", str);
+}
+
+void println_i64(int64_t value) {
+  printf("%lld\n", (long long)value);
+}
+
+void println_u64(uint64_t value) {
+  printf("%llu\n", (unsigned long long)value);
+}
+
+void println_f64(double value) {
+  printf("%f\n", value);
+}
+
+void println_string(const char* str) {
+  printf("%s\n", str);
+}
+
+void println(void) {
+  printf("\n");
+}
+
+/* String Functions */
+
+uint64_t string_length(const char* str) {
+  if (!str) return 0;
+  return strlen(str);
+}
+
+char* string_concat(const char* a, const char* b) {
+  if (!a) a = "";
+  if (!b) b = "";
+  size_t len_a = strlen(a);
+  size_t len_b = strlen(b);
+  char* result = (char*)gc_alloc(len_a + len_b + 1);
+  memcpy(result, a, len_a);
+  memcpy(result + len_a, b, len_b);
+  result[len_a + len_b] = '\0';
+  return result;
+}
+
+/* Input Functions */
+
+int64_t input_i64(void) {
+  int64_t value;
+  scanf("%lld", (long long*)&value);
+  return value;
+}
+
+uint64_t input_u64(void) {
+  uint64_t value;
+  scanf("%llu", (unsigned long long*)&value);
+  return value;
+}
+
+double input_f64(void) {
+  double value;
+  scanf("%lf", &value);
+  return value;
+}
+
+char* input_string(void) {
+  char* buffer = (char*)gc_alloc(1024);
+  if (fgets(buffer, 1024, stdin) != NULL) {
+    size_t len = strlen(buffer);
+    if (len > 0 && buffer[len-1] == '\n') {
+      buffer[len-1] = '\0';
+    }
+  }
+  return buffer;
+}
+
 /* CLI Argument Helpers */
 
 uint64_t get_argc_value(void* cli_table) {

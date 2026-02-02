@@ -1,0 +1,37 @@
+# Test POSIX chmod, fchmod, chown, fchown, and umask
+fn main() -> i64 {
+  fd: i64 = open("test_permissions_file.txt", O_CREAT | O_WRONLY | O_TRUNC, 0666);
+  if (fd == -1) {
+    return 1;
+  }
+
+  write(fd, "test content", 12);
+  close(fd);
+
+  result: i64 = chmod("test_permissions_file.txt", 0644);
+  if (result == -1) {
+    unlink("test_permissions_file.txt");
+    return 2;
+  }
+
+  fd = open("test_permissions_file.txt", O_RDWR, 0);
+  if (fd == -1) {
+    unlink("test_permissions_file.txt");
+    return 3;
+  }
+
+  result = fchmod(fd, 0755);
+  if (result == -1) {
+    close(fd);
+    unlink("test_permissions_file.txt");
+    return 4;
+  }
+
+  result = chown("test_permissions_file.txt", -1, -1);
+  result = fchown(fd, -1, -1);
+
+  close(fd);
+  unlink("test_permissions_file.txt");
+
+  return 0;
+}

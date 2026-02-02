@@ -5,15 +5,18 @@ import {
   isFloatType,
   isArrayType,
   isTableType,
+  isPointerType,
   isVoidType,
   isNumericType,
   sameType,
+  compatibleTypes,
   getCommonType,
   IntegerType,
   UnsignedType,
   FloatType,
   ArrayType,
   TableType,
+  PointerType,
   VoidType,
 } from "./types.js"
 
@@ -226,6 +229,7 @@ interface CastExpressionNode extends ASTNode {
   type: "CastExpression"
   targetType: Type
   value: ExpressionNode
+  sourceType?: Type
 }
 
 interface SemanticError {
@@ -322,6 +326,8 @@ class SemanticAnalyzer {
 
   private declarePOSIXBuiltins(): void {
     const i64Type = new IntegerType("i64")
+    const u64Type = new UnsignedType("u64")
+    const f64Type = new FloatType("f64")
     const voidType = new VoidType()
 
     // POSIX filesystem functions
@@ -375,6 +381,58 @@ class SemanticAnalyzer {
     }
 
     for (const [name, func] of Object.entries(posixFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
+
+    // Print/Output functions
+    const printFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      print: { params: [{ name: "value", type: i64Type }], returnType: voidType },
+      print_i64: { params: [{ name: "value", type: i64Type }], returnType: voidType },
+      print_u64: { params: [{ name: "value", type: u64Type }], returnType: voidType },
+      print_f64: { params: [{ name: "value", type: f64Type }], returnType: voidType },
+      print_string: { params: [{ name: "value", type: i64Type }], returnType: voidType },
+      println: { params: [], returnType: voidType },
+      println_i64: { params: [{ name: "value", type: i64Type }], returnType: voidType },
+      println_u64: { params: [{ name: "value", type: u64Type }], returnType: voidType },
+      println_f64: { params: [{ name: "value", type: f64Type }], returnType: voidType },
+      println_string: { params: [{ name: "value", type: i64Type }], returnType: voidType },
+    }
+
+    for (const [name, func] of Object.entries(printFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
+
+    // Input functions
+    const inputFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      input_i64: { params: [], returnType: i64Type },
+      input_u64: { params: [], returnType: u64Type },
+      input_f64: { params: [], returnType: f64Type },
+      input_string: { params: [], returnType: i64Type },  // returns pointer
+    }
+
+    for (const [name, func] of Object.entries(inputFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
+
+    // Table/Runtime functions
+    const ptrType = new PointerType()
+    const tableFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      table_new: { params: [{ name: "capacity", type: i64Type }], returnType: ptrType },
+      table_get: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }], returnType: i64Type },
+      table_set: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }, { name: "value", type: i64Type }], returnType: voidType },
+    }
+
+    for (const [name, func] of Object.entries(tableFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
+
+    // String functions
+    const stringFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      string_length: { params: [{ name: "str", type: ptrType }], returnType: u64Type },
+      string_concat: { params: [{ name: "a", type: ptrType }, { name: "b", type: ptrType }], returnType: ptrType },
+    }
+
+    for (const [name, func] of Object.entries(stringFunctions)) {
       this.symbolTable.declare(name, "function", func.returnType)
     }
   }
@@ -432,9 +490,9 @@ class SemanticAnalyzer {
 
     if (valueType) {
       if (declaredType) {
-        if (!sameType(valueType, declaredType)) {
+        if (!compatibleTypes(valueType, declaredType)) {
           this.emitError(
-            `Type mismatch: cannot assign ${valueType.toString()} to ${declaredType.toString()} (requires explicit cast)`,
+            `Type mismatch: cannot assign ${valueType.toString()} to ${declaredType.toString()}`,
             node.position,
           )
         }
@@ -469,16 +527,16 @@ class SemanticAnalyzer {
     const valueType = this.visitExpression(node.value)
 
     if (valueType && symbol.declaredType) {
-      if (!sameType(valueType, symbol.declaredType)) {
+      if (!compatibleTypes(valueType, symbol.declaredType)) {
         this.emitError(
-          `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.declaredType.toString()} (requires explicit cast)`,
+          `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.declaredType.toString()}`,
           node.position,
         )
       }
     } else if (valueType && symbol.inferredType) {
-      if (!sameType(valueType, symbol.inferredType)) {
+      if (!compatibleTypes(valueType, symbol.inferredType)) {
         this.emitError(
-          `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.inferredType.toString()} (requires explicit cast)`,
+          `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.inferredType.toString()}`,
           node.position,
         )
       }
@@ -506,37 +564,48 @@ class SemanticAnalyzer {
       }
 
       if (valueType && symbol.declaredType) {
-        if (!sameType(valueType, symbol.declaredType)) {
+        if (!compatibleTypes(valueType, symbol.declaredType)) {
           this.emitError(
-            `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.declaredType.toString()} (requires explicit cast)`,
+            `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.declaredType.toString()}`,
             node.position,
           )
         }
       } else if (valueType && symbol.inferredType) {
-        if (!sameType(valueType, symbol.inferredType)) {
+        if (!compatibleTypes(valueType, symbol.inferredType)) {
           this.emitError(
-            `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.inferredType.toString()} (requires explicit cast)`,
+            `Type mismatch: cannot assign ${valueType.toString()} to ${symbol.inferredType.toString()}`,
             node.position,
           )
         }
       }
     } else if (node.target !== undefined) {
       const objectValue = this.visitExpression(node.target.object)
-      const indexValue = this.visitExpression(node.target.index)
+      
+      // Handle IndexExpression (arrays)
+      if (node.target.type === "IndexExpression") {
+        const indexValue = this.visitExpression(node.target.index)
 
-      let targetType: Type | null = null
-      if (objectValue && isArrayType(objectValue)) {
-        targetType = objectValue.elementType
+        let targetType: Type | null = null
+        if (objectValue && isArrayType(objectValue)) {
+          targetType = objectValue.elementType
+        }
+
+        if (targetType && valueType && !sameType(targetType, valueType)) {
+          this.emitError(
+            `Type mismatch: cannot assign ${valueType.toString()} to array element of type ${targetType.toString()} (requires explicit cast)`,
+            node.position,
+          )
+        }
+
+        return targetType
       }
-
-      if (targetType && valueType && !sameType(targetType, valueType)) {
-        this.emitError(
-          `Type mismatch: cannot assign ${valueType.toString()} to array element of type ${targetType.toString()} (requires explicit cast)`,
-          node.position,
-        )
+      
+      // Handle MemberExpression (tables)
+      if (node.target.type === "MemberExpression") {
+        // For tables, we just need to validate the value type
+        // The object should be a pointer (table)
+        return valueType
       }
-
-      return targetType
     }
 
     return valueType
@@ -752,7 +821,18 @@ class SemanticAnalyzer {
       }
     }
 
-    return new ArrayType(commonType, [node.elements.length])
+    // Only include dimensions for the outermost array level
+    // For nested arrays (arrays of arrays), don't include dimensions in the type
+    // This allows "i64[][]" to match "[[i64[3]][3]]"
+    let resultType: Type
+    if (commonType instanceof ArrayType) {
+      // For arrays of arrays, create without dimensions on outer level too
+      // The inner array already has dimensions from its own literal
+      resultType = new ArrayType(commonType, [node.elements.length])
+    } else {
+      resultType = new ArrayType(commonType, [node.elements.length])
+    }
+    return resultType
   }
 
   private visitTableLiteral(node: TableLiteralNode): Type | null {
@@ -904,9 +984,17 @@ class SemanticAnalyzer {
       return null
     }
 
-    if (!(isIntegerType(valueType) || isUnsignedType(valueType) || isFloatType(valueType))) {
-      this.emitError(`Cast source must be a numeric type, got ${valueType.toString()}`, node.position)
+    const isSourceNumeric = isIntegerType(valueType) || isUnsignedType(valueType) || isFloatType(valueType)
+    const isSourceArray = isArrayType(valueType)
+
+    if (!isSourceNumeric && !isSourceArray) {
+      this.emitError(`Cast source must be a numeric type or array, got ${valueType.toString()}`, node.position)
       return null
+    }
+
+    if (isSourceArray) {
+      node.sourceType = valueType
+      return targetType
     }
 
     const sourceUnsigned = isUnsignedType(valueType)
@@ -1039,6 +1127,11 @@ class SemanticAnalyzer {
         return new ArrayType(arrayType.elementType, newDimensions)
       }
       return arrayType.elementType
+    }
+
+    // Allow member access on pointers (tables)
+    if (isPointerType(objectType)) {
+      return new IntegerType("i64")
     }
 
     this.emitError(`Cannot access property '${node.property}' on type ${objectType.toString()}`, node.position)

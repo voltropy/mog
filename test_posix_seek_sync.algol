@@ -1,0 +1,97 @@
+fn main() -> i64 {
+  fd: i64 = open("test_lseek_fsync.txt", O_CREAT | O_WRONLY, 0644);
+
+  if (fd == -1) {
+    return 1;
+  }
+
+  write(fd, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 26);
+
+  pos: i64 = lseek(fd, 0, 1);
+
+  if (pos == -1) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 2;
+  }
+
+  if (pos != 26) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 3;
+  }
+
+  pos = lseek(fd, 0, 0);
+
+  if (pos == -1) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 4;
+  }
+
+  if (pos != 0) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 5;
+  }
+
+  write(fd, "12345", 5);
+
+  pos = lseek(fd, 20, 0);
+
+  if (pos == -1) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 6;
+  }
+
+  if (pos != 20) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 7;
+  }
+
+  write(fd, "XYZ", 3);
+
+  pos = lseek(fd, -5, 1);
+
+  if (pos == -1) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 8;
+  }
+
+  if (pos != 18) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 9;
+  }
+
+  pos = lseek(fd, 0, 2);
+
+  if (pos == -1) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 10;
+  }
+
+  if (pos != 23) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 11;
+  }
+
+  sync_result: i64 = fsync(fd);
+
+  if (sync_result == -1) {
+    close(fd);
+    unlink("test_lseek_fsync.txt");
+    return 12;
+  }
+
+  close(fd);
+
+  unlink("test_lseek_fsync.txt");
+
+  return 0;
+}

@@ -28,8 +28,17 @@ class LLVMIRGenerator {
   private currentFunction: LLVMFunction | null = null
   private blockCounter = 0
   private valueCounter = 0
+  private variableTypes: Map<string, any> = new Map()
+
+  private resetValueCounter(start: number = 0): void {
+    this.valueCounter = start
+  }
   private labelCounter = 0
   private stringConstants: string[] = []
+  private stringCounter = 0
+  private resetStringCounter(): void {
+    this.stringCounter = 0
+  }
 
   generate(ast: ProgramNode): string {
     const ir: string[] = []
@@ -45,22 +54,30 @@ class LLVMIRGenerator {
     ir.push("")
 
     this.setupDeclarations(ir)
+    this.generatePrintDeclarations(ir)
+
+    this.resetValueCounter(0)
+    this.resetStringCounter()
+    this.stringConstants = []  // Clear string constants
 
     // First: collect all string constants from AST
     this.collectStringConstants(ast)
+    // Reset counter for code generation pass
+    this.stringCounter = 0
 
-    // Emit string constants
-    ir.push("; String constants")
-    for (const str of this.stringConstants) {
-      ir.push(str)
-    }
-    ir.push("")
-
+    // Collect function declarations first to identify strings in functions
     const functionDeclarations = this.collectFunctionDeclarations(ast)
 
     // Check if user has defined a main() function
     const mainFunc = functionDeclarations.find((f: any) => f.name === "main")
     const hasMain = !!mainFunc
+
+    // Insert string constants before function declarations
+    ir.push("; String constants")
+    for (const str of this.stringConstants) {
+      ir.push(str)
+    }
+    ir.push("")
 
     ir.push("; Function declarations")
     for (const funcDecl of functionDeclarations) {
@@ -132,6 +149,8 @@ class LLVMIRGenerator {
       ir.push("}")
     } else {
       // No main() - use program() entry point
+      this.resetValueCounter(10)
+      
       ir.push("define void @program() {")
       ir.push("entry:")
 
@@ -146,6 +165,7 @@ class LLVMIRGenerator {
     }
 
     this.generateRuntimeFunctions(ir)
+    this.generatePOSIXDeclarations(ir)
 
     return ir.join("\n")
   }
@@ -181,7 +201,7 @@ class LLVMIRGenerator {
     ir.push("")
 
     ir.push("; Declare array functions")
-    ir.push("declare ptr @array_alloc(i64 %element_size, i64 %dimension_count, i64 %dimensions)")
+    ir.push("declare ptr @array_alloc(i64 %element_size, i64 %dimension_count, ptr %dimensions)")
     ir.push("declare i64 @array_get(ptr %array, i64 %index)")
     ir.push("declare void @array_set(ptr %array, i64 %index, i64 %value)")
     ir.push("")
@@ -191,7 +211,12 @@ class LLVMIRGenerator {
     ir.push("declare i64 @table_get(ptr %table, ptr %key, i64 %key_len)")
     ir.push("declare void @table_set(ptr %table, ptr %key, i64 %key_len, i64 %value)")
     ir.push("")
-    
+
+    ir.push("; Declare string functions")
+    ir.push("declare i64 @string_length(ptr %str)")
+    ir.push("declare ptr @string_concat(ptr %a, ptr %b)")
+    ir.push("")
+
     ir.push("; Declare CLI argument helper functions")
     ir.push("declare i64 @get_argc_value(ptr %cli_table)")
     ir.push("declare i64 @get_argv_value(ptr %cli_table, i64 %index)")
@@ -203,11 +228,14 @@ class LLVMIRGenerator {
       case "VariableDeclaration": {
         const llvmType = this.toLLVMType(statement.varType)
         const reg = `%${statement.name}`
-        const allocaType = statement.varType?.type === "ArrayType" ? "ptr" : llvmType
+        const isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
+        const allocaType = isPointerLike ? "ptr" : llvmType
         ir.push(`  ${reg} = alloca ${allocaType}`)
+        this.variableTypes.set(statement.name, statement.varType)
         if (statement.value) {
           const value = this.generateExpression(ir, statement.value)
-          const storeType = statement.varType?.type === "ArrayType" ? "ptr" : llvmType
+          const isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
+          const storeType = isPointerLike ? "ptr" : llvmType
           ir.push(`  store ${storeType} ${value}, ptr ${reg}`)
         }
         break
@@ -255,16 +283,36 @@ class LLVMIRGenerator {
         return this.generateAssignmentExpression(ir, expr)
       case "NumberLiteral":
         return `${expr.value}`
-      case "StringLiteral":
-        return this.generateStringLiteral(ir, expr.value)
+      case "POSIXConstant":
+        return `${expr.value}`
+      case "StringLiteral": {
+        const name = this.generateStringLiteral(ir, expr.value)
+        const ptrReg = `%${this.valueCounter++}`
+        ir.push(`  ${ptrReg} = getelementptr [${expr.value.length + 1} x i8], ptr ${name}, i64 0, i64 0`)
+        return ptrReg
+      }
       case "Identifier": {
         const name = expr.name
         const ptrReg = `%${name}_local`
         const valReg = `%${this.valueCounter++}`
+        
+        const varType = this.variableTypes.get(name)
+        const isPointerLike = varType?.type === "ArrayType" || varType?.type === "PointerType"
 
         if (this.currentFunction && this.currentFunction.params.find((p) => p.name === name)) {
+          if (isPointerLike) {
+            const loaded = `%${this.valueCounter++}`
+            ir.push(`  ${loaded} = load ptr, ptr ${ptrReg}`)
+            return loaded
+          }
           ir.push(`  ${valReg} = load i64, ptr ${ptrReg}`)
           return valReg
+        }
+
+        if (isPointerLike) {
+          const loaded = `%${this.valueCounter++}`
+          ir.push(`  ${loaded} = load ptr, ptr %${name}`)
+          return loaded
         }
 
         ir.push(`  ${valReg} = load i64, ptr %${name}`)
@@ -295,11 +343,9 @@ class LLVMIRGenerator {
     }
   }
 
-private generateStringLiteral(ir: string[], value: string): string {
-    const name = `@str${this.valueCounter++}`
-    const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-    const strDef = `${name} = private unnamed_addr constant [${value.length + 1} x i8] c"${escaped}\\00"`
-    this.stringConstants.push(strDef)
+  private generateStringLiteral(_ir: string[], value: string): string {
+    // Strings are already collected and emitted, just return the name
+    const name = `@str${this.stringCounter++}`
     return name
   }
 
@@ -307,11 +353,19 @@ private generateStringLiteral(ir: string[], value: string): string {
     if (!node) return
 
     if (node.type === "StringLiteral") {
-      const name = `@str${this.valueCounter++}`
+      const name = `@str${this.stringCounter++}`
       const escaped = node.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
       const strDef = `${name} = private unnamed_addr constant [${node.value.length + 1} x i8] c"${escaped}\\00"`
       this.stringConstants.push(strDef)
       return
+    }
+
+    // Collect MemberExpression property names as string constants
+    if (node.type === "MemberExpression") {
+      const name = `@key_${node.property}_${this.stringCounter++}`
+      const escaped = node.property.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+      const strDef = `${name} = private unnamed_addr constant [${node.property.length + 1} x i8] c"${escaped}\\00"`
+      this.stringConstants.push(strDef)
     }
 
     // Recursively collect from child nodes
@@ -335,12 +389,33 @@ private generateStringLiteral(ir: string[], value: string): string {
     const right = this.generateExpression(ir, expr.right)
     const reg = `%${this.valueCounter++}`
 
+    // Handle logical operators specially - they work on i1 but we store as i64
+    if (expr.operator === "&&" || expr.operator === "||") {
+      // Convert operands to i1 (compare with 0), do logical op, then extend to i64
+      const leftBool = `%${this.valueCounter++}`
+      const rightBool = `%${this.valueCounter++}`
+      ir.push(`  ${leftBool} = icmp ne i64 ${left}, 0`)
+      ir.push(`  ${rightBool} = icmp ne i64 ${right}, 0`)
+      const boolReg = `%${this.valueCounter++}`
+      const logicOp = expr.operator === "&&" ? "and" : "or"
+      ir.push(`  ${boolReg} = ${logicOp} i1 ${leftBool}, ${rightBool}`)
+      const extReg = `%${this.valueCounter++}`
+      ir.push(`  ${extReg} = zext i1 ${boolReg} to i64`)
+      return extReg
+    }
+
     const opMap: Record<string, string[]> = {
       "+": ["add i64", "add"],
       "-": ["sub i64", "sub"],
       "*": ["mul i64", "mul"],
       "/": ["sdiv i64", "fdiv"],
       "%": ["srem i64", "frem"],
+      "|": ["or i64", "or"],
+      "&": ["and i64", "and"],
+    }
+
+    // Comparison operators return i1, need to extend to i64
+    const cmpMap: Record<string, string[]> = {
       "<": ["icmp slt i64", "fcmp olt"],
       ">": ["icmp sgt i64", "fcmp ogt"],
       "<=": ["icmp sle i64", "fcmp ole"],
@@ -348,14 +423,21 @@ private generateStringLiteral(ir: string[], value: string): string {
       "=": ["icmp eq i64", "fcmp oeq"],
       "==": ["icmp eq i64", "fcmp oeq"],
       "!=": ["icmp ne i64", "fcmp one"],
-      "&&": ["and i64", "and"],
-      "||": ["or i64", "or"],
-      "|": ["or i64", "or"],
-      "&": ["and i64", "and"],
+    }
+
+    const isFloat = expr.left.type === "FloatLiteral"
+
+    if (cmpMap[expr.operator]) {
+      const [intOp, floatOp] = cmpMap[expr.operator]
+      const cmpOp = isFloat ? `${floatOp} ${left}, ${right}` : `${intOp} ${left}, ${right}`
+      const boolReg = `%${this.valueCounter++}`
+      ir.push(`  ${boolReg} = ${cmpOp}`)
+      const extReg = `%${this.valueCounter++}`
+      ir.push(`  ${extReg} = zext i1 ${boolReg} to i64`)
+      return extReg
     }
 
     const [intOp, floatOp] = opMap[expr.operator]
-    const isFloat = expr.left.type === "FloatLiteral"
     const op = isFloat ? `${floatOp} ${left}, ${right}` : `${intOp} ${left}, ${right}`
 
     ir.push(`  ${reg} = ${op}`)
@@ -381,13 +463,114 @@ private generateStringLiteral(ir: string[], value: string): string {
 
     if (expr.callee.type === "Identifier") {
       const funcName = expr.callee.name
+
+      // Handle print functions
+      const printFunctions = ["print", "print_i64", "print_u64", "print_f64", "print_string",
+                              "println", "println_i64", "println_u64", "println_f64", "println_string"]
+      if (printFunctions.includes(funcName)) {
+        return this.generatePrintCall(ir, funcName, args, expr)
+      }
+
+      // Handle input functions
+      const inputFunctions = ["input_i64", "input_u64", "input_f64", "input_string"]
+      if (inputFunctions.includes(funcName)) {
+        return this.generateInputCall(ir, funcName)
+      }
+
       const funcInfo = this.functions.get(funcName)
+
+      // POSIX function signatures for proper argument typing
+      const posixSignatures: Record<string, string[]> = {
+        open: ["ptr", "i64"],  // variadic: may have mode
+        read: ["i64", "ptr", "i64"],
+        write: ["i64", "ptr", "i64"],
+        pread: ["i64", "ptr", "i64", "i64"],
+        pwrite: ["i64", "ptr", "i64", "i64"],
+        lseek: ["i64", "i64", "i64"],
+        close: ["i64"],
+        fsync: ["i64"],
+        fdatasync: ["i64"],
+        stat: ["ptr", "ptr"],
+        lstat: ["ptr", "ptr"],
+        fstat: ["i64", "ptr"],
+        access: ["ptr", "i64"],
+        faccessat: ["i64", "ptr", "i64", "i64"],
+        utimes: ["ptr", "ptr"],
+        futimes: ["i64", "ptr"],
+        utimensat: ["i64", "ptr", "ptr", "i64"],
+        chmod: ["ptr", "i64"],
+        fchmod: ["i64", "i64"],
+        chown: ["ptr", "i64", "i64"],
+        fchown: ["i64", "i64", "i64"],
+        umask: ["i64"],
+        truncate: ["ptr", "i64"],
+        ftruncate: ["i64", "i64"],
+        link: ["ptr", "ptr"],
+        symlink: ["ptr", "ptr"],
+        readlink: ["ptr", "ptr", "i64"],
+        rename: ["ptr", "ptr"],
+        unlink: ["ptr"],
+        mkdir: ["ptr", "i64"],
+        rmdir: ["ptr"],
+        fcntl: ["i64", "i64"],  // variadic
+        pathconf: ["ptr", "i64"],
+        fpathconf: ["i64", "i64"],
+        dup: ["i64"],
+        dup2: ["i64", "i64"],
+        creat: ["ptr", "i64"],
+        mkfifo: ["ptr", "i64"],
+        mknod: ["ptr", "i64", "i64"],  // variadic
+        chdir: ["ptr"],
+        fchdir: ["i64"],
+        getcwd: ["ptr", "i64"],
+        opendir: ["ptr"],
+        readdir: ["ptr"],
+        closedir: ["ptr"],
+        rewinddir: ["ptr"],
+      }
+
+      const runtimeSignatures: Record<string, { params: string[]; ret: string }> = {
+        table_new: { params: ["i64"], ret: "ptr" },
+        table_get: { params: ["ptr", "ptr", "i64"], ret: "i64" },
+        table_set: { params: ["ptr", "ptr", "i64", "i64"], ret: "void" },
+        string_length: { params: ["ptr"], ret: "i64" },
+        string_concat: { params: ["ptr", "ptr"], ret: "ptr" },
+      }
+
+      const sig = posixSignatures[funcName]
+      const isVariadic = ["open", "fcntl", "mknod"].includes(funcName)
 
       let typedArgs: string[]
       if (funcInfo && funcInfo.params) {
         typedArgs = args.map((arg: string, i: number) => {
           const paramType = funcInfo.params[i]?.type || "i64"
           return `${paramType} ${arg}`
+        })
+      } else if (sig) {
+        // Use POSIX signature for typing
+        typedArgs = args.map((arg: string, i: number) => {
+          const paramType = sig[i] || "i64"
+          return `${paramType} ${arg}`
+        })
+      } else if (runtimeSignatures[funcName]) {
+        const sig = runtimeSignatures[funcName]
+        typedArgs = args.map((arg: string, i: number) => {
+          const paramType = sig.params[i] || "i64"
+          return `${paramType} ${arg}`
+        })
+        const returnType = sig.ret
+        const reg = returnType === "void" ? null : `%${this.valueCounter++}`
+        if (reg) {
+          ir.push(`  ${reg} = call ${returnType} @${funcName}(${typedArgs.join(", ")})`)
+        } else {
+          ir.push(`  call ${returnType} @${funcName}(${typedArgs.join(", ")})`)
+        }
+        return reg || ""
+      } else if (isVariadic) {
+        // For variadic functions without sig, type first 2 args, rest as i64
+        typedArgs = args.map((arg: string, i: number) => {
+          if (i === 0) return `ptr ${arg}`
+          return `i64 ${arg}`
         })
       } else {
         typedArgs = args
@@ -402,26 +585,109 @@ private generateStringLiteral(ir: string[], value: string): string {
     return ""
   }
 
+  private generateInputCall(ir: string[], funcName: string): string {
+    const reg = `%${this.valueCounter++}`
+    
+    switch (funcName) {
+      case "input_i64":
+      case "input_u64":
+        ir.push(`  ${reg} = call i64 @${funcName}()`)
+        return reg
+      case "input_f64":
+        ir.push(`  ${reg} = call double @${funcName}()`)
+        return reg
+      case "input_string":
+        ir.push(`  ${reg} = call ptr @${funcName}()`)
+        return reg
+      default:
+        return ""
+    }
+  }
+
+  private generatePrintCall(ir: string[], funcName: string, args: string[], expr: any): string {
+    // Handle println with no arguments (just newline)
+    if (funcName === "println" && args.length === 0) {
+      ir.push(`  call void @println()`)
+      return ""
+    }
+
+    if (args.length === 0) {
+      return ""
+    }
+
+    // Determine the actual function to call based on argument type
+    const arg = expr.args?.[0] || expr.arguments?.[0]
+    let actualFunc = funcName
+
+    // If generic print/println, determine specific version based on type
+    if (funcName === "print" || funcName === "println") {
+      const argType = arg?.resultType?.type || "IntegerType"
+      const kind = arg?.resultType?.kind || "i64"
+
+      if (argType === "FloatType") {
+        actualFunc = funcName === "print" ? "print_f64" : "println_f64"
+      } else if (argType === "UnsignedType") {
+        actualFunc = funcName === "print" ? "print_u64" : "println_u64"
+      } else {
+        actualFunc = funcName === "print" ? "print_i64" : "println_i64"
+      }
+    }
+
+    ir.push(`  call void @${actualFunc}(i64 ${args[0]})`)
+    return ""
+  }
+
   private generateAssignmentExpression(ir: string[], expr: any): string {
-    const { name, value } = expr
+    const { name, target, value } = expr
     const valueReg = this.generateExpression(ir, value)
-    ir.push(`  store i64 ${valueReg}, ptr %${name}`)
+    
+    if (target && target.type === "IndexExpression") {
+      const array = this.generateExpression(ir, target.object)
+      const index = this.generateExpression(ir, target.index)
+      // Handle nested array access
+      const isNestedIndex = target.object?.type === "IndexExpression"
+      let arrayPtr = array
+      if (isNestedIndex) {
+        const r = `%${this.valueCounter++}`
+        ir.push(`  ${r} = inttoptr i64 ${array} to ptr`)
+        arrayPtr = r
+      }
+      ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
+    } else if (target && target.type === "MemberExpression") {
+      // Table member assignment: person.age := 31
+      const obj = this.generateExpression(ir, target.object)
+      // Generate the key string constant
+      const keyName = `@key_${target.property}_${this.stringCounter++}`
+      const escaped = target.property.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+      const strDef = `${keyName} = private unnamed_addr constant [${target.property.length + 1} x i8] c"${escaped}\\00"`
+      this.stringConstants.push(strDef)
+      // obj is already a ptr for tables
+      ir.push(`  call void @table_set(ptr ${obj}, ptr ${keyName}, i64 ${target.property.length}, i64 ${valueReg})`)
+    } else {
+      ir.push(`  store i64 ${valueReg}, ptr %${name}`)
+    }
+    
     return valueReg
   }
 
   private generateArrayLiteral(ir: string[], expr: any): string {
-    const elementReg = `%${this.valueCounter++}`
     const size = expr.elements.length || 0
     const dimensionsReg = `%${this.valueCounter++}`
     ir.push(`  ${dimensionsReg} = alloca [1 x i64]`)
-    ir.push(`  ${dimensionsReg}_0 = getelementptr [1 x i64], ptr ${dimensionsReg}, i64 0, i64 0`)
-    ir.push(`  store i64 ${size}, ptr ${dimensionsReg}_0`)
+    const dimensionsPtr = `%${this.valueCounter++}`
+    ir.push(`  ${dimensionsPtr} = getelementptr [1 x i64], ptr ${dimensionsReg}, i64 0, i64 0`)
+    ir.push(`  store i64 ${size}, ptr ${dimensionsPtr}`)
+    const elementReg = `%${this.valueCounter++}`
     ir.push(`  ${elementReg} = call ptr @array_alloc(i64 8, i64 1, ptr ${dimensionsReg})`)
 
     for (let i = 0; i < expr.elements.length; i++) {
       const value = this.generateExpression(ir, expr.elements[i])
       if (value) {
-        ir.push(`  call void @array_set(ptr ${elementReg}, i64 ${i}, i64 ${value})`)
+        // Check if value is a pointer (nested array) and convert to i64
+        const valueToStore = value.includes('ptr') || value.startsWith('%') && !value.includes('i64')
+          ? (() => { const r = `%${this.valueCounter++}`; ir.push(`  ${r} = ptrtoint ptr ${value} to i64`); return r; })()
+          : value
+        ir.push(`  call void @array_set(ptr ${elementReg}, i64 ${i}, i64 ${valueToStore})`)
       }
     }
 
@@ -447,16 +713,31 @@ private generateStringLiteral(ir: string[], value: string): string {
 
   private generateMemberExpression(ir: string[], expr: any): string {
     const obj = this.generateExpression(ir, expr.object)
+    // Generate the key string constant
+    const keyName = `@key_${expr.property}_${this.stringCounter++}`
+    const escaped = expr.property.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+    const strDef = `${keyName} = private unnamed_addr constant [${expr.property.length + 1} x i8] c"${escaped}\\00"`
+    this.stringConstants.push(strDef)
     const reg = `%${this.valueCounter++}`
-    ir.push(`  ${reg} = call i64 @table_get(ptr ${obj}, ptr @key_${expr.property}, i64 ${expr.property.length})`)
+    ir.push(`  ${reg} = call i64 @table_get(ptr ${obj}, ptr ${keyName}, i64 ${expr.property.length})`)
     return reg
   }
 
   private generateIndexExpression(ir: string[], expr: any): string {
     const array = this.generateExpression(ir, expr.object)
     const index = this.generateExpression(ir, expr.index)
+    // Handle nested array access
+    // If expr.object is an IndexExpression, array is an i64 (from array_get), convert to ptr
+    // Otherwise, array is already a ptr (from alloca or variable load)
+    const isNestedIndex = expr.object?.type === "IndexExpression"
+    let arrayPtr = array
+    if (isNestedIndex) {
+      const r = `%${this.valueCounter++}`
+      ir.push(`  ${r} = inttoptr i64 ${array} to ptr`)
+      arrayPtr = r
+    }
     const reg = `%${this.valueCounter++}`
-    ir.push(`  ${reg} = call i64 @array_get(ptr ${array}, i64 ${index})`)
+    ir.push(`  ${reg} = call i64 @array_get(ptr ${arrayPtr}, i64 ${index})`)
     return reg
   }
 
@@ -480,16 +761,26 @@ private generateStringLiteral(ir: string[], value: string): string {
 
   private generateCastExpression(ir: string[], expr: any): string {
     const value = this.generateExpression(ir, expr.value)
-    const sourceType = this.toLLVMType(expr.sourceType)
+    const sourceType = expr.sourceType ? this.toLLVMType(expr.sourceType) : this.toLLVMType(expr.value?.resultType)
     const targetType = this.toLLVMType(expr.targetType)
     const isSourceSigned = expr.sourceType?.type === "IntegerType"
     const isTargetSigned = expr.targetType?.type === "IntegerType"
     const reg = `%${this.valueCounter++}`
 
-    const sourceIsInt = sourceType.startsWith("i")
-    const targetIsInt = targetType.startsWith("i")
+    const sourceIsInt = sourceType.startsWith("i") || sourceType === "ptr"
+    const targetIsInt = targetType.startsWith("i") || targetType === "ptr"
     const sourceIsFloat = sourceType.startsWith("f")
     const targetIsFloat = targetType.startsWith("f")
+
+    if (sourceType === "ptr" && targetIsInt) {
+      ir.push(`  ${reg} = ptrtoint ptr ${value} to ${targetType}`)
+      return reg
+    }
+
+    if (targetType === "ptr" && sourceIsInt) {
+      ir.push(`  ${reg} = inttoptr ${sourceType} ${value} to ptr`)
+      return reg
+    }
 
     if (sourceIsInt && targetIsInt) {
       const sourceBits = this.getIntBits(sourceType)
@@ -532,12 +823,15 @@ private generateStringLiteral(ir: string[], value: string): string {
   }
 
   private generateConditional(ir: string[], statement: any): void {
-    const condition = this.generateExpression(ir, statement.test || statement.condition)
+    const condValue = this.generateExpression(ir, statement.test || statement.condition)
+    // Convert i64 condition to i1
+    const condBool = `%${this.valueCounter++}`
+    ir.push(`  ${condBool} = icmp ne i64 ${condValue}, 0`)
     const trueLabel = this.nextLabel()
     const falseLabel = this.nextLabel()
     const endLabel = this.nextLabel()
 
-    ir.push(`  br i1 ${condition}, label %${trueLabel}, label %${falseLabel}`)
+    ir.push(`  br i1 ${condBool}, label %${trueLabel}, label %${falseLabel}`)
     ir.push("")
 
     ir.push(`${trueLabel}:`)
@@ -600,8 +894,11 @@ private generateStringLiteral(ir: string[], value: string): string {
     ir.push("")
 
     ir.push(`${startLabel}:`)
-    const condition = this.generateExpression(ir, statement.test || statement.condition)
-    ir.push(`  br i1 ${condition}, label %${bodyLabel}, label %${endLabel}`)
+    const condValue = this.generateExpression(ir, statement.test || statement.condition)
+    // Convert i64 condition to i1
+    const condBool = `%${this.valueCounter++}`
+    ir.push(`  ${condBool} = icmp ne i64 ${condValue}, 0`)
+    ir.push(`  br i1 ${condBool}, label %${bodyLabel}, label %${endLabel}`)
     ir.push("")
 
     ir.push(`${bodyLabel}:`)
@@ -654,6 +951,8 @@ private generateStringLiteral(ir: string[], value: string): string {
 
   private generateFunctionDeclaration(ir: string[], statement: any): void {
     const { name, params, returnType, body } = statement
+
+    this.resetValueCounter(10)
 
     const llvmParams = params.map((p: any) => {
       const llvmType = this.toLLVMType(p.paramType)
@@ -737,6 +1036,79 @@ private generateStringLiteral(ir: string[], value: string): string {
     ir.push("; Runtime function definitions (linked from runtime library)")
   }
 
+  private generatePOSIXDeclarations(ir: string[]): void {
+    ir.push("")
+    ir.push("; POSIX function declarations")
+
+    ir.push("declare i64 @open(ptr, i64, ...)")
+    ir.push("declare i64 @read(i64, ptr, i64)")
+    ir.push("declare i64 @write(i64, ptr, i64)")
+    ir.push("declare i64 @close(i64)")
+    ir.push("declare i64 @access(ptr, i64)")
+    ir.push("declare i64 @faccessat(i64, ptr, i64, i64)")
+    ir.push("declare i64 @chmod(ptr, i64)")
+    ir.push("declare i64 @fchmod(i64, i64)")
+    ir.push("declare i64 @chown(ptr, i64, i64)")
+    ir.push("declare i64 @fchown(i64, i64, i64)")
+    ir.push("declare i64 @lseek(i64, i64, i64)")
+    ir.push("declare i64 @fsync(i64)")
+    ir.push("declare i64 @fdatasync(i64)")
+    ir.push("declare i64 @ftruncate(i64, i64)")
+    ir.push("declare i64 @stat(ptr, ptr)")
+    ir.push("declare i64 @lstat(ptr, ptr)")
+    ir.push("declare i64 @fstat(i64, ptr)")
+    ir.push("declare i64 @link(ptr, ptr)")
+    ir.push("declare i64 @symlink(ptr, ptr)")
+    ir.push("declare i64 @readlink(ptr, ptr, i64)")
+    ir.push("declare i64 @unlink(ptr)")
+    ir.push("declare i64 @rename(ptr, ptr)")
+    ir.push("declare ptr @opendir(ptr)")
+    ir.push("declare ptr @readdir(ptr)")
+    ir.push("declare void @rewinddir(ptr)")
+    ir.push("declare void @closedir(ptr)")
+    ir.push("declare i64 @mkdir(ptr, i64)")
+    ir.push("declare i64 @rmdir(ptr)")
+    ir.push("declare i64 @chdir(ptr)")
+    ir.push("declare i64 @fchdir(i64)")
+    ir.push("declare i64 @getcwd(ptr, i64)")
+    ir.push("declare i64 @dup(i64)")
+    ir.push("declare i64 @dup2(i64, i64)")
+    ir.push("declare i64 @fcntl(i64, i64, ...)")
+    ir.push("declare i64 @pathconf(ptr, i64)")
+    ir.push("declare i64 @fpathconf(i64, i64)")
+    ir.push("declare i64 @creat(ptr, i64)")
+    ir.push("declare i64 @mkfifo(ptr, i64)")
+    ir.push("declare i64 @mknod(ptr, i64, i64)")
+    ir.push("declare i64 @utimes(ptr, ptr)")
+    ir.push("declare i64 @futimes(i64, ptr)")
+    ir.push("declare i64 @utimensat(i64, ptr, ptr, i64)")
+    ir.push("declare i64 @pread(i64, ptr, i64, i64)")
+    ir.push("declare i64 @pwrite(i64, ptr, i64, i64)")
+    ir.push("declare i64 @truncate(ptr, i64)")
+    ir.push("")
+  }
+
+  private generatePrintDeclarations(ir: string[]): void {
+    ir.push("")
+    ir.push("; Print function declarations")
+    ir.push("declare void @print_i64(i64)")
+    ir.push("declare void @print_u64(i64)")
+    ir.push("declare void @print_f64(double)")
+    ir.push("declare void @print_string(ptr)")
+    ir.push("declare void @println()")
+    ir.push("declare void @println_i64(i64)")
+    ir.push("declare void @println_u64(i64)")
+    ir.push("declare void @println_f64(double)")
+    ir.push("declare void @println_string(ptr)")
+    ir.push("")
+    ir.push("; Input function declarations")
+    ir.push("declare i64 @input_i64()")
+    ir.push("declare i64 @input_u64()")
+    ir.push("declare double @input_f64()")
+    ir.push("declare ptr @input_string()")
+    ir.push("")
+  }
+
   private nextLabel(): string {
     return `label${this.labelCounter++}`
   }
@@ -754,6 +1126,8 @@ private generateStringLiteral(ir: string[], value: string): string {
       case "ArrayType":
         return "ptr"
       case "TableType":
+        return "ptr"
+      case "PointerType":
         return "ptr"
       case "VoidType":
         return "void"

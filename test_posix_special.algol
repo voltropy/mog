@@ -1,0 +1,21 @@
+# Test POSIX creat, mkfifo, and mknod operations
+fn main() -> i64 {
+  fd: i64 = creat("test_creat_file.txt", 0644);
+  if (fd == -1) {
+    return 1;
+  }
+  close(fd);
+  unlink("test_creat_file.txt");
+
+  result: i64 = mkfifo("test_fifo", 0644);
+  if (result != -1) {
+    unlink("test_fifo");
+  }
+
+  result = mknod("test_mknod_file", 32768 | 0644, 0);
+  if (result != -1) {
+    unlink("test_mknod_file");
+  }
+
+  return 0;
+}

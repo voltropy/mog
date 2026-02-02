@@ -751,7 +751,7 @@ describe("LLVM IR Generator", () => {
             expression: {
               type: "MemberExpression",
               object: { type: "Identifier", name: "obj" },
-              property: { type: "Identifier", name: "x" },
+              property: "x",
             },
           },
         ],
@@ -771,13 +771,13 @@ describe("LLVM IR Generator", () => {
             value: null,
           },
           {
-            type: "Assignment",
-            name: "obj",
-            value: {
+            type: "AssignmentExpression",
+            target: {
               type: "MemberExpression",
               object: { type: "Identifier", name: "obj" },
-              property: { type: "Identifier", name: "x" },
+              property: "x",
             },
+            value: { type: "NumberLiteral", value: 42 },
           },
         ],
       }
