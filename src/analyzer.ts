@@ -310,6 +310,7 @@ class SymbolTable {
 class SemanticAnalyzer {
   private symbolTable: SymbolTable
   private errors: SemanticError[] = []
+  private warnings: SemanticError[] = []
   private currentFunction: string | null = null
 
   constructor() {
@@ -319,8 +320,15 @@ class SemanticAnalyzer {
   analyze(program: ProgramNode): SemanticError[] {
     this.symbolTable = new SymbolTable()
     this.errors = []
+    this.warnings = []
     this.declarePOSIXBuiltins()
     this.visitProgram(program)
+    // Print warnings if any
+    if (this.warnings.length > 0) {
+      for (const warning of this.warnings) {
+        console.log(`Warning: ${warning.message} at line ${warning.position.start.line}`)
+      }
+    }
     return this.errors
   }
 
@@ -437,8 +445,15 @@ class SemanticAnalyzer {
     }
   }
 
+  private errors: SemanticError[] = []
+  private warnings: SemanticError[] = []
+
   private emitError(message: string, position: { start: Position; end: Position }): void {
     this.errors.push({ message, position })
+  }
+
+  private emitWarning(message: string, position: { start: Position; end: Position }): void {
+    this.warnings.push({ message, position })
   }
 
   private visitProgram(node: ProgramNode): void {
@@ -1044,6 +1059,21 @@ class SemanticAnalyzer {
     return targetType
   }
 
+  private posixBufferFunctions = new Set([
+    "read", "write", "pread", "pwrite",
+    "stat", "lstat", "fstat",
+    "readlink", "getcwd",
+    "access", "faccessat",
+    "chmod", "fchmod", "chown", "fchown",
+    "utimes", "futimes", "utimensat",
+    "truncate", "ftruncate",
+    "link", "symlink",
+    "rename", "unlink",
+    "mkdir", "rmdir",
+    "chdir", "fchdir",
+    "mkfifo", "mknod",
+  ])
+
   private visitCallExpression(node: CallExpressionNode): Type | null {
     if (node.callee.type === "Identifier") {
       const identifier = node.callee as IdentifierNode
@@ -1052,6 +1082,20 @@ class SemanticAnalyzer {
       if (!symbol) {
         this.emitError(`Undefined function '${identifier.name}'`, node.position)
         return null
+      }
+
+      // Check for cast<i64>() with POSIX buffer functions
+      if (this.posixBufferFunctions.has(identifier.name)) {
+        const args = (node as any).args ?? node.arguments ?? []
+        for (let i = 0; i < args.length; i++) {
+          const arg = args[i]
+          if (arg.type === "CastExpression") {
+            this.emitWarning(
+              `Avoid cast<i64>() with POSIX buffer parameters. Pass arrays directly instead of casting to i64.`,
+              arg.position
+            )
+          }
+        }
       }
     }
 
