@@ -51,6 +51,9 @@ type StatementNode =
   | FunctionDeclarationNode
   | WhileLoopNode
   | ForLoopNode
+  | ForEachLoopNode
+  | BreakNode
+  | ContinueNode
 
 interface VariableDeclarationNode extends ASTNode {
   type: "VariableDeclaration"
@@ -100,6 +103,22 @@ interface ForLoopNode extends ASTNode {
   start: ExpressionNode
   end: ExpressionNode
   body: BlockNode
+}
+
+interface ForEachLoopNode extends ASTNode {
+  type: "ForEachLoop"
+  variable: string
+  varType: Type
+  array: ExpressionNode
+  body: BlockNode
+}
+
+interface BreakNode extends ASTNode {
+  type: "Break"
+}
+
+interface ContinueNode extends ASTNode {
+  type: "Continue"
 }
 
 interface FunctionDeclarationNode extends ASTNode {
@@ -493,6 +512,15 @@ class SemanticAnalyzer {
       case "ForLoop":
         this.visitForLoop(node as ForLoopNode)
         break
+      case "ForEachLoop":
+        this.visitForEachLoop(node as ForEachLoopNode)
+        break
+      case "Break":
+        // Break is valid inside loops - semantic check could verify context
+        break
+      case "Continue":
+        // Continue is valid inside loops - semantic check could verify context
+        break
       case "FunctionDeclaration":
         this.visitFunctionDeclaration(node as FunctionDeclarationNode)
         break
@@ -706,6 +734,20 @@ class SemanticAnalyzer {
 
     this.symbolTable.pushScope()
     this.symbolTable.declare(node.variable, "variable", startType || new IntegerType("i64"))
+    this.visitBlock(node.body)
+    this.symbolTable.popScope()
+  }
+
+  private visitForEachLoop(node: ForEachLoopNode): void {
+    const arrayType = this.visitExpression(node.array)
+
+    if (arrayType && !isArrayType(arrayType)) {
+      this.emitError(`For-each loop requires array type, got ${arrayType.toString()}`, node.position)
+    }
+
+    this.symbolTable.pushScope()
+    this.symbolTable.declare(node.variable, "variable", node.varType)
+    this.symbolTable.setCurrentType(node.variable, node.varType)
     this.visitBlock(node.body)
     this.symbolTable.popScope()
   }

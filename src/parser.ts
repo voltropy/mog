@@ -70,6 +70,12 @@ class Parser {
     if (this.matchType("for")) {
       return this.forStatement()
     }
+    if (this.matchType("break")) {
+      return this.breakStatement()
+    }
+    if (this.matchType("continue")) {
+      return this.continueStatement()
+    }
     if (
       this.checkType("VARIABLE") ||
       this.checkType("TYPE") ||
@@ -266,6 +272,57 @@ if (!this.checkType("RPAREN")) {
 
   private forStatement(): StatementNode {
     const variable = this.consume("IDENTIFIER", "Expected variable name after for").value
+
+    // Check if this is a for-each loop: for item: type in arr { ... }
+    if (this.checkType("COLON")) {
+      this.consume("COLON", "Expected : after variable name")
+      let typeToken = this.consume("TYPE", "Expected type after :")
+      let typeName = typeToken.value
+      // Handle array types like i64[]
+      while (this.matchType("LBRACKET")) {
+        typeName += "["
+        this.consume("RBRACKET", "Expected ] after array bracket")
+        typeName += "]"
+      }
+      const varType = this.parseType(typeName)
+      this.consume("in", "Expected 'in' after type annotation")
+      const array = this.expression()
+
+      this.consume("LBRACE", "Expected { after for header")
+
+      const bodyStatements: StatementNode[] = []
+      while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+        const stmt = this.statement()
+        if (stmt) {
+          bodyStatements.push(stmt)
+        }
+      }
+
+      this.consume("RBRACE", "Expected } after for loop")
+
+      const body: BlockNode = {
+        type: "Block",
+        statements: bodyStatements,
+        position: {
+          start: { line: 1, column: 1, index: 0 },
+          end: this.lastPosition(),
+        },
+      }
+
+      return {
+        type: "ForEachLoop",
+        variable,
+        varType,
+        array,
+        body,
+        position: {
+          start: { line: 1, column: 1, index: 0 },
+          end: this.lastPosition(),
+        },
+      }
+    }
+
+    // Traditional for loop: for i := start to end { ... }
     this.consume("ASSIGN", "Expected := after variable name")
     const start = this.expression()
     this.consume("to", "Expected to after start value")
@@ -320,6 +377,28 @@ if (!this.checkType("RPAREN")) {
     return {
       type: "Block",
       statements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private breakStatement(): StatementNode {
+    this.matchType("SEMICOLON")
+    return {
+      type: "Break",
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private continueStatement(): StatementNode {
+    this.matchType("SEMICOLON")
+    return {
+      type: "Continue",
       position: {
         start: { line: 1, column: 1, index: 0 },
         end: this.lastPosition(),

@@ -87,6 +87,12 @@ typedef struct Array {
   void* data;
 } Array;
 
+uint64_t array_length(void* array_ptr) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0) return 0;
+  return arr->dimensions[0];
+}
+
 void* array_alloc(uint64_t element_size, uint64_t dimension_count, uint64_t* dimensions) {
   Array* arr = (Array*)gc_alloc(sizeof(Array));
   arr->element_size = element_size;

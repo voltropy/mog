@@ -204,6 +204,7 @@ class LLVMIRGenerator {
     ir.push("declare ptr @array_alloc(i64 %element_size, i64 %dimension_count, ptr %dimensions)")
     ir.push("declare i64 @array_get(ptr %array, i64 %index)")
     ir.push("declare void @array_set(ptr %array, i64 %index, i64 %value)")
+    ir.push("declare i64 @array_length(ptr %array)")
     ir.push("")
 
     ir.push("; Declare table functions")
@@ -271,6 +272,15 @@ class LLVMIRGenerator {
         break
       case "ForLoop":
         this.generateForLoop(ir, statement)
+        break
+      case "ForEachLoop":
+        this.generateForEachLoop(ir, statement)
+        break
+      case "Break":
+        // TODO: implement break with labeled blocks
+        break
+      case "Continue":
+        // TODO: implement continue with labeled blocks
         break
       default:
         break
@@ -950,6 +960,61 @@ class LLVMIRGenerator {
     ir.push(`  ${incValue} = add i64 ${currentValue}, 1`)
     ir.push(`  store i64 ${incValue}, ptr %${variable}`)
     ir.push(`  br label %${headerLabel}`)
+    ir.push("")
+
+    ir.push(`${endLabel}:`)
+  }
+
+  private generateForEachLoop(ir: string[], statement: any): void {
+    const startLabel = this.nextLabel()
+    const bodyLabel = this.nextLabel()
+    const incLabel = this.nextLabel()
+    const endLabel = this.nextLabel()
+
+    const { variable, array, body } = statement
+
+    // Generate array and get its length
+    const arrayPtr = this.generateExpression(ir, array)
+    const indexReg = `%${variable}_idx`
+    const valueReg = `%${variable}`
+
+    // Allocate index variable and loop variable
+    ir.push(`  ${indexReg} = alloca i64`)
+    ir.push(`  store i64 0, ptr ${indexReg}`)
+    ir.push(`  ${valueReg} = alloca i64`)
+    this.variableTypes.set(variable, { type: "IntegerType", kind: "i64" })
+
+    // Get array length
+    const lengthReg = `%${this.valueCounter++}`
+    ir.push(`  ${lengthReg} = call i64 @array_length(ptr ${arrayPtr})`)
+
+    ir.push(`  br label %${startLabel}`)
+    ir.push("")
+
+    // Header: check if index < length
+    ir.push(`${startLabel}:`)
+    const currentIndex = `%${this.valueCounter++}`
+    ir.push(`  ${currentIndex} = load i64, ptr ${indexReg}`)
+    const cond = `%${this.valueCounter++}`
+    ir.push(`  ${cond} = icmp slt i64 ${currentIndex}, ${lengthReg}`)
+    ir.push(`  br i1 ${cond}, label %${bodyLabel}, label %${endLabel}`)
+    ir.push("")
+
+    // Body: get element and execute
+    ir.push(`${bodyLabel}:`)
+    const elemValue = `%${this.valueCounter++}`
+    ir.push(`  ${elemValue} = call i64 @array_get(ptr ${arrayPtr}, i64 ${currentIndex})`)
+    ir.push(`  store i64 ${elemValue}, ptr ${valueReg}`)
+    this.generateStatement(ir, body)
+    ir.push(`  br label %${incLabel}`)
+    ir.push("")
+
+    // Increment
+    ir.push(`${incLabel}:`)
+    const nextIndex = `%${this.valueCounter++}`
+    ir.push(`  ${nextIndex} = add i64 ${currentIndex}, 1`)
+    ir.push(`  store i64 ${nextIndex}, ptr ${indexReg}`)
+    ir.push(`  br label %${startLabel}`)
     ir.push("")
 
     ir.push(`${endLabel}:`)

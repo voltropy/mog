@@ -8,6 +8,9 @@ type TokenType =
   | "while"
   | "for"
   | "to"
+  | "in"
+  | "break"
+  | "continue"
   | "cast"
   | "not"
   | "MODULO"
@@ -109,6 +112,9 @@ class Lexer {
     const whileRegex = /while\b/y
     const forRegex = /for\b/y
     const toRegex = /to\b/y
+    const inRegex = /in\b/y
+    const breakRegex = /break\b/y
+    const continueRegex = /continue\b/y
     const castRegex = /cast\b/y
     const notRegex = /not\b/y
     const llmRegex = /LLM\b/y
@@ -250,6 +256,42 @@ class Lexer {
       value = this.match(toRegex)
       if (value) {
         type = "to"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(inRegex)
+      if (value) {
+        type = "in"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(breakRegex)
+      if (value) {
+        type = "break"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(continueRegex)
+      if (value) {
+        type = "continue"
         this.advance(value.length)
         tokens.push({
           type,
