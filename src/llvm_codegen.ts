@@ -29,6 +29,8 @@ class LLVMIRGenerator {
   private blockCounter = 0
   private valueCounter = 0
   private variableTypes: Map<string, any> = new Map()
+  private loopStack: { breakLabel: string; continueLabel: string }[] = []
+  private blockTerminated = false
 
   private resetValueCounter(start: number = 0): void {
     this.valueCounter = start
@@ -154,11 +156,15 @@ class LLVMIRGenerator {
       ir.push("define void @program() {")
       ir.push("entry:")
 
+      this.blockTerminated = false
       for (const statement of ast.statements) {
         this.generateStatement(ir, statement)
+        if (this.blockTerminated) break
       }
 
-      ir.push("  ret void")
+      if (!this.blockTerminated) {
+        ir.push("  ret void")
+      }
       ir.push("}")
 
       this.setupMainFunction(ir)
@@ -225,6 +231,11 @@ class LLVMIRGenerator {
   }
 
   private generateStatement(ir: string[], statement: StatementNode): void {
+    // Skip if current block is already terminated
+    if (this.blockTerminated) {
+      return
+    }
+
     switch (statement.type) {
       case "VariableDeclaration": {
         const llvmType = this.toLLVMType(statement.varType)
@@ -249,9 +260,13 @@ class LLVMIRGenerator {
         this.generateExpression(ir, statement.expression)
         break
       case "Block":
+        const prevTerminated = this.blockTerminated
+        this.blockTerminated = false
         for (const stmt of statement.statements) {
           this.generateStatement(ir, stmt)
+          if (this.blockTerminated) break
         }
+        this.blockTerminated = prevTerminated
         break
       case "Return":
         if (statement.value) {
@@ -261,6 +276,7 @@ class LLVMIRGenerator {
         } else {
           ir.push(`  ret void`)
         }
+        this.blockTerminated = true
         break
       case "Conditional":
         this.generateConditional(ir, statement)
@@ -277,10 +293,10 @@ class LLVMIRGenerator {
         this.generateForEachLoop(ir, statement)
         break
       case "Break":
-        // TODO: implement break with labeled blocks
+        this.generateBreak(ir)
         break
       case "Continue":
-        // TODO: implement continue with labeled blocks
+        this.generateContinue(ir)
         break
       default:
         break
@@ -906,6 +922,9 @@ class LLVMIRGenerator {
     const bodyLabel = this.nextLabel()
     const endLabel = this.nextLabel()
 
+    // Push loop context for break/continue
+    this.loopStack.push({ breakLabel: endLabel, continueLabel: startLabel })
+
     ir.push(`  br label %${startLabel}`)
     ir.push("")
 
@@ -923,6 +942,9 @@ class LLVMIRGenerator {
     ir.push("")
 
     ir.push(`${endLabel}:`)
+
+    // Pop loop context
+    this.loopStack.pop()
   }
 
   private generateForLoop(ir: string[], statement: any): void {
@@ -930,6 +952,9 @@ class LLVMIRGenerator {
     const bodyLabel = this.nextLabel()
     const incLabel = this.nextLabel()
     const endLabel = this.nextLabel()
+
+    // Push loop context for break/continue
+    this.loopStack.push({ breakLabel: endLabel, continueLabel: incLabel })
 
     const { variable, start, end, body } = statement
 
@@ -963,6 +988,9 @@ class LLVMIRGenerator {
     ir.push("")
 
     ir.push(`${endLabel}:`)
+
+    // Pop loop context
+    this.loopStack.pop()
   }
 
   private generateForEachLoop(ir: string[], statement: any): void {
@@ -970,6 +998,11 @@ class LLVMIRGenerator {
     const bodyLabel = this.nextLabel()
     const incLabel = this.nextLabel()
     const endLabel = this.nextLabel()
+
+    // Push loop context for break/continue
+    this.loopStack.push({ breakLabel: endLabel, continueLabel: incLabel })
+    const prevTerminated = this.blockTerminated
+    this.blockTerminated = false
 
     const { variable, array, body } = statement
 
@@ -1018,6 +1051,30 @@ class LLVMIRGenerator {
     ir.push("")
 
     ir.push(`${endLabel}:`)
+
+    // Pop loop context
+    this.loopStack.pop()
+    this.blockTerminated = prevTerminated
+  }
+
+  private generateBreak(ir: string[]): void {
+    if (this.loopStack.length === 0) {
+      // Error: break outside of loop - this should be caught by analyzer
+      return
+    }
+    const loopContext = this.loopStack[this.loopStack.length - 1]
+    ir.push(`  br label %${loopContext.breakLabel}`)
+    this.blockTerminated = true
+  }
+
+  private generateContinue(ir: string[]): void {
+    if (this.loopStack.length === 0) {
+      // Error: continue outside of loop - this should be caught by analyzer
+      return
+    }
+    const loopContext = this.loopStack[this.loopStack.length - 1]
+    ir.push(`  br label %${loopContext.continueLabel}`)
+    this.blockTerminated = true
   }
 
   private generateFunctionDeclaration(ir: string[], statement: any): void {
@@ -1055,8 +1112,10 @@ class LLVMIRGenerator {
     }
     ir.push("")
 
+    this.blockTerminated = false
     for (const stmt of body.statements) {
       this.generateStatement(ir, stmt)
+      if (this.blockTerminated) break
     }
 
     let hasReturn = false
