@@ -239,6 +239,8 @@ class LLVMIRGenerator {
     ir.push("; Declare string functions")
     ir.push("declare i64 @string_length(ptr %str)")
     ir.push("declare ptr @string_concat(ptr %a, ptr %b)")
+    ir.push("declare ptr @string_char_at(ptr %str, i64 %index)")
+    ir.push("declare ptr @string_slice(ptr %str, i64 %start, i64 %end)")
     ir.push("")
 
     ir.push("; Declare CLI argument helper functions")
@@ -1186,6 +1188,14 @@ class LLVMIRGenerator {
     const elementType = this.getArrayElementType(expr.object)
     const reg = `%${this.valueCounter++}`
 
+    // Check if this is a string type [u8]
+    if (this.isStringType(expr.object)) {
+      // String indexing - returns a new single-char string
+      const resultReg = `%${this.valueCounter++}`
+      ir.push(`  ${resultReg} = call ptr @string_char_at(ptr ${arrayPtr}, i64 ${index})`)
+      return resultReg
+    }
+
     if (elementType?.type === "FloatType") {
       if (elementType.kind === "f32") {
         const floatReg = `%${this.valueCounter++}`
@@ -1234,6 +1244,28 @@ class LLVMIRGenerator {
     return null
   }
 
+  private isStringType(expr: any): boolean {
+    if (!expr) return false
+
+    // Check if it's a string literal
+    if (expr.type === "StringLiteral") {
+      return true
+    }
+
+    // If it's an identifier, look up the variable type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "ArrayType") {
+        const arrType = varType as ArrayType
+        return arrType.elementType?.type === "UnsignedType" && 
+               arrType.elementType?.kind === "u8" && 
+               arrType.dimensions.length === 0
+      }
+    }
+
+    return false
+  }
+
   private generateSliceExpression(ir: string[], expr: any): string {
     const array = this.generateExpression(ir, expr.object)
     const start = this.generateExpression(ir, expr.start)
@@ -1245,6 +1277,13 @@ class LLVMIRGenerator {
       const r = `%${this.valueCounter++}`
       ir.push(`  ${r} = inttoptr i64 ${array} to ptr`)
       arrayPtr = r
+    }
+
+    // Check if this is a string type [u8]
+    if (this.isStringType(expr.object)) {
+      const resultReg = `%${this.valueCounter++}`
+      ir.push(`  ${resultReg} = call ptr @string_slice(ptr ${arrayPtr}, i64 ${start}, i64 ${end})`)
+      return resultReg
     }
 
     const reg = `%${this.valueCounter++}`

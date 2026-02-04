@@ -892,6 +892,37 @@ char* string_concat(const char* a, const char* b) {
   return result;
 }
 
+// Get character at index (returns new single-char string)
+char* string_char_at(const char* str, uint64_t index) {
+  uint64_t len = strlen(str);
+  if (index >= len) {
+    return "";
+  }
+  char* result = (char*)gc_alloc(2);
+  result[0] = str[index];
+  result[1] = '\0';
+  return result;
+}
+
+// Slice string from start (inclusive) to end (exclusive)
+char* string_slice(const char* str, uint64_t start, uint64_t end) {
+  uint64_t len = strlen(str);
+  if (start >= len) {
+    return "";
+  }
+  if (end > len) {
+    end = len;
+  }
+  if (end <= start) {
+    return "";
+  }
+  uint64_t slice_len = end - start;
+  char* result = (char*)gc_alloc(slice_len + 1);
+  memcpy(result, str + start, slice_len);
+  result[slice_len] = '\0';
+  return result;
+}
+
 /* I/O Functions */
 
 void print_i64(int64_t value) {

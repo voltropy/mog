@@ -1338,6 +1338,11 @@ class SemanticAnalyzer {
 
     if (isArrayType(objectType)) {
       const arrayType = objectType as ArrayType
+      // Check if this is a string type [u8]
+      if (isUnsignedType(arrayType.elementType) && arrayType.elementType.kind === "u8" && arrayType.dimensions.length === 0) {
+        // String indexing returns a string (single char as string)
+        return objectType
+      }
       if (arrayType.rank > 0) {
         const newDimensions = arrayType.dimensions.slice(0, -1)
         if (newDimensions.length === 0) {
@@ -1368,6 +1373,12 @@ class SemanticAnalyzer {
     }
 
     if (isArrayType(objectType)) {
+      const arrayType = objectType as ArrayType
+      // Check if this is a string type [u8]
+      if (isUnsignedType(arrayType.elementType) && arrayType.elementType.kind === "u8" && arrayType.dimensions.length === 0) {
+        // String slicing returns a string
+        return objectType
+      }
       return objectType
     }
 
