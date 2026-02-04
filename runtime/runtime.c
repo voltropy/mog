@@ -588,6 +588,32 @@ void array_set(void* array_ptr, uint64_t index, uint64_t value) {
   *(uint64_t*)(data + index * arr->element_size) = value;
 }
 
+/* Typed array operations for f32 */
+float array_get_f32(void* array_ptr, uint64_t index) {
+  Array* arr = (Array*)array_ptr;
+  uint8_t* data = (uint8_t*)arr->data;
+  return *(float*)(data + index * arr->element_size);
+}
+
+void array_set_f32(void* array_ptr, uint64_t index, float value) {
+  Array* arr = (Array*)array_ptr;
+  uint8_t* data = (uint8_t*)arr->data;
+  *(float*)(data + index * arr->element_size) = value;
+}
+
+/* Typed array operations for f64 */
+double array_get_f64(void* array_ptr, uint64_t index) {
+  Array* arr = (Array*)array_ptr;
+  uint8_t* data = (uint8_t*)arr->data;
+  return *(double*)(data + index * arr->element_size);
+}
+
+void array_set_f64(void* array_ptr, uint64_t index, double value) {
+  Array* arr = (Array*)array_ptr;
+  uint8_t* data = (uint8_t*)arr->data;
+  *(double*)(data + index * arr->element_size) = value;
+}
+
 void* array_slice(void* array_ptr, uint64_t start, uint64_t end) {
   Array* arr = (Array*)array_ptr;
   uint64_t slice_len = end - start;

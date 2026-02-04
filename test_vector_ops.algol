@@ -1,0 +1,14 @@
+fn main() -> i64 {
+  v1: [f32; 3] = [1.0, 2.0, 3.0];
+  v2: [f32; 3] = [4.0, 5.0, 6.0];
+  sum: [f32; 3] = v1 + v2;
+  
+  print(sum[0]);  // Should print 5.0
+  println();
+  print(sum[1]);  // Should print 7.0
+  println();
+  print(sum[2]);  // Should print 9.0
+  println();
+  
+  return 0;
+}

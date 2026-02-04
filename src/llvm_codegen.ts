@@ -1,5 +1,5 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
-import { isArrayType, isTableType } from "./types.js"
+import { isArrayType, isTableType, isFloatType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -219,6 +219,10 @@ class LLVMIRGenerator {
     ir.push("declare ptr @array_alloc(i64 %element_size, i64 %dimension_count, ptr %dimensions)")
     ir.push("declare i64 @array_get(ptr %array, i64 %index)")
     ir.push("declare void @array_set(ptr %array, i64 %index, i64 %value)")
+    ir.push("declare float @array_get_f32(ptr %array, i64 %index)")
+    ir.push("declare void @array_set_f32(ptr %array, i64 %index, float %value)")
+    ir.push("declare double @array_get_f64(ptr %array, i64 %index)")
+    ir.push("declare void @array_set_f64(ptr %array, i64 %index, double %value)")
     ir.push("declare i64 @array_length(ptr %array)")
     ir.push("declare ptr @array_slice(ptr %array, i64 %start, i64 %end)")
     ir.push("")
@@ -324,7 +328,7 @@ class LLVMIRGenerator {
       case "AssignmentExpression":
         return this.generateAssignmentExpression(ir, expr)
       case "NumberLiteral": {
-        // Handle float literals - convert to LLVM hex float format
+        // Handle float literals - convert to integer bit pattern for storage
         const val = String(expr.value)
         // Check if it's a float literal (has decimal point or exponent)
         const isFloat = val.includes(".") || val.toLowerCase().includes("e")
@@ -332,7 +336,8 @@ class LLVMIRGenerator {
           const numVal = parseFloat(val)
           // Determine target float type from literalType annotation
           const floatKind = expr.literalType?.kind || "f64"
-          return this.floatToHex(numVal, floatKind)
+          // Convert to integer bit pattern (not hex float format)
+          return this.floatToIntBits(numVal, floatKind)
         }
         // Integer literal - parse octal if needed
         let intVal: number
@@ -528,6 +533,11 @@ class LLVMIRGenerator {
       return extReg
     }
 
+    // Check for vector operations - at least one operand is an array
+    if (this.isVectorOperation(expr.left, expr.right)) {
+      return this.generateVectorOperation(ir, expr, left, right)
+    }
+
     const opMap: Record<string, string[]> = {
       "+": ["add i64", "fadd"],
       "-": ["sub i64", "fsub"],
@@ -572,6 +582,200 @@ class LLVMIRGenerator {
     }
 
     return reg
+  }
+
+  private isVectorOperation(leftExpr: any, rightExpr: any): boolean {
+    // Check if at least one operand is an array type
+    const leftArrayType = this.getExpressionArrayType(leftExpr)
+    const rightArrayType = this.getExpressionArrayType(rightExpr)
+    return leftArrayType !== null || rightArrayType !== null
+  }
+
+  private getExpressionArrayType(expr: any): any {
+    if (!expr) return null
+
+    // Check if the expression is an identifier with array type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "ArrayType") {
+        return varType
+      }
+    }
+
+    // Check if the expression itself has a resultType
+    if (expr.resultType?.type === "ArrayType") {
+      return expr.resultType
+    }
+
+    return null
+  }
+
+  private generateVectorOperation(ir: string[], expr: any, leftReg: string, rightReg: string): string {
+    // Get element types for both operands
+    const leftArrayType = this.getExpressionArrayType(expr.left)
+    const rightArrayType = this.getExpressionArrayType(expr.right)
+
+    // Determine which operand is the array and which is the scalar
+    const isLeftArray = leftArrayType !== null
+    const isRightArray = rightArrayType !== null
+
+    if (!isLeftArray && !isRightArray) {
+      throw new Error("Invalid vector operation: at least one operand must be an array")
+    }
+
+    // Use the array's element type
+    const elementType = (leftArrayType || rightArrayType).elementType
+    const isFloat = elementType?.type === "FloatType"
+    const floatKind = isFloat ? elementType.kind : null
+
+    // Get array length from the array operand
+    const arrayReg = isLeftArray ? leftReg : rightReg
+    const lenReg = `%${this.valueCounter++}`
+    ir.push(`  ${lenReg} = call i64 @array_length(ptr ${arrayReg})`)
+
+    // Allocate result array
+    const dimensionsReg = `%${this.valueCounter++}`
+    ir.push(`  ${dimensionsReg} = alloca [1 x i64]`)
+    const dimensionsPtr = `%${this.valueCounter++}`
+    ir.push(`  ${dimensionsPtr} = getelementptr [1 x i64], ptr ${dimensionsReg}, i64 0, i64 0`)
+    ir.push(`  store i64 ${lenReg}, ptr ${dimensionsPtr}`)
+
+    const elementSize = floatKind === "f64" ? 8 : floatKind === "f32" ? 4 : 8
+    const resultReg = `%${this.valueCounter++}`
+    ir.push(`  ${resultReg} = call ptr @array_alloc(i64 ${elementSize}, i64 1, ptr ${dimensionsReg})`)
+
+    // Generate loop
+    const loopStartLabel = `vec_loop_start_${this.labelCounter++}`
+    const loopBodyLabel = `vec_loop_body_${this.labelCounter++}`
+    const loopEndLabel = `vec_loop_end_${this.labelCounter++}`
+
+    // Loop counter
+    const counterReg = `%${this.valueCounter++}`
+    ir.push(`  ${counterReg} = alloca i64`)
+    ir.push(`  store i64 0, ptr ${counterReg}`)
+
+    // Jump to loop start
+    ir.push(`  br label %${loopStartLabel}`)
+
+    // Loop start: check condition
+    ir.push(`${loopStartLabel}:`)
+    const currentCount = `%${this.valueCounter++}`
+    ir.push(`  ${currentCount} = load i64, ptr ${counterReg}`)
+    const cmpReg = `%${this.valueCounter++}`
+    ir.push(`  ${cmpReg} = icmp slt i64 ${currentCount}, ${lenReg}`)
+    ir.push(`  br i1 ${cmpReg}, label %${loopBodyLabel}, label %${loopEndLabel}`)
+
+    // Loop body
+    ir.push(`${loopBodyLabel}:`)
+
+    // Get elements - one from array, one may be scalar
+    let elem1Reg: string, elem2Reg: string
+
+    if (floatKind === "f32") {
+      if (isLeftArray) {
+        elem1Reg = `%${this.valueCounter++}`
+        ir.push(`  ${elem1Reg} = call float @array_get_f32(ptr ${leftReg}, i64 ${currentCount})`)
+      } else {
+        // Left is scalar - bitcast i64 to float (IEEE 754 representation)
+        const tempReg = `%${this.valueCounter++}`
+        ir.push(`  ${tempReg} = trunc i64 ${leftReg} to i32`)
+        elem1Reg = `%${this.valueCounter++}`
+        ir.push(`  ${elem1Reg} = bitcast i32 ${tempReg} to float`)
+      }
+      if (isRightArray) {
+        elem2Reg = `%${this.valueCounter++}`
+        ir.push(`  ${elem2Reg} = call float @array_get_f32(ptr ${rightReg}, i64 ${currentCount})`)
+      } else {
+        // Right is scalar - bitcast i64 to float (IEEE 754 representation)
+        const tempReg = `%${this.valueCounter++}`
+        ir.push(`  ${tempReg} = trunc i64 ${rightReg} to i32`)
+        elem2Reg = `%${this.valueCounter++}`
+        ir.push(`  ${elem2Reg} = bitcast i32 ${tempReg} to float`)
+      }
+    } else if (floatKind === "f64") {
+      if (isLeftArray) {
+        elem1Reg = `%${this.valueCounter++}`
+        ir.push(`  ${elem1Reg} = call double @array_get_f64(ptr ${leftReg}, i64 ${currentCount})`)
+      } else {
+        // Left is scalar - convert i64 bit pattern to double
+        // Store the i64 bit pattern to memory, then load as double
+        const tempPtr = `%${this.valueCounter++}`
+        ir.push(`  ${tempPtr} = alloca i64`)
+        ir.push(`  store i64 ${leftReg}, ptr ${tempPtr}`)
+        const doublePtr = `%${this.valueCounter++}`
+        ir.push(`  ${doublePtr} = bitcast ptr ${tempPtr} to ptr`)
+        elem1Reg = `%${this.valueCounter++}`
+        ir.push(`  ${elem1Reg} = load double, ptr ${doublePtr}`)
+      }
+      if (isRightArray) {
+        elem2Reg = `%${this.valueCounter++}`
+        ir.push(`  ${elem2Reg} = call double @array_get_f64(ptr ${rightReg}, i64 ${currentCount})`)
+      } else {
+        // Right is scalar - convert i64 bit pattern to double
+        const tempPtr = `%${this.valueCounter++}`
+        ir.push(`  ${tempPtr} = alloca i64`)
+        ir.push(`  store i64 ${rightReg}, ptr ${tempPtr}`)
+        const doublePtr = `%${this.valueCounter++}`
+        ir.push(`  ${doublePtr} = bitcast ptr ${tempPtr} to ptr`)
+        elem2Reg = `%${this.valueCounter++}`
+        ir.push(`  ${elem2Reg} = load double, ptr ${doublePtr}`)
+      }
+    } else {
+      if (isLeftArray) {
+        const e1 = `%${this.valueCounter++}`
+        ir.push(`  ${e1} = call i64 @array_get(ptr ${leftReg}, i64 ${currentCount})`)
+        elem1Reg = e1
+      } else {
+        elem1Reg = leftReg
+      }
+      if (isRightArray) {
+        const e2 = `%${this.valueCounter++}`
+        ir.push(`  ${e2} = call i64 @array_get(ptr ${rightReg}, i64 ${currentCount})`)
+        elem2Reg = e2
+      } else {
+        elem2Reg = rightReg
+      }
+    }
+
+    // Apply operation
+    const resultElemReg = `%${this.valueCounter++}`
+    const op = expr.operator
+
+    if (floatKind === "f32") {
+      const opMap: Record<string, string> = { "+": "fadd", "-": "fsub", "*": "fmul", "/": "fdiv" }
+      const floatOp = opMap[op] || "fadd"
+      ir.push(`  ${resultElemReg} = ${floatOp} float ${elem1Reg}, ${elem2Reg}`)
+    } else if (floatKind === "f64") {
+      const opMap: Record<string, string> = { "+": "fadd", "-": "fsub", "*": "fmul", "/": "fdiv" }
+      const floatOp = opMap[op] || "fadd"
+      ir.push(`  ${resultElemReg} = ${floatOp} double ${elem1Reg}, ${elem2Reg}`)
+    } else {
+      const opMap: Record<string, string> = { "+": "add i64", "-": "sub i64", "*": "mul i64", "/": "sdiv i64" }
+      const intOp = opMap[op] || "add i64"
+      ir.push(`  ${resultElemReg} = ${intOp} ${elem1Reg}, ${elem2Reg}`)
+    }
+
+    // Store result
+    if (floatKind === "f32") {
+      ir.push(`  call void @array_set_f32(ptr ${resultReg}, i64 ${currentCount}, float ${resultElemReg})`)
+    } else if (floatKind === "f64") {
+      ir.push(`  call void @array_set_f64(ptr ${resultReg}, i64 ${currentCount}, double ${resultElemReg})`)
+    } else {
+      ir.push(`  call void @array_set(ptr ${resultReg}, i64 ${currentCount}, i64 ${resultElemReg})`)
+    }
+
+    // Increment counter
+    const nextCount = `%${this.valueCounter++}`
+    ir.push(`  ${nextCount} = add i64 ${currentCount}, 1`)
+    ir.push(`  store i64 ${nextCount}, ptr ${counterReg}`)
+
+    // Jump back to start
+    ir.push(`  br label %${loopStartLabel}`)
+
+    // Loop end
+    ir.push(`${loopEndLabel}:`)
+
+    return resultReg
   }
 
   private generateUnaryExpression(ir: string[], expr: any): string {
@@ -802,7 +1006,27 @@ class LLVMIRGenerator {
         ir.push(`  ${r} = inttoptr i64 ${array} to ptr`)
         arrayPtr = r
       }
-      ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
+
+      // Determine element type to use appropriate setter
+      const elementType = this.getArrayElementType(target.object)
+
+      if (elementType?.type === "FloatType") {
+        if (elementType.kind === "f32") {
+          // Convert i64 value to float
+          const floatReg = `%${this.valueCounter++}`
+          ir.push(`  ${floatReg} = uitofp i64 ${valueReg} to float`)
+          ir.push(`  call void @array_set_f32(ptr ${arrayPtr}, i64 ${index}, float ${floatReg})`)
+        } else if (elementType.kind === "f64") {
+          // Convert i64 value to double
+          const doubleReg = `%${this.valueCounter++}`
+          ir.push(`  ${doubleReg} = uitofp i64 ${valueReg} to double`)
+          ir.push(`  call void @array_set_f64(ptr ${arrayPtr}, i64 ${index}, double ${doubleReg})`)
+        } else {
+          ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
+        }
+      } else {
+        ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
+      }
     } else if (target && target.type === "MemberExpression") {
       // Table member assignment: person.age := 31
       const obj = this.generateExpression(ir, target.object)
@@ -829,17 +1053,44 @@ class LLVMIRGenerator {
     const dimensionsPtr = `%${this.valueCounter++}`
     ir.push(`  ${dimensionsPtr} = getelementptr [1 x i64], ptr ${dimensionsReg}, i64 0, i64 0`)
     ir.push(`  store i64 ${size}, ptr ${dimensionsPtr}`)
+
+    // Determine element type from the array literal's resultType
+    const elementType = expr.resultType?.elementType
+    let elementSize = 8 // default to 8 bytes for i64
+    if (elementType?.type === "FloatType") {
+      elementSize = elementType.kind === "f64" ? 8 : 4
+    }
+
     const elementReg = `%${this.valueCounter++}`
-    ir.push(`  ${elementReg} = call ptr @array_alloc(i64 8, i64 1, ptr ${dimensionsReg})`)
+    ir.push(`  ${elementReg} = call ptr @array_alloc(i64 ${elementSize}, i64 1, ptr ${dimensionsReg})`)
 
     for (let i = 0; i < expr.elements.length; i++) {
-      const value = this.generateExpression(ir, expr.elements[i])
-      if (value) {
-        // Check if value is a pointer (nested array) and convert to i64
-        const valueToStore = value.includes('ptr') || value.startsWith('%') && !value.includes('i64')
-          ? (() => { const r = `%${this.valueCounter++}`; ir.push(`  ${r} = ptrtoint ptr ${value} to i64`); return r; })()
-          : value
-        ir.push(`  call void @array_set(ptr ${elementReg}, i64 ${i}, i64 ${valueToStore})`)
+      const elemExpr = expr.elements[i]
+      if (elementType?.type === "FloatType") {
+        // Handle float elements directly
+        const val = String(elemExpr.value)
+        const numVal = parseFloat(val)
+        if (elementType.kind === "f32") {
+          // Generate float constant as decimal - ensure it has a decimal point
+          const floatLit = val.includes('.') ? val : val + '.0'
+          ir.push(`  call void @array_set_f32(ptr ${elementReg}, i64 ${i}, float ${floatLit})`)
+        } else if (elementType.kind === "f64") {
+          // Generate double constant as decimal - ensure it has a decimal point
+          const doubleLit = val.includes('.') ? val : val + '.0'
+          ir.push(`  call void @array_set_f64(ptr ${elementReg}, i64 ${i}, double ${doubleLit})`)
+        } else {
+          const value = this.generateExpression(ir, elemExpr)
+          ir.push(`  call void @array_set(ptr ${elementReg}, i64 ${i}, i64 ${value})`)
+        }
+      } else {
+        const value = this.generateExpression(ir, elemExpr)
+        if (value) {
+          // Check if value is a pointer (nested array) and convert to i64
+          const valueToStore = value.includes('ptr') || value.startsWith('%') && !value.includes('i64')
+            ? (() => { const r = `%${this.valueCounter++}`; ir.push(`  ${r} = ptrtoint ptr ${value} to i64`); return r; })()
+            : value
+          ir.push(`  call void @array_set(ptr ${elementReg}, i64 ${i}, i64 ${valueToStore})`)
+        }
       }
     }
 
@@ -889,9 +1140,57 @@ class LLVMIRGenerator {
       ir.push(`  ${r} = inttoptr i64 ${array} to ptr`)
       arrayPtr = r
     }
+
+    // Determine element type to use appropriate getter
+    const elementType = this.getArrayElementType(expr.object)
     const reg = `%${this.valueCounter++}`
-    ir.push(`  ${reg} = call i64 @array_get(ptr ${arrayPtr}, i64 ${index})`)
+
+    if (elementType?.type === "FloatType") {
+      if (elementType.kind === "f32") {
+        const floatReg = `%${this.valueCounter++}`
+        ir.push(`  ${floatReg} = call float @array_get_f32(ptr ${arrayPtr}, i64 ${index})`)
+        // Convert float to i64 for language value representation
+        const convReg = `%${this.valueCounter++}`
+        ir.push(`  ${convReg} = fptoui float ${floatReg} to i64`)
+        return convReg
+      } else if (elementType.kind === "f64") {
+        const doubleReg = `%${this.valueCounter++}`
+        ir.push(`  ${doubleReg} = call double @array_get_f64(ptr ${arrayPtr}, i64 ${index})`)
+        // Convert double to i64 for language value representation
+        const convReg = `%${this.valueCounter++}`
+        ir.push(`  ${convReg} = fptoui double ${doubleReg} to i64`)
+        return convReg
+      } else {
+        ir.push(`  ${reg} = call i64 @array_get(ptr ${arrayPtr}, i64 ${index})`)
+      }
+    } else {
+      ir.push(`  ${reg} = call i64 @array_get(ptr ${arrayPtr}, i64 ${index})`)
+    }
     return reg
+  }
+
+  private getArrayElementType(expr: any): any {
+    if (!expr) return null
+
+    // If it's an identifier, look up the variable type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "ArrayType") {
+        return varType.elementType
+      }
+    }
+
+    // If it's an index expression, recursively get element type
+    if (expr.type === "IndexExpression") {
+      return this.getArrayElementType(expr.object)
+    }
+
+    // Check if the expression itself has a resultType (from analyzer)
+    if (expr.resultType?.type === "ArrayType") {
+      return expr.resultType.elementType
+    }
+
+    return null
   }
 
   private generateSliceExpression(ir: string[], expr: any): string {
@@ -1625,6 +1924,26 @@ private getIntBits(type: LLVMType): number {
         new DataView(buffer).setFloat64(0, value, false)
         const lowBits = new DataView(buffer).getBigUint64(0, false)
         return `0x0000000000000000${lowBits.toString(16).padStart(16, '0')}`
+      }
+    }
+  }
+
+  private floatToIntBits(value: number, kind: string): string {
+    // Convert float value to integer bit pattern for i64 storage
+    switch (kind) {
+      case "f32": {
+        const buffer = new ArrayBuffer(4)
+        new DataView(buffer).setFloat32(0, value, false)
+        const bits = new DataView(buffer).getUint32(0, false)
+        // Zero-extend to i64
+        return `${bits}`
+      }
+      case "f64":
+      default: {
+        const buffer = new ArrayBuffer(8)
+        new DataView(buffer).setFloat64(0, value, false)
+        const bits = new DataView(buffer).getBigUint64(0, false)
+        return `${bits}`
       }
     }
   }

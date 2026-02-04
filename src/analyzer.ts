@@ -791,46 +791,67 @@ class SemanticAnalyzer {
   }
 
   private visitExpression(node: ExpressionNode): Type | null {
+    let result: Type | null = null
     switch (node.type) {
       case "Identifier":
-        return this.visitIdentifier(node as IdentifierNode)
+        result = this.visitIdentifier(node as IdentifierNode)
+        break
       case "NumberLiteral":
-        return this.visitNumberLiteral(node as NumberLiteralNode)
+        result = this.visitNumberLiteral(node as NumberLiteralNode)
+        break
       case "StringLiteral":
-        return this.visitStringLiteral(node as StringLiteralNode)
+        result = this.visitStringLiteral(node as StringLiteralNode)
+        break
       case "TemplateLiteral":
-        return this.visitTemplateLiteral(node as TemplateLiteralNode)
+        result = this.visitTemplateLiteral(node as TemplateLiteralNode)
+        break
       case "ArrayLiteral":
-        return this.visitArrayLiteral(node as ArrayLiteralNode)
+        result = this.visitArrayLiteral(node as ArrayLiteralNode)
+        break
       case "TableLiteral":
-        return this.visitTableLiteral(node as TableLiteralNode)
+        result = this.visitTableLiteral(node as TableLiteralNode)
+        break
       case "BinaryExpression":
-        return this.visitBinaryExpression(node as BinaryExpressionNode)
+        result = this.visitBinaryExpression(node as BinaryExpressionNode)
+        break
       case "UnaryExpression":
-        return this.visitUnaryExpression(node as UnaryExpressionNode)
+        result = this.visitUnaryExpression(node as UnaryExpressionNode)
+        break
       case "CallExpression":
-        return this.visitCallExpression(node as CallExpressionNode)
+        result = this.visitCallExpression(node as CallExpressionNode)
+        break
       case "MemberExpression":
-        return this.visitMemberExpression(node as MemberExpressionNode)
+        result = this.visitMemberExpression(node as MemberExpressionNode)
+        break
       case "IndexExpression":
-        return this.visitIndexExpression(node as IndexExpressionNode)
+        result = this.visitIndexExpression(node as IndexExpressionNode)
+        break
       case "SliceExpression":
-        return this.visitSliceExpression(node as SliceExpressionNode)
+        result = this.visitSliceExpression(node as SliceExpressionNode)
+        break
       case "LLMExpression":
-        return this.visitLLMExpression(node as LLMExpressionNode)
+        result = this.visitLLMExpression(node as LLMExpressionNode)
+        break
       case "Lambda":
-        return this.visitLambda(node as LambdaNode)
+        result = this.visitLambda(node as LambdaNode)
+        break
       case "BlockExpression":
-        return this.visitBlockExpression(node as BlockExpressionNode)
+        result = this.visitBlockExpression(node as BlockExpressionNode)
+        break
       case "CastExpression":
-        return this.visitCastExpression(node as CastExpressionNode)
+        result = this.visitCastExpression(node as CastExpressionNode)
+        break
       case "AssignmentExpression":
-        return this.visitAssignmentExpression(node as AssignmentExpressionNode)
+        result = this.visitAssignmentExpression(node as AssignmentExpressionNode)
+        break
       default:
         const unknown = node as { type: string; position: { start: Position; end: Position } }
         this.emitError(`Unknown expression type: ${unknown.type}`, unknown.position)
         return null
     }
+    // Store the result type on the node for codegen
+    ;(node as any).resultType = result
+    return result
   }
 
   private visitIdentifier(node: IdentifierNode): Type | null {
@@ -853,7 +874,7 @@ class SemanticAnalyzer {
     const isFloat = value.includes(".") || value.includes("e") || value.includes("E") || Number.isFinite(node.value) && !Number.isInteger(node.value)
 
     if (isFloat) {
-      return new FloatType("f32")
+      return new FloatType("f64")
     }
 
     return new IntegerType("i64")
@@ -990,6 +1011,25 @@ class SemanticAnalyzer {
     const logicalOperators = ["&&", "||", "and", "or", "AND", "OR"]
 
     if (arithmeticOperators.includes(operator)) {
+      // Handle vector/array operations
+      if (isArrayType(leftType) && isArrayType(rightType)) {
+        // Both operands are arrays - check if element types are compatible
+        if (!sameType(leftType, rightType)) {
+          this.emitError(`Array operations require same array types, got ${leftType.toString()} and ${rightType.toString()}`, node.position)
+          return leftType
+        }
+        // Return the array type for element-wise operations
+        return leftType
+      }
+
+      // Check if one operand is array and other is scalar (broadcasting)
+      if (isArrayType(leftType) && isNumericType(rightType)) {
+        return leftType
+      }
+      if (isNumericType(leftType) && isArrayType(rightType)) {
+        return rightType
+      }
+
       if (!isNumericType(leftType) || !isNumericType(rightType)) {
         this.emitError(`Operator '${operator}' requires numeric types`, node.position)
         return leftType
@@ -1003,12 +1043,6 @@ class SemanticAnalyzer {
           node.position,
         )
         return leftType
-      }
-
-      if (isArrayType(leftType) || isArrayType(rightType)) {
-        if (!sameType(leftType, rightType)) {
-          this.emitError(`Array operations require same array types`, node.position)
-        }
       }
 
       return commonType
@@ -1198,6 +1232,11 @@ class SemanticAnalyzer {
             return arrayType.elementType
           }
         }
+      }
+
+      // Handle regular function calls - return the function's return type
+      if (symbol && symbol.symbolType === "function") {
+        return symbol.declaredType
       }
     }
 

@@ -1,0 +1,11 @@
+// Test fixed-size array syntax
+fn main() -> i64 {
+  v1: [f32; 3] = [1.0, 2.0, 3.0];
+  v2: [f32; 3] = [4.0, 5.0, 6.0];
+  
+  // Print first element
+  print(v1[0]);
+  println();
+  
+  return 0;
+}
