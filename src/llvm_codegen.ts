@@ -769,6 +769,8 @@ class LLVMIRGenerator {
         actualFunc = funcName === "print" ? "print_f64" : "println_f64"
       } else if (argType === "UnsignedType") {
         actualFunc = funcName === "print" ? "print_u64" : "println_u64"
+      } else if (argType === "ArrayType") {
+        actualFunc = funcName === "print" ? "print_string" : "println_string"
       } else {
         actualFunc = funcName === "print" ? "print_i64" : "println_i64"
       }
@@ -777,6 +779,8 @@ class LLVMIRGenerator {
     // Generate call with appropriate type
     if (argType === "FloatType") {
       ir.push(`  call void @${actualFunc}(double ${args[0]})`)
+    } else if (argType === "ArrayType") {
+      ir.push(`  call void @${actualFunc}(ptr ${args[0]})`)
     } else {
       ir.push(`  call void @${actualFunc}(i64 ${args[0]})`)
     }
