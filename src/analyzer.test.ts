@@ -197,14 +197,15 @@ describe("Semantic Analyzer - Type Checking: Binary Operations", () => {
     expect(errors).toEqual([])
   })
 
-  test("allows addition of compatible numeric types via widening", () => {
+  test("rejects addition of incompatible numeric types without explicit cast", () => {
     const ast = program(
       varDecl("x", new IntegerType("i32"), num(5, new IntegerType("i32"))),
       varDecl("y", new FloatType("f32"), binary(ident("x"), "+", num(10.0, new FloatType("f32")))),
     )
     const analyzer = new SemanticAnalyzer()
     const errors = analyzer.analyze(ast)
-    expect(errors).toEqual([])
+    expect(errors.length).toBeGreaterThan(0)
+    expect(errors[0].message).toContain("requires identical types")
   })
 
   test("allows comparison of same numeric types", () => {
@@ -220,10 +221,10 @@ describe("Semantic Analyzer - Type Checking: Binary Operations", () => {
     expect(errors).toEqual([])
   })
 
-  test("allows comparison with coercion from int to float", () => {
+  test("allows comparison with identical numeric types", () => {
     const ast = program(
       varDecl("x", new FloatType("f32"), num(5.0, new FloatType("f32"))),
-      varDecl("y", new IntegerType("i32"), num(3, new IntegerType("i32"))),
+      varDecl("y", new FloatType("f32"), num(3.0, new FloatType("f32"))),
       conditional(binary(ident("x"), ">", ident("y")), assign("x", num(10.0, new FloatType("f32")))),
     )
     const analyzer = new SemanticAnalyzer()

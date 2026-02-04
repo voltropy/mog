@@ -614,6 +614,40 @@ void array_set_f64(void* array_ptr, uint64_t index, double value) {
   *(double*)(data + index * arr->element_size) = value;
 }
 
+/* Dot product for f32 arrays */
+float dot_f32(void* a_ptr, void* b_ptr) {
+  Array* a = (Array*)a_ptr;
+  Array* b = (Array*)b_ptr;
+  uint64_t len = a->dimensions[0];
+  if (b->dimensions[0] < len) len = b->dimensions[0];
+  float sum = 0.0f;
+  uint8_t* a_data = (uint8_t*)a->data;
+  uint8_t* b_data = (uint8_t*)b->data;
+  for (uint64_t i = 0; i < len; i++) {
+    float av = *(float*)(a_data + i * a->element_size);
+    float bv = *(float*)(b_data + i * b->element_size);
+    sum += av * bv;
+  }
+  return sum;
+}
+
+/* Dot product for f64 arrays */
+double dot_f64(void* a_ptr, void* b_ptr) {
+  Array* a = (Array*)a_ptr;
+  Array* b = (Array*)b_ptr;
+  uint64_t len = a->dimensions[0];
+  if (b->dimensions[0] < len) len = b->dimensions[0];
+  double sum = 0.0;
+  uint8_t* a_data = (uint8_t*)a->data;
+  uint8_t* b_data = (uint8_t*)b->data;
+  for (uint64_t i = 0; i < len; i++) {
+    double av = *(double*)(a_data + i * a->element_size);
+    double bv = *(double*)(b_data + i * b->element_size);
+    sum += av * bv;
+  }
+  return sum;
+}
+
 void* array_slice(void* array_ptr, uint64_t start, uint64_t end) {
   Array* arr = (Array*)array_ptr;
   uint64_t slice_len = end - start;
@@ -700,6 +734,75 @@ void table_set(void* table_ptr, const char* key, uint64_t key_len, uint64_t valu
   new_entry->next = table->buckets[hash];
   table->buckets[hash] = new_entry;
   table->count++;
+}
+
+/* Array dimension access */
+uint64_t array_get_dimension(void* array_ptr, uint64_t dim_index) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || dim_index >= arr->dimension_count) return 0;
+  return arr->dimensions[dim_index];
+}
+
+uint64_t array_get_dimension_count(void* array_ptr) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr) return 0;
+  return arr->dimension_count;
+}
+
+/* Matrix multiplication - handles f32 and f64 2D arrays */
+void* matmul(void* a_ptr, void* b_ptr) {
+  Array* a = (Array*)a_ptr;
+  Array* b = (Array*)b_ptr;
+  
+  if (!a || !b) return NULL;
+  
+  /* Determine dimensions: treat 1D as row vector */
+  uint64_t a_rows = a->dimensions[0];
+  uint64_t a_cols = (a->dimension_count > 1) ? a->dimensions[1] : 1;
+  uint64_t b_rows = b->dimensions[0];
+  uint64_t b_cols = (b->dimension_count > 1) ? b->dimensions[1] : 1;
+  
+  /* Check compatibility: a_cols must equal b_rows */
+  if (a_cols != b_rows) return NULL;
+  
+  /* Element size must match */
+  if (a->element_size != b->element_size) return NULL;
+  
+  /* Create result array */
+  uint64_t dims[2] = {a_rows, b_cols};
+  Array* c = (Array*)array_alloc(a->element_size, 2, dims);
+  
+  uint8_t* a_data = (uint8_t*)a->data;
+  uint8_t* b_data = (uint8_t*)b->data;
+  uint8_t* c_data = (uint8_t*)c->data;
+  
+  if (a->element_size == 4) {  /* f32 */
+    for (uint64_t i = 0; i < a_rows; i++) {
+      for (uint64_t j = 0; j < b_cols; j++) {
+        float sum = 0.0f;
+        for (uint64_t k = 0; k < a_cols; k++) {
+          float av = *(float*)(a_data + (i * a_cols + k) * 4);
+          float bv = *(float*)(b_data + (k * b_cols + j) * 4);
+          sum += av * bv;
+        }
+        *(float*)(c_data + (i * b_cols + j) * 4) = sum;
+      }
+    }
+  } else if (a->element_size == 8) {  /* f64 */
+    for (uint64_t i = 0; i < a_rows; i++) {
+      for (uint64_t j = 0; j < b_cols; j++) {
+        double sum = 0.0;
+        for (uint64_t k = 0; k < a_cols; k++) {
+          double av = *(double*)(a_data + (i * a_cols + k) * 8);
+          double bv = *(double*)(b_data + (k * b_cols + j) * 8);
+          sum += av * bv;
+        }
+        *(double*)(c_data + (i * b_cols + j) * 8) = sum;
+      }
+    }
+  }
+  
+  return c;
 }
 
 /* LLM Integration Placeholder */

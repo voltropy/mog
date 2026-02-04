@@ -225,6 +225,9 @@ class LLVMIRGenerator {
     ir.push("declare void @array_set_f64(ptr %array, i64 %index, double %value)")
     ir.push("declare i64 @array_length(ptr %array)")
     ir.push("declare ptr @array_slice(ptr %array, i64 %start, i64 %end)")
+    ir.push("declare float @dot_f32(ptr %a, ptr %b)")
+    ir.push("declare double @dot_f64(ptr %a, ptr %b)")
+    ir.push("declare ptr @matmul(ptr %a, ptr %b)")
     ir.push("")
 
     ir.push("; Declare table functions")
@@ -811,6 +814,16 @@ class LLVMIRGenerator {
         return this.generateInputCall(ir, funcName)
       }
 
+      // Handle dot product function
+      if (funcName === "dot") {
+        return this.generateDotCall(ir, expr, args)
+      }
+
+      // Handle matmul function
+      if (funcName === "matmul") {
+        return this.generateMatmulCall(ir, expr, args)
+      }
+
       const funcInfo = this.functions.get(funcName)
 
       // POSIX function signatures for proper argument typing
@@ -927,7 +940,7 @@ class LLVMIRGenerator {
 
   private generateInputCall(ir: string[], funcName: string): string {
     const reg = `%${this.valueCounter++}`
-    
+
     switch (funcName) {
       case "input_i64":
       case "input_u64":
@@ -942,6 +955,34 @@ class LLVMIRGenerator {
       default:
         return ""
     }
+  }
+
+  private generateDotCall(ir: string[], expr: any, args: string[]): string {
+    // Get the argument nodes to determine element type
+    const arg0 = expr.args?.[0] || expr.arguments?.[0]
+
+    // Determine element type from first argument
+    let elementType = "f64" // default
+    const argType = arg0?.resultType
+    if (argType?.elementType?.type === "FloatType" && argType?.elementType?.precision === 32) {
+      elementType = "f32"
+    }
+
+    const reg = `%${this.valueCounter++}`
+    if (elementType === "f32") {
+      ir.push(`  ${reg} = call float @dot_f32(ptr ${args[0]}, ptr ${args[1]})`)
+    } else {
+      ir.push(`  ${reg} = call double @dot_f64(ptr ${args[0]}, ptr ${args[1]})`)
+    }
+    return reg
+  }
+
+  private generateMatmulCall(ir: string[], expr: any, args: string[]): string {
+    // matmul takes two arrays and returns a new array (result of matrix multiplication)
+    // Both arguments should be arrays
+    const reg = `%${this.valueCounter++}`
+    ir.push(`  ${reg} = call ptr @matmul(ptr ${args[0]}, ptr ${args[1]})`)
+    return reg
   }
 
   private generatePrintCall(ir: string[], funcName: string, args: string[], expr: any): string {

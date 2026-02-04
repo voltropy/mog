@@ -1013,20 +1013,41 @@ class SemanticAnalyzer {
     if (arithmeticOperators.includes(operator)) {
       // Handle vector/array operations
       if (isArrayType(leftType) && isArrayType(rightType)) {
-        // Both operands are arrays - check if element types are compatible
-        if (!sameType(leftType, rightType)) {
-          this.emitError(`Array operations require same array types, got ${leftType.toString()} and ${rightType.toString()}`, node.position)
+        // Both operands are arrays - check dimensions match
+        if (leftType.rank !== rightType.rank) {
+          this.emitError(`Array operations require same rank, got rank ${leftType.rank} and rank ${rightType.rank}`, node.position)
           return leftType
         }
-        // Return the array type for element-wise operations
+        // Check dimensions match (if both have known dimensions)
+        for (let i = 0; i < leftType.rank; i++) {
+          if (leftType.dimensions[i] !== undefined && rightType.dimensions[i] !== undefined &&
+              leftType.dimensions[i] !== rightType.dimensions[i]) {
+            this.emitError(`Array operations require matching dimensions, got ${leftType.toString()} and ${rightType.toString()}`, node.position)
+            return leftType
+          }
+        }
+        // Element types must match exactly - no implicit coercion
+        if (!sameType(leftType.elementType, rightType.elementType)) {
+          this.emitError(`Array element types must match exactly: ${leftType.elementType.toString()} and ${rightType.elementType.toString()}. Use explicit cast to convert.`, node.position)
+          return leftType
+        }
         return leftType
       }
 
       // Check if one operand is array and other is scalar (broadcasting)
+      // Scalar type must match array element type exactly - no implicit coercion
       if (isArrayType(leftType) && isNumericType(rightType)) {
+        if (!sameType(leftType.elementType, rightType)) {
+          this.emitError(`Scalar type ${rightType.toString()} does not match array element type ${leftType.elementType.toString()}. Use explicit cast to convert.`, node.position)
+          return leftType
+        }
         return leftType
       }
       if (isNumericType(leftType) && isArrayType(rightType)) {
+        if (!sameType(leftType, rightType.elementType)) {
+          this.emitError(`Scalar type ${leftType.toString()} does not match array element type ${rightType.elementType.toString()}. Use explicit cast to convert.`, node.position)
+          return rightType
+        }
         return rightType
       }
 
@@ -1035,17 +1056,16 @@ class SemanticAnalyzer {
         return leftType
       }
 
-      // Allow compatible numeric types (e.g., f32 + f64 -> f64)
-      const commonType = getCommonType(leftType, rightType)
-      if (!commonType) {
+      // Numeric types must match exactly - no implicit coercion
+      if (!sameType(leftType, rightType)) {
         this.emitError(
-          `Operator '${operator}' requires compatible types, got ${leftType.toString()} and ${rightType.toString()}`,
+          `Operator '${operator}' requires identical types, got ${leftType.toString()} and ${rightType.toString()}. Use explicit cast to convert.`,
           node.position,
         )
         return leftType
       }
 
-      return commonType
+      return leftType
     }
 
     if (comparisonOperators.includes(operator)) {
