@@ -548,8 +548,8 @@ class SemanticAnalyzer {
 
     if (valueType) {
       if (declaredType) {
-        // Allow float literal widening (e.g., f32 literal -> f64 variable)
-        const isLiteral = node.value?.type === "NumberLiteral"
+        // Allow literal coercion (float widening, array literal element coercion)
+        const isLiteral = node.value?.type === "NumberLiteral" || node.value?.type === "ArrayLiteral"
         const typeCheck = isLiteral ? canCoerceWithWidening : compatibleTypes
         if (!typeCheck(valueType, declaredType)) {
           this.emitError(

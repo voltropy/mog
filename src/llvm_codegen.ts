@@ -1,7 +1,7 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
 import { isArrayType, isTableType } from "./types.js"
 
-type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "f32" | "f64" | "float" | "double" | "void" | "ptr"
+type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
 type LLVMValue = {
   name: string
@@ -330,11 +330,9 @@ class LLVMIRGenerator {
         const isFloat = val.includes(".") || val.toLowerCase().includes("e")
         if (isFloat) {
           const numVal = parseFloat(val)
-          // Use DataView to get IEEE 754 bit pattern for double precision
-          const buffer = new ArrayBuffer(8)
-          new DataView(buffer).setFloat64(0, numVal, false) // big-endian
-          const bits = new DataView(buffer).getBigUint64(0, false)
-          return `0x${bits.toString(16).padStart(16, '0')}`
+          // Determine target float type from literalType annotation
+          const floatKind = expr.literalType?.kind || "f64"
+          return this.floatToHex(numVal, floatKind)
         }
         // Integer literal - parse octal if needed
         let intVal: number
@@ -366,7 +364,7 @@ class LLVMIRGenerator {
         // Determine LLVM type for loading
         let llvmLoadType = "i64"
         if (varType?.type === "FloatType") {
-          llvmLoadType = varType.kind === "f32" ? "float" : "double"
+          llvmLoadType = this.toLLVMType(varType)
         }
 
         if (this.currentFunction && this.currentFunction.params.find((p) => p.name === name)) {
@@ -1414,8 +1412,22 @@ class LLVMIRGenerator {
       case "UnsignedType":
         return type.kind as LLVMType
       case "FloatType":
-        // LLVM uses 'float' and 'double' as type names
-        return type.kind === "f32" ? "float" : "double"
+        // LLVM float type mapping: f8/f16->half, f32->float, f64->double, f128->fp128
+        // f256 is not natively supported by LLVM - we treat it as fp128 (or could use software emulation)
+        switch (type.kind) {
+          case "f8":
+          case "f16":
+            return "half"
+          case "f32":
+            return "float"
+          case "f64":
+            return "double"
+          case "f128":
+          case "f256":
+            return "fp128"
+          default:
+            return "float"
+        }
       case "ArrayType":
         return "ptr"
       case "TableType":
@@ -1435,11 +1447,17 @@ private getIntBits(type: LLVMType): number {
   }
 
   private getFloatBits(type: LLVMType): number {
-    return type === "f64" || type === "double" ? 64 : 32
+    switch (type) {
+      case "half": return 16
+      case "float": return 32
+      case "double": return 64
+      case "fp128": return 128
+      default: return 32
+    }
   }
 
   private isFloatType(llvmType: LLVMType): boolean {
-    return llvmType === "float" || llvmType === "double" || llvmType === "f32" || llvmType === "f64"
+    return llvmType === "half" || llvmType === "float" || llvmType === "double" || llvmType === "fp128"
   }
 
   private isFloatOperand(expr: any): boolean {
@@ -1469,28 +1487,48 @@ private getIntBits(type: LLVMType): number {
     return false
   }
 
-  private getFloatTypeSize(expr: any): "float" | "double" {
+  private getFloatTypeSize(expr: any): "half" | "float" | "double" | "fp128" {
     if (!expr) return "float"
+
+    const floatKindToLLVM = (kind: string): "half" | "float" | "double" | "fp128" => {
+      switch (kind) {
+        case "f8":
+        case "f16":
+          return "half"
+        case "f32":
+          return "float"
+        case "f64":
+          return "double"
+        case "f128":
+        case "f256":
+          return "fp128"
+        default:
+          return "float"
+      }
+    }
 
     // Check literal type annotation
     if (expr.literalType?.type === "FloatType") {
-      return expr.literalType.kind === "f64" ? "double" : "float"
+      return floatKindToLLVM(expr.literalType.kind)
     }
 
     // Check if it's an identifier with float type
     if (expr.type === "Identifier" && expr.name) {
       const varType = this.variableTypes.get(expr.name)
       if (varType?.type === "FloatType") {
-        return varType.kind === "f64" ? "double" : "float"
+        return floatKindToLLVM(varType.kind)
       }
     }
 
-    // For binary expressions, check operands recursively
+    // For binary expressions, check operands recursively and use widest type
     if (expr.type === "BinaryExpression") {
       const leftSize = this.getFloatTypeSize(expr.left)
       const rightSize = this.getFloatTypeSize(expr.right)
-      // If any operand is double, use double
-      return (leftSize === "double" || rightSize === "double") ? "double" : "float"
+      // Priority: fp128 > double > float > half
+      if (leftSize === "fp128" || rightSize === "fp128") return "fp128"
+      if (leftSize === "double" || rightSize === "double") return "double"
+      if (leftSize === "float" || rightSize === "float") return "float"
+      return "half"
     }
 
     // For function calls, check the function's return type
@@ -1498,13 +1536,93 @@ private getIntBits(type: LLVMType): number {
       const funcName = expr.function?.name || expr.callee?.name
       if (funcName) {
         const func = this.functions.get(funcName)
-        if (func?.returnType === "double") {
-          return "double"
+        if (func) {
+          switch (func.returnType) {
+            case "half": return "half"
+            case "float": return "float"
+            case "double": return "double"
+            case "fp128": return "fp128"
+          }
         }
       }
     }
 
     return "float" // default to float
+  }
+
+  private floatToHex(value: number, kind: string): string {
+    // Convert float value to IEEE 754 hex representation based on type
+    switch (kind) {
+      case "f8":
+      case "f16": {
+        // Half precision (16-bit)
+        const buffer = new ArrayBuffer(2)
+        // Use Float16Array if available, otherwise convert via Float32
+        if (typeof Float16Array !== 'undefined') {
+          new Float16Array(buffer)[0] = value
+        } else {
+          // Convert float32 to half precision manually
+          const f32Buffer = new ArrayBuffer(4)
+          new DataView(f32Buffer).setFloat32(0, value, false)
+          const f32Bits = new DataView(f32Buffer).getUint32(0, false)
+          // Extract sign, exponent, mantissa
+          const sign = (f32Bits >> 31) & 0x1
+          const exponent = (f32Bits >> 23) & 0xFF
+          const mantissa = f32Bits & 0x7FFFFF
+          // Convert to half precision
+          let hSign = sign
+          let hExponent: number
+          let hMantissa: number
+          if (exponent === 0) {
+            hExponent = 0
+            hMantissa = 0
+          } else if (exponent === 0xFF) {
+            hExponent = 0x1F
+            hMantissa = mantissa ? 0x200 : 0
+          } else {
+            const newExp = exponent - 127 + 15
+            if (newExp >= 31) {
+              hExponent = 0x1F
+              hMantissa = 0
+            } else if (newExp <= 0) {
+              hExponent = 0
+              hMantissa = (mantissa | 0x800000) >> (1 - newExp)
+            } else {
+              hExponent = newExp
+              hMantissa = mantissa >> 13
+            }
+          }
+          const hBits = (hSign << 15) | (hExponent << 10) | hMantissa
+          return `0x${hBits.toString(16).padStart(4, '0')}`
+        }
+        const bits = new DataView(buffer).getUint16(0, false)
+        return `0x${bits.toString(16).padStart(4, '0')}`
+      }
+      case "f32": {
+        // Single precision (32-bit)
+        const buffer = new ArrayBuffer(4)
+        new DataView(buffer).setFloat32(0, value, false)
+        const bits = new DataView(buffer).getUint32(0, false)
+        return `0x${bits.toString(16).padStart(8, '0')}`
+      }
+      case "f64":
+      default: {
+        // Double precision (64-bit)
+        const buffer = new ArrayBuffer(8)
+        new DataView(buffer).setFloat64(0, value, false)
+        const bits = new DataView(buffer).getBigUint64(0, false)
+        return `0x${bits.toString(16).padStart(16, '0')}`
+      }
+      case "f128":
+      case "f256": {
+        // Quad precision (128-bit) - use fp128 format
+        // For now, store as double and zero-pad the high bits
+        const buffer = new ArrayBuffer(8)
+        new DataView(buffer).setFloat64(0, value, false)
+        const lowBits = new DataView(buffer).getBigUint64(0, false)
+        return `0x0000000000000000${lowBits.toString(16).padStart(16, '0')}`
+      }
+    }
   }
 }
 

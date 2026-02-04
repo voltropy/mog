@@ -410,8 +410,18 @@ if (!this.checkType("RPAREN")) {
     const name = this.consume("IDENTIFIER", "Expected variable name").value
     this.consume("COLON", "Expected : after variable name")
     
-    let typeToken = this.consume("TYPE", "Expected type annotation")
-    let typeName = typeToken.value
+    // Handle array types that start with [ (e.g., [u8])
+    let typeName: string
+    if (this.checkType("LBRACKET")) {
+      // Parse array type like [u8], [i32], etc.
+      this.advance() // consume [
+      const innerType = this.consume("TYPE", "Expected type inside array brackets").value
+      this.consume("RBRACKET", "Expected ] after array type")
+      typeName = `[${innerType}]`
+    } else {
+      let typeToken = this.consume("TYPE", "Expected type annotation")
+      typeName = typeToken.value
+    }
     
     while (this.matchType("LBRACKET")) {
       typeName += "["
@@ -943,6 +953,25 @@ private comparison(): ExpressionNode {
   }
 
   private parseType(typeName: string): any {
+    // Handle array types that start with [ like [u8], [i32], etc.
+    if (typeName.startsWith("[")) {
+      const match = typeName.match(/^\[(\w+)\]$/);
+      if (match) {
+        const innerType = match[1];
+        let elementType: Type;
+        if (innerType.startsWith("i")) {
+          elementType = new IntegerType(innerType as any);
+        } else if (innerType.startsWith("u")) {
+          elementType = new UnsignedType(innerType as any);
+        } else if (innerType.startsWith("f")) {
+          elementType = new FloatType(innerType as any);
+        } else {
+          return new VoidType();
+        }
+        return new ArrayType(elementType, []);
+      }
+    }
+    
     const bracketMatch = typeName.match(/^(.*?)(\[\])+$/);
     if (bracketMatch) {
       const baseName = bracketMatch[1];

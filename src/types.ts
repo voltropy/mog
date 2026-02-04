@@ -254,13 +254,28 @@ function canCoerce(from: Type, to: Type): boolean {
   return compatibleTypes(from, to)
 }
 
-// For literal assignment: allows float widening (f32 literal -> f64 variable)
+// For literal assignment: allows float widening and array literal element coercion
 function canCoerceWithWidening(from: Type, to: Type): boolean {
   if (compatibleTypes(from, to)) return true
 
   // Allow float widening (e.g., f32 -> f64)
   if (isFloatType(from) && isFloatType(to)) {
     return from.bits <= to.bits
+  }
+
+  // Allow array literal coercion: [i64[N]] -> [u8] for byte string literals
+  if (from instanceof ArrayType && to instanceof ArrayType) {
+    const fromElem = from.elementType
+    const toElem = to.elementType
+    
+    // Allow if element types are numeric and can fit (e.g., i64 literal -> u8 array)
+    if (isNumericType(fromElem) && isNumericType(toElem)) {
+      const fromBits = (fromElem as IntegerType | UnsignedType | FloatType).bits
+      const toBits = (toElem as IntegerType | UnsignedType | FloatType).bits
+      return fromBits <= toBits
+    }
+    
+    return compatibleTypes(fromElem, toElem)
   }
 
   return false
