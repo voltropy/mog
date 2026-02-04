@@ -17,7 +17,7 @@ describe("parser literals", () => {
     const stmt = ast.statements[0]
     expect(stmt.type).toBe("ExpressionStatement")
     expect((stmt as any).expression.type).toBe("NumberLiteral")
-    expect((stmt as any).expression.value).toBe(42)
+    expect((stmt as any).expression.value).toBe("42")
   })
 
   test("string literal", () => {
@@ -49,8 +49,8 @@ describe("parser binary expressions", () => {
     const expr = (ast.statements[0] as any).expression
     expect(expr.type).toBe("BinaryExpression")
     expect(expr.operator).toBe("+")
-    expect(expr.left.value).toBe(1)
-    expect(expr.right.value).toBe(2)
+    expect(expr.left.value).toBe("1")
+    expect(expr.right.value).toBe("2")
   })
 
   test("subtraction", () => {

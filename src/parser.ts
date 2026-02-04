@@ -771,16 +771,10 @@ private comparison(): ExpressionNode {
 
     if (this.matchType("NUMBER")) {
       const token = this.previous()
-      let value: number
-      if (token.value.startsWith("0") && token.value.length > 1 && !token.value.includes(".")) {
-        // Parse as octal
-        value = parseInt(token.value, 8)
-      } else {
-        value = parseFloat(token.value)
-      }
+      // Store original string to preserve float vs int distinction
       return {
         type: "NumberLiteral",
-        value,
+        value: token.value,
         position: token.position,
       }
     }

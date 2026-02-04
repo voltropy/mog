@@ -11,6 +11,7 @@ import {
   sameType,
   compatibleTypes,
   getCommonType,
+  canCoerceWithWidening,
   IntegerType,
   UnsignedType,
   FloatType,
@@ -547,7 +548,10 @@ class SemanticAnalyzer {
 
     if (valueType) {
       if (declaredType) {
-        if (!compatibleTypes(valueType, declaredType)) {
+        // Allow float literal widening (e.g., f32 literal -> f64 variable)
+        const isLiteral = node.value?.type === "NumberLiteral"
+        const typeCheck = isLiteral ? canCoerceWithWidening : compatibleTypes
+        if (!typeCheck(valueType, declaredType)) {
           this.emitError(
             `Type mismatch: cannot assign ${valueType.toString()} to ${declaredType.toString()}`,
             node.position,
@@ -991,9 +995,11 @@ class SemanticAnalyzer {
         return leftType
       }
 
-      if (!sameType(leftType, rightType)) {
+      // Allow compatible numeric types (e.g., f32 + f64 -> f64)
+      const commonType = getCommonType(leftType, rightType)
+      if (!commonType) {
         this.emitError(
-          `Operator '${operator}' requires same types, got ${leftType.toString()} and ${rightType.toString()}`,
+          `Operator '${operator}' requires compatible types, got ${leftType.toString()} and ${rightType.toString()}`,
           node.position,
         )
         return leftType
@@ -1005,7 +1011,7 @@ class SemanticAnalyzer {
         }
       }
 
-      return leftType
+      return commonType
     }
 
     if (comparisonOperators.includes(operator)) {

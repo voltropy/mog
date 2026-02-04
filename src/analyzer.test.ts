@@ -197,14 +197,14 @@ describe("Semantic Analyzer - Type Checking: Binary Operations", () => {
     expect(errors).toEqual([])
   })
 
-  test("rejects addition of different numeric types", () => {
+  test("allows addition of compatible numeric types via widening", () => {
     const ast = program(
       varDecl("x", new IntegerType("i32"), num(5, new IntegerType("i32"))),
       varDecl("y", new FloatType("f32"), binary(ident("x"), "+", num(10.0, new FloatType("f32")))),
     )
     const analyzer = new SemanticAnalyzer()
     const errors = analyzer.analyze(ast)
-    expect(errors.some((e: SemanticError) => e.message.includes("Operator '+' requires same types"))).toBe(true)
+    expect(errors).toEqual([])
   })
 
   test("allows comparison of same numeric types", () => {

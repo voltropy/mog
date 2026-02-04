@@ -262,10 +262,13 @@ class LLVMIRGenerator {
         }
         break
       }
-      case "Assignment":
+      case "Assignment": {
         const value = this.generateExpression(ir, statement.value)
-        ir.push(`  store i64 ${value}, ptr %${statement.name}`)
+        const varType = this.variableTypes.get(statement.name)
+        const llvmType = this.toLLVMType(varType)
+        ir.push(`  store ${llvmType} ${value}, ptr %${statement.name}`)
         break
+      }
       case "ExpressionStatement":
         this.generateExpression(ir, statement.expression)
         break
@@ -320,8 +323,28 @@ class LLVMIRGenerator {
     switch (expr.type) {
       case "AssignmentExpression":
         return this.generateAssignmentExpression(ir, expr)
-      case "NumberLiteral":
-        return `${expr.value}`
+      case "NumberLiteral": {
+        // Handle float literals - convert to LLVM hex float format
+        const val = String(expr.value)
+        // Check if it's a float literal (has decimal point or exponent)
+        const isFloat = val.includes(".") || val.toLowerCase().includes("e")
+        if (isFloat) {
+          const numVal = parseFloat(val)
+          // Use DataView to get IEEE 754 bit pattern for double precision
+          const buffer = new ArrayBuffer(8)
+          new DataView(buffer).setFloat64(0, numVal, false) // big-endian
+          const bits = new DataView(buffer).getBigUint64(0, false)
+          return `0x${bits.toString(16).padStart(16, '0')}`
+        }
+        // Integer literal - parse octal if needed
+        let intVal: number
+        if (val.startsWith("0") && val.length > 1) {
+          intVal = parseInt(val, 8)
+        } else {
+          intVal = parseInt(val, 10)
+        }
+        return `${intVal}`
+      }
       case "POSIXConstant":
         return `${expr.value}`
       case "StringLiteral": {
@@ -336,9 +359,15 @@ class LLVMIRGenerator {
         const name = expr.name
         const ptrReg = `%${name}_local`
         const valReg = `%${this.valueCounter++}`
-        
+
         const varType = this.variableTypes.get(name)
         const isPointerLike = varType?.type === "ArrayType" || varType?.type === "PointerType"
+
+        // Determine LLVM type for loading
+        let llvmLoadType = "i64"
+        if (varType?.type === "FloatType") {
+          llvmLoadType = varType.kind === "f32" ? "float" : "double"
+        }
 
         if (this.currentFunction && this.currentFunction.params.find((p) => p.name === name)) {
           if (isPointerLike) {
@@ -346,7 +375,7 @@ class LLVMIRGenerator {
             ir.push(`  ${loaded} = load ptr, ptr ${ptrReg}`)
             return loaded
           }
-          ir.push(`  ${valReg} = load i64, ptr ${ptrReg}`)
+          ir.push(`  ${valReg} = load ${llvmLoadType}, ptr ${ptrReg}`)
           return valReg
         }
 
@@ -356,7 +385,7 @@ class LLVMIRGenerator {
           return loaded
         }
 
-        ir.push(`  ${valReg} = load i64, ptr %${name}`)
+        ir.push(`  ${valReg} = load ${llvmLoadType}, ptr %${name}`)
         return valReg
       }
       case "BinaryExpression":
@@ -502,9 +531,9 @@ class LLVMIRGenerator {
     }
 
     const opMap: Record<string, string[]> = {
-      "+": ["add i64", "add"],
-      "-": ["sub i64", "sub"],
-      "*": ["mul i64", "mul"],
+      "+": ["add i64", "fadd"],
+      "-": ["sub i64", "fsub"],
+      "*": ["mul i64", "fmul"],
       "/": ["sdiv i64", "fdiv"],
       "%": ["srem i64", "frem"],
       "|": ["or i64", "or"],
@@ -522,11 +551,13 @@ class LLVMIRGenerator {
       "!=": ["icmp ne i64", "fcmp one"],
     }
 
-    const isFloat = expr.left.type === "FloatLiteral"
+    // Determine if operation is float-based by checking operand types
+    const isFloat = this.isFloatOperand(expr.left) || this.isFloatOperand(expr.right)
 
     if (cmpMap[expr.operator]) {
       const [intOp, floatOp] = cmpMap[expr.operator]
-      const cmpOp = isFloat ? `${floatOp} ${left}, ${right}` : `${intOp} ${left}, ${right}`
+      const floatType = isFloat ? this.getFloatTypeSize(expr) : "float"
+      const cmpOp = isFloat ? `${floatOp} ${floatType} ${left}, ${right}` : `${intOp} ${left}, ${right}`
       const boolReg = `%${this.valueCounter++}`
       ir.push(`  ${boolReg} = ${cmpOp}`)
       const extReg = `%${this.valueCounter++}`
@@ -535,9 +566,13 @@ class LLVMIRGenerator {
     }
 
     const [intOp, floatOp] = opMap[expr.operator]
-    const op = isFloat ? `${floatOp} ${left}, ${right}` : `${intOp} ${left}, ${right}`
+    if (isFloat) {
+      const floatType = this.getFloatTypeSize(expr)
+      ir.push(`  ${reg} = ${floatOp} ${floatType} ${left}, ${right}`)
+    } else {
+      ir.push(`  ${reg} = ${intOp} ${left}, ${right}`)
+    }
 
-    ir.push(`  ${reg} = ${op}`)
     return reg
   }
 
@@ -722,11 +757,16 @@ class LLVMIRGenerator {
     const arg = expr.args?.[0] || expr.arguments?.[0]
     let actualFunc = funcName
 
+    // Determine argument type - try resultType first, then variableTypes for identifiers
+    let argType = arg?.resultType?.type
+    if (!argType && arg?.type === "Identifier") {
+      const varType = this.variableTypes.get(arg.name)
+      argType = varType?.type
+    }
+    argType = argType || "IntegerType"
+
     // If generic print/println, determine specific version based on type
     if (funcName === "print" || funcName === "println") {
-      const argType = arg?.resultType?.type || "IntegerType"
-      const kind = arg?.resultType?.kind || "i64"
-
       if (argType === "FloatType") {
         actualFunc = funcName === "print" ? "print_f64" : "println_f64"
       } else if (argType === "UnsignedType") {
@@ -736,7 +776,12 @@ class LLVMIRGenerator {
       }
     }
 
-    ir.push(`  call void @${actualFunc}(i64 ${args[0]})`)
+    // Generate call with appropriate type
+    if (argType === "FloatType") {
+      ir.push(`  call void @${actualFunc}(double ${args[0]})`)
+    } else {
+      ir.push(`  call void @${actualFunc}(i64 ${args[0]})`)
+    }
     return ""
   }
 
@@ -767,7 +812,9 @@ class LLVMIRGenerator {
       // obj is already a ptr for tables
       ir.push(`  call void @table_set(ptr ${obj}, ptr ${keyName}, i64 ${target.property.length}, i64 ${valueReg})`)
     } else {
-      ir.push(`  store i64 ${valueReg}, ptr %${name}`)
+      const varType = this.variableTypes.get(name)
+      const llvmType = this.toLLVMType(varType)
+      ir.push(`  store ${llvmType} ${valueReg}, ptr %${name}`)
     }
     
     return valueReg
@@ -957,6 +1004,10 @@ class LLVMIRGenerator {
     ir.push(`  br i1 ${condBool}, label %${trueLabel}, label %${falseLabel}`)
     ir.push("")
 
+    // Save blockTerminated state - branches with terminators shouldn't affect parent block
+    const prevTerminated = this.blockTerminated
+    this.blockTerminated = false
+
     ir.push(`${trueLabel}:`)
     const trueBranch = statement.trueBranch || statement.consequent
     const trueHadTerminator = this.generateBlockWithTerminator(ir, trueBranch)
@@ -979,9 +1030,16 @@ class LLVMIRGenerator {
       ir.push("")
     }
 
-    const needsEndLabel = !falseBranch || (falseBranch && !trueHadTerminator && !falseHadTerminator)
+    // End label is needed if either branch doesn't have a terminator
+    // (because those branches will branch to the end label)
+    const needsEndLabel = !trueHadTerminator || !falseHadTerminator
     if (needsEndLabel) {
       ir.push(`${endLabel}:`)
+    }
+
+    // Restore blockTerminated state unless both branches terminate
+    if (!(trueHadTerminator && falseHadTerminator)) {
+      this.blockTerminated = prevTerminated
     }
   }
 
@@ -1205,6 +1263,11 @@ class LLVMIRGenerator {
       const localReg = `%${param.name}_local`
       ir.push(`  ${localReg} = alloca ${param.type}`)
       ir.push(`  store ${param.type} ${paramReg}, ptr ${localReg}`)
+      // Track parameter type for later loads
+      const paramType = params.find((p: any) => p.name === param.name)?.paramType
+      if (paramType) {
+        this.variableTypes.set(param.name, paramType)
+      }
     }
     ir.push("")
 
@@ -1351,7 +1414,8 @@ class LLVMIRGenerator {
       case "UnsignedType":
         return type.kind as LLVMType
       case "FloatType":
-        return type.kind === "f32" ? "f32" : "f64"
+        // LLVM uses 'float' and 'double' as type names
+        return type.kind === "f32" ? "float" : "double"
       case "ArrayType":
         return "ptr"
       case "TableType":
@@ -1372,6 +1436,75 @@ private getIntBits(type: LLVMType): number {
 
   private getFloatBits(type: LLVMType): number {
     return type === "f64" || type === "double" ? 64 : 32
+  }
+
+  private isFloatType(llvmType: LLVMType): boolean {
+    return llvmType === "float" || llvmType === "double" || llvmType === "f32" || llvmType === "f64"
+  }
+
+  private isFloatOperand(expr: any): boolean {
+    if (!expr) return false
+
+    // Check literal type annotation
+    if (expr.literalType?.type === "FloatType") return true
+
+    // Check if it's a float literal value
+    if (typeof expr.value === "number" && !Number.isInteger(expr.value)) return true
+    if (typeof expr.value === "string") {
+      const val = expr.value.toLowerCase()
+      if (val.includes(".") || val.includes("e")) return true
+    }
+
+    // Check if it's an identifier with float type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      return varType?.type === "FloatType"
+    }
+
+    // For binary expressions, check left operand recursively
+    if (expr.type === "BinaryExpression") {
+      return this.isFloatOperand(expr.left) || this.isFloatOperand(expr.right)
+    }
+
+    return false
+  }
+
+  private getFloatTypeSize(expr: any): "float" | "double" {
+    if (!expr) return "float"
+
+    // Check literal type annotation
+    if (expr.literalType?.type === "FloatType") {
+      return expr.literalType.kind === "f64" ? "double" : "float"
+    }
+
+    // Check if it's an identifier with float type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "FloatType") {
+        return varType.kind === "f64" ? "double" : "float"
+      }
+    }
+
+    // For binary expressions, check operands recursively
+    if (expr.type === "BinaryExpression") {
+      const leftSize = this.getFloatTypeSize(expr.left)
+      const rightSize = this.getFloatTypeSize(expr.right)
+      // If any operand is double, use double
+      return (leftSize === "double" || rightSize === "double") ? "double" : "float"
+    }
+
+    // For function calls, check the function's return type
+    if (expr.type === "CallExpression") {
+      const funcName = expr.function?.name || expr.callee?.name
+      if (funcName) {
+        const func = this.functions.get(funcName)
+        if (func?.returnType === "double") {
+          return "double"
+        }
+      }
+    }
+
+    return "float" // default to float
   }
 }
 

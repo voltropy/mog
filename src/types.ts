@@ -254,6 +254,18 @@ function canCoerce(from: Type, to: Type): boolean {
   return compatibleTypes(from, to)
 }
 
+// For literal assignment: allows float widening (f32 literal -> f64 variable)
+function canCoerceWithWidening(from: Type, to: Type): boolean {
+  if (compatibleTypes(from, to)) return true
+
+  // Allow float widening (e.g., f32 -> f64)
+  if (isFloatType(from) && isFloatType(to)) {
+    return from.bits <= to.bits
+  }
+
+  return false
+}
+
 function getCommonType(a: Type, b: Type): Type | null {
   if (sameType(a, b)) return a
 
@@ -422,6 +434,7 @@ export {
   sameType,
   compatibleTypes,
   canCoerce,
+  canCoerceWithWidening,
   getCommonType,
   checkBounds,
   inferType,
