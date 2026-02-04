@@ -1,5 +1,0 @@
-fn main() -> i64 {
-  x: i64 = 10;
-  y: i64 = 20;
-  return x + y;
-}
