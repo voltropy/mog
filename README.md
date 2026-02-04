@@ -1,18 +1,25 @@
 # AlgolScript
 
-A TypeScript-based compiler for AlgolScript, a modern programming language with Algol-68 roots that compiles to LLVM IR.
+A systems programming language that combines the safety and ergonomics of modern languages with direct access to low-level primitives. AlgolScript compiles to native code via LLVM, featuring automatic memory management through a compacting garbage collector, strong static typing, and seamless POSIX integration.
+
+## Philosophy
+
+AlgolScript is designed for programmers who want:
+- **Safety without overhead**: Garbage collection eliminates memory leaks and use-after-free bugs without the complexity of ownership systems
+- **Low-level control**: Direct access to POSIX system calls, pointers, and manual memory when needed
+- **Familiar syntax**: C-style syntax with modern conveniences—no syntactic surprises
+- **Native performance**: Compiles to efficient LLVM IR with minimal runtime overhead
 
 ## Features
 
-- **Complete parser** with proper operator precedence
-- **Semantic analysis** with type checking
-- **LLVM IR code generation**
-- **Runtime library** with GC, arrays, and tables
-- **Full test suite** (376 tests, all passing)
-- **I/O functions** - `print_i64`, `println_i64`, `input_i64` for console I/O
-- **Modern syntax** with lowercase keywords and curly braces
-- **Optional outer braces** - write code at file level without wrapping in `{ }`
-- **main() function support** - define a `fn main() -> i64` entry point with exit codes
+- **Strong static typing** - Signed/unsigned integers (8-256 bit), floats (8-256 bit), arrays, tables, pointers, and strings
+- **Automatic memory management** - Compacting GC with shadow stack for safe, efficient allocation
+- **Native compilation** - LLVM IR backend produces optimized executables
+- **Zero-cost POSIX bindings** - Direct filesystem, process, and I/O system calls
+- **Modern control flow** - First-class functions, nested functions, closures via GC handles
+- **Generic I/O** - Type-inferred print/println and formatted input
+- **Comprehensive test suite** - 376 tests ensuring reliability
+- **Minimal runtime** - Small C runtime (~2KB) with no external dependencies
 
 ## Installation
 
