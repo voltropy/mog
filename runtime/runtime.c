@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 /* Platform-specific includes for page allocation */
 #ifdef _WIN32
@@ -10,6 +11,21 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+
+/* --- Timing utilities --- */
+static uint64_t get_nanos(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+/* --- GC Benchmarking --- */
+static uint64_t gc_total_mark_time = 0;
+static uint64_t gc_total_sweep_time = 0;
+static size_t gc_total_freed = 0;
+static size_t gc_last_freed = 0;
+static uint64_t gc_last_mark_time = 0;
+static uint64_t gc_last_sweep_time = 0;
 
 /* --- Object Kind Enum --- */
 typedef enum {
@@ -113,6 +129,8 @@ void gc_mark(Block* ptr);
 void gc_mark_roots(void);
 void gc_sweep(void);
 void gc_stats(void);
+void gc_benchmark_stats(void);
+void gc_reset_stats(void);
 void gc_push_frame(void);
 void gc_pop_frame(void);
 void gc_add_root(void** slot);
@@ -526,8 +544,24 @@ void gc_sweep(void) {
 }
 
 void gc_collect(void) {
+  uint64_t start = get_nanos();
   gc_mark_roots();
+  gc_last_mark_time = get_nanos() - start;
+  gc_total_mark_time += gc_last_mark_time;
+  
+  size_t pre_sweep_live = gc_live_bytes;
+  size_t allocated_since_gc = gc_allocated_bytes;
+  uint64_t sweep_start = get_nanos();
   gc_sweep();
+  gc_last_sweep_time = get_nanos() - sweep_start;
+  gc_total_sweep_time += gc_last_sweep_time;
+  
+  /* Freed = allocated since last GC - (new_live - old_live)
+     = bytes allocated that didn't survive marking */
+  size_t newly_live = gc_live_bytes > pre_sweep_live ? gc_live_bytes - pre_sweep_live : 0;
+  gc_last_freed = allocated_since_gc > newly_live ? allocated_since_gc - newly_live : 0;
+  gc_total_freed += gc_last_freed;
+  
   gc_total_collections++;
   
   size_t new_threshold = (size_t)(gc_live_bytes * gc_growth_factor);
@@ -543,6 +577,28 @@ void gc_collect(void) {
 void gc_stats(void) {
   fprintf(stderr, "[GC] collections=%zu allocated=%zu live=%zu threshold=%zu\n",
           gc_total_collections, gc_allocated_bytes, gc_live_bytes, alloc_threshold);
+}
+
+void gc_benchmark_stats(void) {
+  fprintf(stderr, "[GC-BENCH] total_collections=%zu\n", gc_total_collections);
+  fprintf(stderr, "[GC-BENCH] total_mark_time_ms=%.3f\n", gc_total_mark_time / 1000000.0);
+  fprintf(stderr, "[GC-BENCH] total_sweep_time_ms=%.3f\n", gc_total_sweep_time / 1000000.0);
+  fprintf(stderr, "[GC-BENCH] total_freed_bytes=%zu\n", gc_total_freed);
+  fprintf(stderr, "[GC-BENCH] avg_mark_time_us=%.3f\n", gc_total_collections > 0 ? (gc_total_mark_time / 1000.0) / gc_total_collections : 0);
+  fprintf(stderr, "[GC-BENCH] avg_sweep_time_us=%.3f\n", gc_total_collections > 0 ? (gc_total_sweep_time / 1000.0) / gc_total_collections : 0);
+  fprintf(stderr, "[GC-BENCH] last_collection_freed=%zu\n", gc_last_freed);
+  fprintf(stderr, "[GC-BENCH] last_mark_time_us=%.3f\n", gc_last_mark_time / 1000.0);
+  fprintf(stderr, "[GC-BENCH] last_sweep_time_us=%.3f\n", gc_last_sweep_time / 1000.0);
+}
+
+void gc_reset_stats(void) {
+  gc_total_collections = 0;
+  gc_total_mark_time = 0;
+  gc_total_sweep_time = 0;
+  gc_total_freed = 0;
+  gc_last_freed = 0;
+  gc_last_mark_time = 0;
+  gc_last_sweep_time = 0;
 }
 
 /* --- Array Implementation --- */
@@ -799,6 +855,51 @@ void* matmul(void* a_ptr, void* b_ptr) {
         }
         *(double*)(c_data + (i * b_cols + j) * 8) = sum;
       }
+    }
+  }
+  
+  return c;
+}
+
+/* Matrix addition - element-wise for 2D arrays */
+void* matrix_add(void* a_ptr, void* b_ptr) {
+  Array* a = (Array*)a_ptr;
+  Array* b = (Array*)b_ptr;
+  
+  if (!a || !b) return NULL;
+  
+  /* Get dimensions - treat 1D as row vector */
+  uint64_t a_rows = a->dimensions[0];
+  uint64_t a_cols = (a->dimension_count > 1) ? a->dimensions[1] : 1;
+  uint64_t b_rows = b->dimensions[0];
+  uint64_t b_cols = (b->dimension_count > 1) ? b->dimensions[1] : 1;
+  
+  /* Dimensions must match */
+  if (a_rows != b_rows || a_cols != b_cols) return NULL;
+  
+  /* Element size must match */
+  if (a->element_size != b->element_size) return NULL;
+  
+  /* Create result array */
+  uint64_t dims[2] = {a_rows, a_cols};
+  Array* c = (Array*)array_alloc(a->element_size, 2, dims);
+  
+  uint8_t* a_data = (uint8_t*)a->data;
+  uint8_t* b_data = (uint8_t*)b->data;
+  uint8_t* c_data = (uint8_t*)c->data;
+  uint64_t total = a_rows * a_cols;
+  
+  if (a->element_size == 4) {  /* f32 */
+    for (uint64_t i = 0; i < total; i++) {
+      float av = *(float*)(a_data + i * 4);
+      float bv = *(float*)(b_data + i * 4);
+      *(float*)(c_data + i * 4) = av + bv;
+    }
+  } else if (a->element_size == 8) {  /* f64 */
+    for (uint64_t i = 0; i < total; i++) {
+      double av = *(double*)(a_data + i * 8);
+      double bv = *(double*)(b_data + i * 8);
+      *(double*)(c_data + i * 8) = av + bv;
     }
   }
   

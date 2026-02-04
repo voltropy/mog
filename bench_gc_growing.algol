@@ -1,0 +1,17 @@
+// GC Benchmark 2: Growing live set - more iterations
+// Keeps accumulating arrays
+
+fn main() -> i64 {
+    gc_reset_stats();
+    
+    i: i64 = 0;
+    while (i < 100000) {
+        // Create garbage arrays
+        garbage: [i64] = [9, 8, 7, 6, 5];
+        
+        i := i + 1;
+    }
+    
+    gc_benchmark_stats();
+    return 0;
+}

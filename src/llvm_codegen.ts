@@ -29,6 +29,7 @@ class LLVMIRGenerator {
   private blockCounter = 0
   private valueCounter = 0
   private variableTypes: Map<string, any> = new Map()
+  private functionTypes: Map<string, any> = new Map()
   private loopStack: { breakLabel: string; continueLabel: string }[] = []
   private blockTerminated = false
 
@@ -82,6 +83,10 @@ class LLVMIRGenerator {
     ir.push("")
 
     ir.push("; Function declarations")
+    // First pass: register all function types before generating code
+    for (const funcDecl of functionDeclarations) {
+      this.functionTypes.set(funcDecl.name, funcDecl.returnType)
+    }
     for (const funcDecl of functionDeclarations) {
       // Rename user's main() to @program_user to avoid conflict
       if (funcDecl.name === "main") {
@@ -213,6 +218,8 @@ class LLVMIRGenerator {
     ir.push("declare void @gc_collect()")
     ir.push("declare void @gc_push_frame()")
     ir.push("declare void @gc_pop_frame()")
+    ir.push("declare void @gc_benchmark_stats()")
+    ir.push("declare void @gc_reset_stats()")
     ir.push("")
 
     ir.push("; Declare array functions")
@@ -228,6 +235,7 @@ class LLVMIRGenerator {
     ir.push("declare float @dot_f32(ptr %a, ptr %b)")
     ir.push("declare double @dot_f64(ptr %a, ptr %b)")
     ir.push("declare ptr @matmul(ptr %a, ptr %b)")
+    ir.push("declare ptr @matrix_add(ptr %a, ptr %b)")
     ir.push("")
 
     ir.push("; Declare table functions")
@@ -538,6 +546,15 @@ class LLVMIRGenerator {
       return extReg
     }
 
+    // Check for matrix operations - both operands are 2D arrays
+    if (this.isMatrixOperation(expr.left, expr.right)) {
+      if (expr.operator === "*") {
+        return this.generateMatrixMultiplication(ir, left, right)
+      } else if (expr.operator === "+") {
+        return this.generateMatrixAddition(ir, left, right)
+      }
+    }
+
     // Check for vector operations - at least one operand is an array
     if (this.isVectorOperation(expr.left, expr.right)) {
       return this.generateVectorOperation(ir, expr, left, right)
@@ -786,6 +803,37 @@ class LLVMIRGenerator {
     return resultReg
   }
 
+  private isMatrixOperation(leftExpr: any, rightExpr: any): boolean {
+    // Check if BOTH operands are 2D arrays (matrices)
+    const leftArrayType = this.getExpressionArrayType(leftExpr)
+    const rightArrayType = this.getExpressionArrayType(rightExpr)
+
+    if (!leftArrayType || !rightArrayType) return false
+
+    // Check if both are 2D (have 2 dimensions)
+    const leftDims = leftExpr?.type === "Identifier" && leftExpr?.name
+      ? this.variableTypes.get(leftExpr.name)?.dimensions?.length || leftArrayType.dimensions?.length
+      : leftArrayType.dimensions?.length
+    const rightDims = rightExpr?.type === "Identifier" && rightExpr?.name
+      ? this.variableTypes.get(rightExpr.name)?.dimensions?.length || rightArrayType.dimensions?.length
+      : rightArrayType.dimensions?.length
+
+    // Treat as matrix if both have 2 dimensions
+    return leftDims === 2 && rightDims === 2
+  }
+
+  private generateMatrixMultiplication(ir: string[], leftReg: string, rightReg: string): string {
+    const resultReg = `%${this.valueCounter++}`
+    ir.push(`  ${resultReg} = call ptr @matmul(ptr ${leftReg}, ptr ${rightReg})`)
+    return resultReg
+  }
+
+  private generateMatrixAddition(ir: string[], leftReg: string, rightReg: string): string {
+    const resultReg = `%${this.valueCounter++}`
+    ir.push(`  ${resultReg} = call ptr @matrix_add(ptr ${leftReg}, ptr ${rightReg})`)
+    return resultReg
+  }
+
   private generateUnaryExpression(ir: string[], expr: any): string {
     const argument = expr.argument || expr.operand
     const value = this.generateExpression(ir, argument)
@@ -829,6 +877,13 @@ class LLVMIRGenerator {
       // Handle matmul function
       if (funcName === "matmul") {
         return this.generateMatmulCall(ir, expr, args)
+      }
+
+      // Handle GC benchmark functions
+      const gcBenchmarkFunctions = ["gc_reset_stats", "gc_benchmark_stats"]
+      if (gcBenchmarkFunctions.includes(funcName)) {
+        ir.push(`  call void @${funcName}()`)
+        return "0"
       }
 
       const funcInfo = this.functions.get(funcName)
@@ -1007,11 +1062,19 @@ class LLVMIRGenerator {
     const arg = expr.args?.[0] || expr.arguments?.[0]
     let actualFunc = funcName
 
-    // Determine argument type - try resultType first, then variableTypes for identifiers
+    // Determine argument type - try resultType first, then check function calls, then variableTypes
     let argType = arg?.resultType?.type
     if (!argType && arg?.type === "Identifier") {
       const varType = this.variableTypes.get(arg.name)
       argType = varType?.type
+    }
+    if (!argType && arg?.type === "CallExpression" && arg?.callee?.type === "Identifier") {
+      // Check if this is a call to a user-defined function and get its return type
+      const funcName = arg.callee.name
+      const funcType = this.functionTypes.get(funcName)
+      if (funcType) {
+        argType = funcType.type
+      }
     }
     argType = argType || "IntegerType"
 
@@ -1727,6 +1790,7 @@ class LLVMIRGenerator {
     }
 
     this.functions.set(name, func)
+    this.functionTypes.set(name, returnType)
     this.currentFunction = func
 
     const paramStr = llvmParams.map((p: LLVMValue) => `${p.type} %${p.name}`).join(", ")
@@ -2105,21 +2169,20 @@ private getIntBits(type: LLVMType): number {
   }
 
   private floatToIntBits(value: number, kind: string): string {
-    // Convert float value to integer bit pattern for i64 storage
+    // Convert float value to LLVM hex float format (e.g., 0x40091eb851eb851f for 3.14)
     switch (kind) {
       case "f32": {
         const buffer = new ArrayBuffer(4)
         new DataView(buffer).setFloat32(0, value, false)
         const bits = new DataView(buffer).getUint32(0, false)
-        // Zero-extend to i64
-        return `${bits}`
+        return `0x${bits.toString(16).padStart(8, '0')}`
       }
       case "f64":
       default: {
         const buffer = new ArrayBuffer(8)
         new DataView(buffer).setFloat64(0, value, false)
         const bits = new DataView(buffer).getBigUint64(0, false)
-        return `${bits}`
+        return `0x${bits.toString(16).padStart(16, '0')}`
       }
     }
   }

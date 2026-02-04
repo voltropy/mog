@@ -1,0 +1,18 @@
+// GC Benchmark 4: Table-heavy workload - more tables
+// Creates many tables
+
+fn main() -> i64 {
+    gc_reset_stats();
+    
+    i: i64 = 0;
+    while (i < 50000) {
+        // Create tables (both become garbage)
+        t: ptr = table_new(8);
+        temp: ptr = table_new(8);
+        
+        i := i + 1;
+    }
+    
+    gc_benchmark_stats();
+    return 0;
+}

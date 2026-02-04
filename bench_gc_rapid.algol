@@ -1,0 +1,16 @@
+// GC Benchmark 1: Rapid short-lived allocations
+// Creates many temporary arrays that become garbage quickly
+
+fn main() -> i64 {
+    gc_reset_stats();
+    
+    i: i64 = 0;
+    while (i < 100000) {
+        // Create temporary array - becomes garbage immediately
+        temp: [i64] = [1, 2, 3, 4, 5];
+        i := i + 1;
+    }
+    
+    gc_benchmark_stats();
+    return 0;
+}

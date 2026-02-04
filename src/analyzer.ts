@@ -477,6 +477,16 @@ class SemanticAnalyzer {
     for (const [name, func] of Object.entries(stringFunctions)) {
       this.symbolTable.declare(name, "function", func.returnType)
     }
+
+    // GC benchmark functions
+    const gcBenchmarkFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      gc_reset_stats: { params: [], returnType: voidType },
+      gc_benchmark_stats: { params: [], returnType: voidType },
+    }
+
+    for (const [name, func] of Object.entries(gcBenchmarkFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
   }
 
   private errors: SemanticError[] = []

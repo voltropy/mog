@@ -413,28 +413,17 @@ if (!this.checkType("RPAREN")) {
     // Handle array types that start with [ (e.g., [u8] or [f32; 3])
     let typeName: string
     if (this.checkType("LBRACKET")) {
-      // Parse array type like [u8], [i32], [f32; 3], etc.
-      this.advance() // consume [
-      const innerType = this.consume("TYPE", "Expected type inside array brackets").value
-      
-      // Check for fixed-size array syntax [type; size]
-      if (this.matchType("SEMICOLON")) {
-        const sizeToken = this.consume("NUMBER", "Expected size after ; in array type")
-        this.consume("RBRACKET", "Expected ] after array type")
-        typeName = `[${innerType}; ${sizeToken.value}]`
-      } else {
-        this.consume("RBRACKET", "Expected ] after array type")
-        typeName = `[${innerType}]`
-      }
+      // Parse array type like [u8], [i32], [f32; 3], or nested [[f64; 3]; 2], etc.
+      typeName = this.parseArrayTypeAnnotation()
     } else {
       let typeToken = this.consume("TYPE", "Expected type annotation")
       typeName = typeToken.value
     }
     
+    // Handle trailing [] for array of type (e.g., f64[][])
     while (this.matchType("LBRACKET")) {
-      typeName += "["
+      typeName += "[]"
       this.consume("RBRACKET", "Expected ] after array bracket")
-      typeName += "]"
     }
     
     const varType = this.parseType(typeName)
@@ -965,6 +954,33 @@ private comparison(): ExpressionNode {
       this.consume("RBRACKET", "Expected ] after array dimension");
     }
     return dimensions;
+  }
+
+  private parseArrayTypeAnnotation(): string {
+    // Parse array type like [u8], [i32; 5], or nested [[f64; 3]; 2]
+    this.consume("LBRACKET", "Expected [ to start array type")
+
+    // Check if this is a nested array type (starts with [)
+    if (this.checkType("LBRACKET")) {
+      // Nested array: [[innerType; innerSize]; outerSize]
+      const innerType = this.parseArrayTypeAnnotation()
+      this.consume("SEMICOLON", "Expected ; after inner array type")
+      const outerSize = this.consume("NUMBER", "Expected size after ; in array type").value
+      this.consume("RBRACKET", "Expected ] after array type")
+      return `[${innerType}; ${outerSize}]`
+    }
+
+    // Simple array type: [type] or [type; size]
+    const innerType = this.consume("TYPE", "Expected type inside array brackets").value
+
+    if (this.matchType("SEMICOLON")) {
+      const sizeToken = this.consume("NUMBER", "Expected size after ; in array type")
+      this.consume("RBRACKET", "Expected ] after array type")
+      return `[${innerType}; ${sizeToken.value}]`
+    } else {
+      this.consume("RBRACKET", "Expected ] after array type")
+      return `[${innerType}]`
+    }
   }
 
   private tableLiteral(): ExpressionNode {
