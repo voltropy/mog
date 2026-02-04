@@ -115,6 +115,19 @@ for variable := start to end {
 }
 ```
 
+#### Break and Continue
+
+```algol
+while (condition) {
+  if (some_condition) {
+    break;     // Exit the loop immediately
+  }
+  if (other_condition) {
+    continue;  // Skip to next iteration
+  }
+}
+```
+
 ### Operators
 
 - **Arithmetic**: `+`, `-`, `*`, `/`, `%`
@@ -314,15 +327,21 @@ rmdir("temp_dir");
 The repository includes several example programs:
 
 - `basic_features.algol` - Demonstrates variables, arithmetic, if/else, while, functions
-- `demo_print.algol` - Demonstrates print and I/O functions
 - `combined_features.algol` - All features combined without nested functions
 - `nested_operations.algol` - Nested loops, functions, conditionals
 - `fibonacci_tco.algol` - Tail-call optimized fibonacci
+- `fibonacci_exit.algol` - Fibonacci with exit code
 - `simple_loop.algol` - Minimal loop example
 - `while_loop.algol` - While loop demonstration
-- `factorial_recursive.algol` - Recursive factorial
 - `counter_loop.algol` - Simple counter loop
-- `test_arithmetic.algol` - Arithmetic operations
+- `countdown.algol` - Countdown loop example
+- `factorial_recursive.algol` - Recursive factorial
+- `add.algol` / `add_simple.algol` - Simple addition examples
+- `exit42.algol` / `exit127.algol` - Exit code examples
+- `success.algol` - Minimal success program
+- `main_example.algol` - main() function example
+- `test_continue.algol` - Continue statement example
+- `test_nested.algol` - Nested function example
 
 Try compiling one:
 
@@ -354,7 +373,10 @@ This formats all `.algol` files with 2-space indentation based on brace nesting.
 - `src/analyzer.ts` - Semantic analysis (type checking)
 - `src/compiler.ts` - Compiler orchestration
 - `src/llvm_codegen.ts` - LLVM IR code generation
-- `runtime/` - C runtime library
+- `src/linker.ts` - Links LLVM IR to executable
+- `src/stdlib.ts` - Standard library functions
+- `src/types.ts` - Type definitions
+- `runtime/` - C runtime library (GC, I/O, POSIX bindings)
 
 ## POSIX
 
