@@ -1,25 +1,27 @@
 # AlgolScript
 
-A systems programming language that combines the safety and ergonomics of modern languages with direct access to low-level primitives. AlgolScript compiles to native code via LLVM, featuring automatic memory management through a compacting garbage collector, strong static typing, and seamless POSIX integration.
+A programming language designed for the AI era. AlgolScript is built from the ground up to be **written and consumed by LLMs**, with native support for AI operations, n-dimensional arrays for machine learning, and a clean, predictable syntax that eliminates common programming pitfalls.
 
 ## Philosophy
 
-AlgolScript is designed for programmers who want:
-- **Safety without overhead**: Garbage collection eliminates memory leaks and use-after-free bugs without the complexity of ownership systems
-- **Low-level control**: Direct access to POSIX system calls, pointers, and manual memory when needed
-- **Familiar syntax**: C-style syntax with modern conveniences—no syntactic surprises
-- **Native performance**: Compiles to efficient LLVM IR with minimal runtime overhead
+AlgolScript is designed for a world where AI writes code:
+
+- **LLM-first**: Syntax and semantics optimized for LLM generation and understanding—minimizing ambiguity and maximizing predictability
+- **AI-native operations**: Built-in LLM calling and tensor operations for seamless AI integration
+- **PyTorch-ready**: Native n-dimensional arrays and auto-differentiation support (future) for ML workloads
+- **General-purpose power**: Compiled to native code via LLVM with strong static typing and Lua-like flexible tables
+- **No foot-guns**: No implicit type coercion, no surprising operator precedence—what you see is what you get
 
 ## Features
 
-- **Strong static typing** - Signed/unsigned integers (8-256 bit), floats (8-256 bit), arrays, tables, pointers, and strings
-- **Automatic memory management** - Compacting GC with shadow stack for safe, efficient allocation
-- **Native compilation** - LLVM IR backend produces optimized executables
-- **Zero-cost POSIX bindings** - Direct filesystem, process, and I/O system calls
-- **Modern control flow** - First-class functions, nested functions, closures via GC handles
-- **Generic I/O** - Type-inferred print/println and formatted input
+- **LLM-optimized syntax** - Predictable, unambiguous grammar designed for AI code generation
+- **Native nd-arrays** - N-dimensional arrays for machine learning and scientific computing
+- **Strong static typing** - Explicit types with no implicit coercion surprises
+- **Lua-like tables** - Flexible key-value stores that can represent arrays, objects, or hash maps
+- **AI integration** - Built-in LLM function calling as a native language feature
+- **Compiled performance** - LLVM backend produces optimized native executables
+- **Automatic memory management** - Garbage collection eliminates memory management complexity
 - **Comprehensive test suite** - 376 tests ensuring reliability
-- **Minimal runtime** - Small C runtime (~2KB) with no external dependencies
 
 ## Installation
 
@@ -158,6 +160,8 @@ while (condition) {
 - **Logical**: `not`, `!` (logical NOT)
 - **Assignment**: `:=`
 
+All operators have clear, explicit precedence—no surprises.
+
 ### I/O Functions
 
 #### Print Functions
@@ -190,7 +194,7 @@ Type-specific variants:
 - `input_f64` - Read 64-bit float
 - `input_string` - Read string (returns pointer)
 
-### Arrays
+### Arrays and N-Dimensional Arrays
 
 ```algol
 // 1D arrays
@@ -205,9 +209,14 @@ val: i64 = mat[0][1];  // Returns 2
 // Array fill syntax - create array with repeated value
 zeros: [i64; 5] = [0; 5];      // [0, 0, 0, 0, 0]
 fives: [f64; 3] = [5.0; 3];    // [5.0, 5.0, 5.0]
+
+// N-dimensional arrays for ML workloads (future)
+// tensor: f64[3][224][224] = ...;  // For image processing
 ```
 
-### Tables
+### Tables (Lua-like)
+
+Flexible key-value stores that can represent arrays, objects, or hash maps:
 
 Table literals with member access:
 ```algol
