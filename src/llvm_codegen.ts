@@ -412,6 +412,8 @@ class LLVMIRGenerator {
         return this.generateCallExpression(ir, expr)
       case "ArrayLiteral":
         return this.generateArrayLiteral(ir, expr)
+      case "ArrayFill":
+        return this.generateArrayFill(ir, expr)
       case "TableLiteral":
         return this.generateTableLiteral(ir, expr)
       case "MemberExpression":
@@ -1246,6 +1248,91 @@ class LLVMIRGenerator {
         }
       }
     }
+
+    return elementReg
+  }
+
+  private generateArrayFill(ir: string[], expr: any): string {
+    // Generate array filled with repeated value: [value; count]
+    const countExpr = expr.count
+    const valueExpr = expr.value
+
+    // Get element type from resultType
+    const elementType = expr.resultType?.elementType
+    let elementSize = 8 // default to 8 bytes for i64
+    if (elementType?.type === "FloatType") {
+      elementSize = elementType.kind === "f64" ? 8 : 4
+    }
+
+    // Determine count - try to get compile-time constant
+    let countValue: number | null = null
+    if (countExpr.type === "NumberLiteral" || countExpr.type === "IntegerLiteral") {
+      countValue = parseInt(countExpr.value)
+    }
+
+    // Allocate array with the specified count
+    const countReg = `%${this.valueCounter++}`
+    if (countValue !== null) {
+      ir.push(`  ${countReg} = alloca [1 x i64]`)
+      const countPtr = `%${this.valueCounter++}`
+      ir.push(`  ${countPtr} = getelementptr [1 x i64], ptr ${countReg}, i64 0, i64 0`)
+      ir.push(`  store i64 ${countValue}, ptr ${countPtr}`)
+    } else {
+      // Runtime count
+      const runtimeCount = this.generateExpression(ir, countExpr)
+      ir.push(`  ${countReg} = alloca [1 x i64]`)
+      const countPtr = `%${this.valueCounter++}`
+      ir.push(`  ${countPtr} = getelementptr [1 x i64], ptr ${countReg}, i64 0, i64 0`)
+      ir.push(`  store i64 ${runtimeCount}, ptr ${countPtr}`)
+    }
+
+    const elementReg = `%${this.valueCounter++}`
+    ir.push(`  ${elementReg} = call ptr @array_alloc(i64 ${elementSize}, i64 1, ptr ${countReg})`)
+
+    // Fill the array with the value
+    const value = this.generateExpression(ir, valueExpr)
+
+    // Loop to fill array
+    const loopStartLabel = this.nextLabel()
+    const loopBodyLabel = this.nextLabel()
+    const loopEndLabel = this.nextLabel()
+
+    const iReg = `%${this.valueCounter++}`
+    ir.push(`  ${iReg} = alloca i64`)
+    ir.push(`  store i64 0, ptr ${iReg}`)
+
+    ir.push(`${loopStartLabel}:`)
+    const currentI = `%${this.valueCounter++}`
+    ir.push(`  ${currentI} = load i64, ptr ${iReg}`)
+    const cmpResult = `%${this.valueCounter++}`
+    if (countValue !== null) {
+      ir.push(`  ${cmpResult} = icmp slt i64 ${currentI}, i64 ${countValue}`)
+    } else {
+      const runtimeCount = this.generateExpression(ir, countExpr)
+      ir.push(`  ${cmpResult} = icmp slt i64 ${currentI}, i64 ${runtimeCount}`)
+    }
+    ir.push(`  br i1 ${cmpResult}, label %${loopBodyLabel}, label %${loopEndLabel}`)
+
+    ir.push(`${loopBodyLabel}:`)
+
+    // Store value at current index
+    if (elementType?.type === "FloatType") {
+      if (elementType.kind === "f32") {
+        ir.push(`  call void @array_set_f32(ptr ${elementReg}, i64 ${currentI}, float ${value})`)
+      } else {
+        ir.push(`  call void @array_set_f64(ptr ${elementReg}, i64 ${currentI}, double ${value})`)
+      }
+    } else {
+      ir.push(`  call void @array_set(ptr ${elementReg}, i64 ${currentI}, i64 ${value})`)
+    }
+
+    // Increment counter
+    const nextI = `%${this.valueCounter++}`
+    ir.push(`  ${nextI} = add i64 ${currentI}, 1`)
+    ir.push(`  store i64 ${nextI}, ptr ${iReg}`)
+    ir.push(`  br label %${loopStartLabel}`)
+
+    ir.push(`${loopEndLabel}:`)
 
     return elementReg
   }

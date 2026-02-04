@@ -141,6 +141,7 @@ type ExpressionNode =
   | StringLiteralNode
   | TemplateLiteralNode
   | ArrayLiteralNode
+  | ArrayFillNode
   | TableLiteralNode
   | BinaryExpressionNode
   | UnaryExpressionNode
@@ -179,6 +180,12 @@ interface TemplateLiteralNode extends ASTNode {
 interface ArrayLiteralNode extends ASTNode {
   type: "ArrayLiteral"
   elements: ExpressionNode[]
+}
+
+interface ArrayFillNode extends ASTNode {
+  type: "ArrayFill"
+  value: ExpressionNode
+  count: ExpressionNode
 }
 
 interface TableLiteralNode extends ASTNode {
@@ -818,6 +825,9 @@ class SemanticAnalyzer {
       case "ArrayLiteral":
         result = this.visitArrayLiteral(node as ArrayLiteralNode)
         break
+      case "ArrayFill":
+        result = this.visitArrayFill(node as ArrayFillNode)
+        break
       case "TableLiteral":
         result = this.visitTableLiteral(node as TableLiteralNode)
         break
@@ -954,6 +964,27 @@ class SemanticAnalyzer {
       resultType = new ArrayType(commonType, [node.elements.length])
     }
     return resultType
+  }
+
+  private visitArrayFill(node: ArrayFillNode): Type | null {
+    // Check that count is an integer type
+    const countType = this.visitExpression(node.count)
+    if (countType && !isIntegerType(countType) && !isUnsignedType(countType)) {
+      this.emitError(
+        `Array fill count must be an integer type, got ${countType.toString()}`,
+        node.count.position
+      )
+    }
+
+    // Get the element type from the value
+    const elementType = this.visitExpression(node.value)
+    if (!elementType) {
+      return null
+    }
+
+    // The count needs to be a compile-time constant for now
+    // Return an array type with the element type but unknown dimensions
+    return new ArrayType(elementType, null)
   }
 
   private visitTableLiteral(node: TableLiteralNode): Type | null {

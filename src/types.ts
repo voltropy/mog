@@ -254,7 +254,7 @@ function canCoerce(from: Type, to: Type): boolean {
   return compatibleTypes(from, to)
 }
 
-// For literal assignment: allows float widening and array literal element coercion
+// For literal assignment: allows float widening, array literal/fill element coercion
 function canCoerceWithWidening(from: Type, to: Type): boolean {
   if (compatibleTypes(from, to)) return true
 
@@ -280,6 +280,8 @@ function canCoerceWithWidening(from: Type, to: Type): boolean {
 
   return false
 }
+
+
 
 function getCommonType(a: Type, b: Type): Type | null {
   if (sameType(a, b)) return a

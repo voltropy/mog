@@ -927,12 +927,43 @@ private comparison(): ExpressionNode {
 
   private arrayLiteral(): ExpressionNode {
     const start = this.previous().position.start
-    const elements: ExpressionNode[] = []
 
-    if (!this.checkType("RBRACKET")) {
-      do {
-        elements.push(this.expression())
-      } while (this.matchType("COMMA"))
+    // Check for empty array []
+    if (this.checkType("RBRACKET")) {
+      this.consume("RBRACKET", "Expected ] after array elements")
+      return {
+        type: "ArrayLiteral",
+        elements: [],
+        position: {
+          start,
+          end: this.lastPosition(),
+        },
+      }
+    }
+
+    // Parse first element
+    const firstExpr = this.expression()
+
+    // Check if this is an array fill syntax: [value; count]
+    if (this.matchType("SEMICOLON")) {
+      const countExpr = this.expression()
+      this.consume("RBRACKET", "Expected ] after array fill count")
+
+      return {
+        type: "ArrayFill",
+        value: firstExpr,
+        count: countExpr,
+        position: {
+          start,
+          end: this.lastPosition(),
+        },
+      }
+    }
+
+    // Regular array literal: [elem1, elem2, ...]
+    const elements: ExpressionNode[] = [firstExpr]
+    while (this.matchType("COMMA")) {
+      elements.push(this.expression())
     }
 
     this.consume("RBRACKET", "Expected ] after array elements")
