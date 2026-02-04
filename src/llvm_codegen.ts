@@ -551,6 +551,9 @@ class LLVMIRGenerator {
       "%": ["srem i64", "frem"],
       "|": ["or i64", "or"],
       "&": ["and i64", "and"],
+      "^": ["xor i64", "xor"],
+      "<<": ["shl i64", "shl"],
+      ">>": ["ashr i64", "ashr"],
     }
 
     // Comparison operators return i1, need to extend to i64
@@ -792,6 +795,8 @@ class LLVMIRGenerator {
       ir.push(`  ${reg} = sub i64 0, ${value}`)
     } else if (expr.operator === "!") {
       ir.push(`  ${reg} = xor i64 ${value}, 1`)
+    } else if (expr.operator === "~") {
+      ir.push(`  ${reg} = xor i64 ${value}, -1`)
     }
 
     return reg
@@ -1039,36 +1044,78 @@ class LLVMIRGenerator {
     const valueReg = this.generateExpression(ir, value)
     
     if (target && target.type === "IndexExpression") {
-      const array = this.generateExpression(ir, target.object)
+      const obj = this.generateExpression(ir, target.object)
       const index = this.generateExpression(ir, target.index)
-      // Handle nested array access
-      const isNestedIndex = target.object?.type === "IndexExpression"
-      let arrayPtr = array
-      if (isNestedIndex) {
-        const r = `%${this.valueCounter++}`
-        ir.push(`  ${r} = inttoptr i64 ${array} to ptr`)
-        arrayPtr = r
-      }
 
-      // Determine element type to use appropriate setter
-      const elementType = this.getArrayElementType(target.object)
+      // Check if this is a table assignment (table[key] = value)
+      if (this.isTableType(target.object)) {
+        // Table assignment: table[key] := value
+        // The index is the key - could be string or integer
+        const keyExpr = target.index
+        let keyPtr: string
+        let keyLen: string
 
-      if (elementType?.type === "FloatType") {
-        if (elementType.kind === "f32") {
-          // Convert i64 value to float
-          const floatReg = `%${this.valueCounter++}`
-          ir.push(`  ${floatReg} = uitofp i64 ${valueReg} to float`)
-          ir.push(`  call void @array_set_f32(ptr ${arrayPtr}, i64 ${index}, float ${floatReg})`)
-        } else if (elementType.kind === "f64") {
-          // Convert i64 value to double
-          const doubleReg = `%${this.valueCounter++}`
-          ir.push(`  ${doubleReg} = uitofp i64 ${valueReg} to double`)
-          ir.push(`  call void @array_set_f64(ptr ${arrayPtr}, i64 ${index}, double ${doubleReg})`)
+        if (keyExpr.type === "StringLiteral") {
+          // String key: use string literal directly
+          const escaped = keyExpr.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+          keyPtr = `@key_str_${this.stringCounter++}`
+          const strDef = `${keyPtr} = private unnamed_addr constant [${keyExpr.value.length + 1} x i8] c"${escaped}\\00"`
+          this.stringConstants.push(strDef)
+          keyLen = String(keyExpr.value.length)
+        } else if (keyExpr.type === "Identifier") {
+          // Variable key - assume it's a string, use strlen to get length
+          const keyVar = this.generateExpression(ir, keyExpr)
+          keyPtr = keyVar
+          const lenReg = `%${this.valueCounter++}`
+          ir.push(`  ${lenReg} = call i64 @string_length(ptr ${keyVar})`)
+          keyLen = lenReg
+        } else if (keyExpr.type === "IntegerLiteral" || keyExpr.type === "NumberLiteral") {
+          // Integer key: store to memory and pass as ptr
+          const keyVal = keyExpr.value !== undefined ? keyExpr.value : index
+          keyPtr = `%${this.valueCounter++}`
+          ir.push(`  ${keyPtr} = alloca i64`)
+          ir.push(`  store i64 ${keyVal}, ptr ${keyPtr}`)
+          keyLen = "8" // i64 is 8 bytes
+        } else {
+          // Expression key: evaluate and use as string
+          keyPtr = index
+          const lenReg = `%${this.valueCounter++}`
+          ir.push(`  ${lenReg} = call i64 @string_length(ptr ${index})`)
+          keyLen = lenReg
+        }
+
+        ir.push(`  call void @table_set(ptr ${obj}, ptr ${keyPtr}, i64 ${keyLen}, i64 ${valueReg})`)
+      } else {
+        // Array assignment: array[index] := value
+        // Handle nested array access
+        const isNestedIndex = target.object?.type === "IndexExpression"
+        let arrayPtr = obj
+        if (isNestedIndex) {
+          const r = `%${this.valueCounter++}`
+          ir.push(`  ${r} = inttoptr i64 ${obj} to ptr`)
+          arrayPtr = r
+        }
+
+        // Determine element type to use appropriate setter
+        const elementType = this.getArrayElementType(target.object)
+
+        if (elementType?.type === "FloatType") {
+          if (elementType.kind === "f32") {
+            // Convert i64 value to float
+            const floatReg = `%${this.valueCounter++}`
+            ir.push(`  ${floatReg} = uitofp i64 ${valueReg} to float`)
+            ir.push(`  call void @array_set_f32(ptr ${arrayPtr}, i64 ${index}, float ${floatReg})`)
+          } else if (elementType.kind === "f64") {
+            // Convert i64 value to double
+            const doubleReg = `%${this.valueCounter++}`
+            ir.push(`  ${doubleReg} = uitofp i64 ${valueReg} to double`)
+            ir.push(`  call void @array_set_f64(ptr ${arrayPtr}, i64 ${index}, double ${doubleReg})`)
+          } else {
+            ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
+          }
         } else {
           ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
         }
-      } else {
-        ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
       }
     } else if (target && target.type === "MemberExpression") {
       // Table member assignment: person.age := 31
@@ -1171,17 +1218,51 @@ class LLVMIRGenerator {
   }
 
   private generateIndexExpression(ir: string[], expr: any): string {
-    const array = this.generateExpression(ir, expr.object)
+    const obj = this.generateExpression(ir, expr.object)
     const index = this.generateExpression(ir, expr.index)
     // Handle nested array access
     // If expr.object is an IndexExpression, array is an i64 (from array_get), convert to ptr
     // Otherwise, array is already a ptr (from alloca or variable load)
     const isNestedIndex = expr.object?.type === "IndexExpression"
-    let arrayPtr = array
+    let arrayPtr = obj
     if (isNestedIndex) {
       const r = `%${this.valueCounter++}`
-      ir.push(`  ${r} = inttoptr i64 ${array} to ptr`)
+      ir.push(`  ${r} = inttoptr i64 ${obj} to ptr`)
       arrayPtr = r
+    }
+
+    // Check if this is a table access (table[key])
+    if (this.isTableType(expr.object)) {
+      // Table access: table[key] - key can be string or integer
+      const keyExpr = expr.index
+      let keyPtr: string
+      let keyLen: string
+
+      if (keyExpr.type === "StringLiteral") {
+        // String key: use string literal directly
+        const escaped = keyExpr.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+        keyPtr = `@key_str_${this.stringCounter++}`
+        const strDef = `${keyPtr} = private unnamed_addr constant [${keyExpr.value.length + 1} x i8] c"${escaped}\\00"`
+        this.stringConstants.push(strDef)
+        keyLen = String(keyExpr.value.length)
+      } else if (keyExpr.type === "IntegerLiteral" || keyExpr.type === "NumberLiteral") {
+        // Integer key: store to memory and pass as ptr
+        const keyVal = keyExpr.value !== undefined ? keyExpr.value : index
+        keyPtr = `%${this.valueCounter++}`
+        ir.push(`  ${keyPtr} = alloca i64`)
+        ir.push(`  store i64 ${keyVal}, ptr ${keyPtr}`)
+        keyLen = "8" // i64 is 8 bytes
+      } else {
+        // Variable or expression key - assume string
+        keyPtr = index
+        const lenReg = `%${this.valueCounter++}`
+        ir.push(`  ${lenReg} = call i64 @string_length(ptr ${index})`)
+        keyLen = lenReg
+      }
+
+      const reg = `%${this.valueCounter++}`
+      ir.push(`  ${reg} = call i64 @table_get(ptr ${arrayPtr}, ptr ${keyPtr}, i64 ${keyLen})`)
+      return reg
     }
 
     // Determine element type to use appropriate getter
@@ -1257,10 +1338,29 @@ class LLVMIRGenerator {
       const varType = this.variableTypes.get(expr.name)
       if (varType?.type === "ArrayType") {
         const arrType = varType as ArrayType
-        return arrType.elementType?.type === "UnsignedType" && 
-               arrType.elementType?.kind === "u8" && 
+        return arrType.elementType?.type === "UnsignedType" &&
+               arrType.elementType?.kind === "u8" &&
                arrType.dimensions.length === 0
       }
+    }
+
+    return false
+  }
+
+  private isTableType(expr: any): boolean {
+    if (!expr) return false
+
+    // If it's an identifier, look up the variable type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "TableType") {
+        return true
+      }
+    }
+
+    // Check if the expression itself has a resultType
+    if (expr.resultType?.type === "TableType") {
+      return true
     }
 
     return false
@@ -1426,19 +1526,15 @@ class LLVMIRGenerator {
 
   private generateBlockWithTerminator(ir: string[], statement: any): boolean {
     if (statement.type === "Block") {
-      const lastStmt = statement.statements[statement.statements.length - 1]
-      if (lastStmt && (lastStmt.type === "Return" || lastStmt.type === "Break" || lastStmt.type === "Continue")) {
-        for (const stmt of statement.statements) {
-          this.generateStatement(ir, stmt)
-          if (this.blockTerminated) break
-        }
-        return true
-      }
+      let hadTerminator = false
       for (const stmt of statement.statements) {
         this.generateStatement(ir, stmt)
-        if (this.blockTerminated) break
+        if (this.blockTerminated) {
+          hadTerminator = true
+          break
+        }
       }
-      return false
+      return hadTerminator
     } else {
       if (statement.type === "Return" || statement.type === "Break" || statement.type === "Continue") {
         this.generateStatement(ir, statement)

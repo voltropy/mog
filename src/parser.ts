@@ -552,9 +552,27 @@ if (!this.checkType("RPAREN")) {
   }
 
   private bitwiseOr(): ExpressionNode {
-    let expr = this.bitwiseAnd()
+    let expr = this.bitwiseXor()
 
     while (this.matchType("BITWISE_OR")) {
+      const operator = this.previous()
+      const right = this.bitwiseXor()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private bitwiseXor(): ExpressionNode {
+    let expr = this.bitwiseAnd()
+
+    while (this.matchType("BITWISE_XOR")) {
       const operator = this.previous()
       const right = this.bitwiseAnd()
       expr = {
@@ -570,9 +588,27 @@ if (!this.checkType("RPAREN")) {
   }
 
   private bitwiseAnd(): ExpressionNode {
-    let expr = this.equality()
+    let expr = this.shift()
 
     while (this.matchType("BITWISE_AND")) {
+      const operator = this.previous()
+      const right = this.shift()
+      expr = {
+        type: "BinaryExpression",
+        left: expr,
+        operator: operator.value,
+        right,
+        position: this.combinePositions(expr, right),
+      }
+    }
+
+    return expr
+  }
+
+  private shift(): ExpressionNode {
+    let expr = this.equality()
+
+    while (this.matchType("LSHIFT") || this.matchType("RSHIFT")) {
       const operator = this.previous()
       const right = this.equality()
       expr = {
@@ -727,7 +763,7 @@ private comparison(): ExpressionNode {
   }
 
   private unary(): ExpressionNode {
-    if (this.matchType("MINUS") || this.matchType("BANG") || this.matchType("not")) {
+    if (this.matchType("MINUS") || this.matchType("BANG") || this.matchType("not") || this.matchType("BITWISE_NOT")) {
       const operator = this.previous()
       const argument = this.unary()
       return {

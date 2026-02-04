@@ -705,13 +705,12 @@ test("tokenizes only whitespace", () => {
 
   describe("Unknown characters", () => {
     test("tokenizes unknown characters as UNKNOWN", () => {
-      const tokens = tokenize("@ $ % ^ & ~")
+      const tokens = tokenize("@ $ ?")
       const unknown = tokens.filter((t) => t.type === "UNKNOWN")
-      expect(unknown).toHaveLength(4)
+      expect(unknown).toHaveLength(3)
       expect(unknown[0].value).toBe("@")
       expect(unknown[1].value).toBe("$")
-      expect(unknown[2].value).toBe("^")
-      expect(unknown[3].value).toBe("~")
+      expect(unknown[2].value).toBe("?")
     })
 
     test("tokenizes unicode characters as UNKNOWN", () => {

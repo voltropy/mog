@@ -16,6 +16,10 @@ type TokenType =
   | "MODULO"
   | "BITWISE_AND"
   | "BITWISE_OR"
+  | "BITWISE_XOR"
+  | "BITWISE_NOT"
+  | "LSHIFT"
+  | "RSHIFT"
   | "LOGICAL_AND"
   | "LOGICAL_OR"
   | "PLUS"
@@ -138,6 +142,10 @@ class Lexer {
     const logicalOrRegex = /\|\|/y
     const bitwiseAndRegex = /&/y
     const bitwiseOrRegex = /\|/y
+    const bitwiseXorRegex = /\^/y
+    const bitwiseNotRegex = /~/y
+    const lshiftRegex = /<</y
+    const rshiftRegex = />>/y
     const lessRegex = /</y
     const greaterRegex = />/y
     const equalRegex = /=/y
@@ -513,6 +521,54 @@ class Lexer {
       value = this.match(bitwiseOrRegex)
       if (value) {
         type = "BITWISE_OR"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(bitwiseXorRegex)
+      if (value) {
+        type = "BITWISE_XOR"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(bitwiseNotRegex)
+      if (value) {
+        type = "BITWISE_NOT"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(lshiftRegex)
+      if (value) {
+        type = "LSHIFT"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(rshiftRegex)
+      if (value) {
+        type = "RSHIFT"
         this.advance(value.length)
         tokens.push({
           type,

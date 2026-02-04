@@ -1004,7 +1004,7 @@ class SemanticAnalyzer {
 
     const operator = node.operator
 
-    const arithmeticOperators = ["+", "-", "*", "/", "%", "&", "|", "TIMES", "DIVIDE"]
+    const arithmeticOperators = ["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", "TIMES", "DIVIDE"]
 
     const comparisonOperators = ["==", "!=", "<", ">", "<=", ">="]
 
@@ -1108,6 +1108,13 @@ class SemanticAnalyzer {
     if (operator === "-" || operator === "+") {
       if (!isNumericType(argumentType)) {
         this.emitError(`Operator '${operator}' requires numeric type`, node.position)
+      }
+      return argumentType
+    }
+
+    if (operator === "~") {
+      if (!isNumericType(argumentType)) {
+        this.emitError(`Operator '~' requires numeric type`, node.position)
       }
       return argumentType
     }
@@ -1330,6 +1337,16 @@ class SemanticAnalyzer {
 
     if (!indexType) {
       return null
+    }
+
+    // Handle table indexing: table[key]
+    if (isTableType(objectType)) {
+      const tableType = objectType as TableType
+      // For tables, index can be string or integer
+      if (!isStringType(indexType) && !isIntegerType(indexType) && !isUnsignedType(indexType)) {
+        this.emitError(`Table key must be string or integer type, got ${indexType.toString()}`, node.index.position)
+      }
+      return tableType.valueType
     }
 
     if (!(isIntegerType(indexType) || isUnsignedType(indexType))) {

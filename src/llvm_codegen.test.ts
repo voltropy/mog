@@ -786,6 +786,84 @@ describe("LLVM IR Generator", () => {
     })
   })
 
+  describe("Table Index Expressions", () => {
+    test("generates table index access with string key", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "obj",
+            varType: table(String, i64),
+            value: null,
+          },
+          {
+            type: "ExpressionStatement",
+            expression: {
+              type: "IndexExpression",
+              object: { type: "Identifier", name: "obj" },
+              index: { type: "StringLiteral", value: "key" },
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("table_get")
+      expect(ir).toContain("key")
+    })
+
+    test("generates table index assignment with string key", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "obj",
+            varType: table(String, i64),
+            value: null,
+          },
+          {
+            type: "AssignmentExpression",
+            target: {
+              type: "IndexExpression",
+              object: { type: "Identifier", name: "obj" },
+              index: { type: "StringLiteral", value: "name" },
+            },
+            value: { type: "NumberLiteral", value: 42 },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("table_set")
+      expect(ir).toContain("name")
+    })
+
+    test("generates table index assignment with integer key", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "obj",
+            varType: table(i64, i64),
+            value: null,
+          },
+          {
+            type: "AssignmentExpression",
+            target: {
+              type: "IndexExpression",
+              object: { type: "Identifier", name: "obj" },
+              index: { type: "NumberLiteral", value: 123 },
+            },
+            value: { type: "NumberLiteral", value: 42 },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("table_set")
+    })
+  })
+
   describe("Complex Expressions", () => {
     test("handles nested binary expressions", () => {
       const ast = {
