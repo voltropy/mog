@@ -8,7 +8,7 @@ A TypeScript-based compiler for AlgolScript, a modern programming language with 
 - **Semantic analysis** with type checking
 - **LLVM IR code generation**
 - **Runtime library** with GC, arrays, and tables
-- **Full test suite** (319 tests, all passing)
+- **Full test suite** (376 tests, all passing)
 - **I/O functions** - `print_i64`, `println_i64`, `input_i64` for console I/O
 - **Modern syntax** with lowercase keywords and curly braces
 - **Optional outer braces** - write code at file level without wrapping in `{ }`
@@ -69,7 +69,11 @@ When using `main()`, the return value becomes the program's exit code (truncated
 name: type = value;
 ```
 
-Supported types: `i8`, `i16`, `i32`, `i64`, `i128`, `i256`, `u8`, `u16`, `u32`, `u64`, `u128`, `u256`, `f32`, `f64`, `ptr`
+Supported types:
+- **Signed integers**: `i8`, `i16`, `i32`, `i64`, `i128`, `i256`
+- **Unsigned integers**: `u8`, `u16`, `u32`, `u64`, `u128`, `u256`
+- **Floats**: `f8`, `f16`, `f32`, `f64`, `f128`, `f256`
+- **Other**: `ptr` (pointer), `string` (byte array)
 
 ### Functions
 
@@ -84,6 +88,17 @@ Example with multiple parameters:
 ```algol
 fn add(a: i64, b: i64) -> i64 {
   return a + b;
+}
+```
+
+Nested functions are supported - define functions inside other functions:
+
+```algol
+fn outer() -> i64 {
+  fn inner() -> i64 {
+    return 42;
+  }
+  return inner();
 }
 ```
 
@@ -131,7 +146,7 @@ while (condition) {
 ### Operators
 
 - **Arithmetic**: `+`, `-`, `*`, `/`, `%`
-- **Bitwise**: `&`, `|`
+- **Bitwise**: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `<<` (left shift), `>>` (right shift)
 - **Comparison**: `<`, `>`, `==`, `!=`, `<=`, `>=`
 - **Logical**: `not`, `!` (logical NOT)
 - **Assignment**: `:=`
@@ -141,9 +156,15 @@ while (condition) {
 #### Print Functions
 
 ```algol
-print_i64(value);      # Print integer without newline
-println_i64(value);    # Print integer with newline
+print(value);          # Print any type without newline (auto-detects type)
+println(value);        # Print any type with newline
 println();             # Print just a newline
+
+// Type-specific variants (for explicit control):
+print_i64(value);      # Print i64 without newline
+println_i64(value);    # Print i64 with newline
+print_f64(value);      # Print f64 without newline
+println_f64(value);    # Print f64 with newline
 ```
 
 Type-specific variants:
@@ -173,6 +194,10 @@ arr[0] := 100;  // Modify element
 // 2D arrays (matrices)
 mat: i64[][] = [[1, 2], [3, 4]];
 val: i64 = mat[0][1];  // Returns 2
+
+// Array fill syntax - create array with repeated value
+zeros: [i64; 5] = [0; 5];      // [0, 0, 0, 0, 0]
+fives: [f64; 3] = [5.0; 3];    // [5.0, 5.0, 5.0]
 ```
 
 ### Tables
@@ -188,11 +213,38 @@ Using runtime functions:
 // Create table with initial capacity
 tbl: ptr = table_new(4);
 
-// Set values
+// Set values using function call
 table_set(tbl, "key", 3, 42);
+
+// Set values using bracket notation
+tbl["key"] := 42;           // String key
+tbl[123] := 100;            // Integer key
 
 // Get values
 val: i64 = table_get(tbl, "key", 3);
+```
+
+### Strings
+
+Strings are arrays of unsigned bytes (`u8`) with special syntax support:
+
+```algol
+// String literals use double quotes
+msg: string = "Hello, World!";
+greeting: string = "Hi";
+
+// String indexing - get character at position
+first: u8 = msg[0];         // 'H' (ASCII 72)
+
+// String slicing - extract substring
+sub: string = msg[0:5];     // "Hello" (positions 0-4)
+world: string = msg[7:12];  // "World" (positions 7-11)
+
+// String length
+len: i64 = string_length(msg);
+
+// String concatenation
+combined: string = string_concat(greeting, " there!");
 ```
 
 ### POSIX Filesystem Operations
@@ -326,8 +378,9 @@ rmdir("temp_dir");
 
 The repository includes several example programs:
 
+- `nontrivial.algol` - Scientific calculator demonstrating floats, recursion, nested loops
 - `basic_features.algol` - Demonstrates variables, arithmetic, if/else, while, functions
-- `combined_features.algol` - All features combined without nested functions
+- `combined_features.algol` - All features combined with complex operations
 - `nested_operations.algol` - Nested loops, functions, conditionals
 - `fibonacci_tco.algol` - Tail-call optimized fibonacci
 - `fibonacci_exit.algol` - Fibonacci with exit code
@@ -340,8 +393,6 @@ The repository includes several example programs:
 - `exit42.algol` / `exit127.algol` - Exit code examples
 - `success.algol` - Minimal success program
 - `main_example.algol` - main() function example
-- `test_continue.algol` - Continue statement example
-- `test_nested.algol` - Nested function example
 
 Try compiling one:
 
