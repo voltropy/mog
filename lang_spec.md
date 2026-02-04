@@ -31,7 +31,7 @@ AlgolScript programs are composed of blocks, statements, and expressions with cl
 
 ```algol
 // Variable declaration
-let name: type = expression
+name: type = expression
 
 // Assignment
 name = expression
@@ -93,11 +93,11 @@ expression
 
 ```algol
 // Declaration
-let values: [type; size] = [v1, v2, v3, ...]
+values: [type; size] = [v1, v2, v3, ...]
 
 // Example
-let numbers: [i32; 5] = [1, 2, 3, 4, 5]
-let floats: [f32; 3] = [1.5, 2.7, 3.14]
+numbers: [i32; 5] = [1, 2, 3, 4, 5]
+floats: [f32; 3] = [1.5, 2.7, 3.14]
 
 // Access
 numbers[0]  // First element
@@ -108,7 +108,7 @@ numbers[4]  // Last element (0-indexed)
 
 ```algol
 // Declaration - heterogeneous row storage
-let data: table = {
+data: table = {
   col1: type1,
   col2: type2,
   col3: type3,
@@ -119,7 +119,7 @@ let data: table = {
 }
 
 // Alternatively, columnar syntax
-let data: table = {
+data: table = {
   name: [string],
   age: [i32],
   score: [f32],
@@ -140,27 +140,27 @@ data.age[1]   // 30
 Strings are represented as arrays of `u8` (UTF-8 encoded):
 
 ```algol
-let greeting: [u8] = [72, 101, 108, 108, 111]  // "Hello"
+greeting: [u8] = [72, 101, 108, 108, 111]  // "Hello"
 
 // String literals (syntactic sugar)
-let greeting: [u8] = "Hello"
+greeting: [u8] = "Hello"
 
 // String operations
-let length: i32 = string_len(greeting)  // 5
-let substring: [u8] = string_slice(greeting, 0, 5)  // "Hello"
+length: i32 = string_len(greeting)  // 5
+substring: [u8] = string_slice(greeting, 0, 5)  // "Hello"
 ```
 
 ### Type Annotations
 
 ```algol
 // Explicit type
-let x: i32 = 42
+x: i32 = 42
 
 // Type inference (compiler infers from expression)
-let x = 42  // Infers i32
+x = 42  // Infers i32
 
 // Function return type
-fn add(a: i32, b: i32): i32 {
+fn add(a: i32, b: i32) -> i32 {
   a + b
 }
 ```
@@ -173,7 +173,7 @@ AlgolScript uses automatic garbage collection for memory safety:
 
 ```algol
 // Memory is automatically allocated
-let data = allocate_large_array()
+data = allocate_large_array()
 
 // Memory is automatically freed when no longer referenced
 // Reference counting + cycle detection
@@ -212,9 +212,9 @@ Variables have block-lexical scope:
 Functions capture variables from their enclosing scope (closures):
 
 ```algol
-let multiplier: i32 = 5
+multiplier: i32 = 5
 
-fn scale(value: i32): i32 {
+fn scale(value: i32) -> i32 {
   value * multiplier  // Captures multiplier from outer scope
 }
 
@@ -229,12 +229,12 @@ Functions are first-class values:
 
 ```algol
 // Function as value
-let adder = fn(a: i32, b: i32): i32 {
+adder = fn(a: i32, b: i32) -> i32 {
   a + b
 }
 
 // Higher-order function
-fn apply(f: fn(i32, i32): i32, x: i32, y: i32): i32 {
+fn apply(f: fn(i32, i32) -> i32, x: i32, y: i32) -> i32 {
   f(x, y)
 }
 
@@ -245,14 +245,21 @@ apply(adder, 3, 4)  // 7
 
 ### Operator Syntax
 
-AlgolScript does not enforce operator precedence - parentheses are required for complex expressions:
+AlgolScript does not enforce operator precedence. Parentheses are required when mixing operators of different precedence:
 
 ```algol
 // Simple expression
 a + b
 
-// Parenthesized expression (required for nesting)
-(a + b) * c  // Clear, no ambiguity
+// Associative chains (same operator) - no parentheses needed
+a + b + c + d        // OK: left-associative chain
+a * b * c            // OK: left-associative chain
+a && b && c          // OK: logical AND chain
+
+// Mixed precedence - parentheses required
+(a + b) * c          // Required: + with *
+a + (b * c)          // Required: * with +
+(a || b) && c        // Required: || with &&
 
 // Comparison
 a == b
@@ -274,30 +281,30 @@ Native syntax for vector and matrix operations:
 
 ```algol
 // Vector declaration
-let v1: [f32; 3] = [1.0, 2.0, 3.0]
-let v2: [f32; 3] = [4.0, 5.0, 6.0]
+v1: [f32; 3] = [1.0, 2.0, 3.0]
+v2: [f32; 3] = [4.0, 5.0, 6.0]
 
 // Element-wise operations
-let sum: [f32; 3] = v1 + v2  // [5.0, 7.0, 9.0]
-let diff: [f32; 3] = v1 - v2  // [-3.0, -3.0, -3.0]
-let product: [f32; 3] = v1 * v2  // [4.0, 10.0, 18.0]
-let quot: [f32; 3] = v1 / v2  // [0.25, 0.4, 0.5]
+sum: [f32; 3] = v1 + v2  // [5.0, 7.0, 9.0]
+diff: [f32; 3] = v1 - v2  // [-3.0, -3.0, -3.0]
+product: [f32; 3] = v1 * v2  // [4.0, 10.0, 18.0]
+quot: [f32; 3] = v1 / v2  // [0.25, 0.4, 0.5]
 
 // Scalar operations
-let scaled: [f32; 3] = v1 * 2.0  // [2.0, 4.0, 6.0]
+scaled: [f32; 3] = v1 * 2.0  // [2.0, 4.0, 6.0]
 
 // Dot product
-let dot: f32 = dot(v1, v2)  // 32.0
+dot: f32 = dot(v1, v2)  // 32.0
 
 // Matrix operations
-let m1: [[f32; 2]; 2] = [[1.0, 2.0], [3.0, 4.0]]
-let m2: [[f32; 2]; 2] = [[5.0, 6.0], [7.0, 8.0]]
+m1: [[f32; 2]; 2] = [[1.0, 2.0], [3.0, 4.0]]
+m2: [[f32; 2]; 2] = [[5.0, 6.0], [7.0, 8.0]]
 
 // Matrix multiplication
-let product: [[f32; 2]; 2] = matmul(m1, m2)
+product: [[f32; 2]; 2] = matmul(m1, m2)
 
 // Matrix-vector multiplication
-let result: [f32; 2] = matmul(m1, [1.0, 2.0])
+result: [f32; 2] = matmul(m1, [1.0, 2.0])
 ```
 
 ### Map Operation
@@ -306,22 +313,22 @@ Apply operations over collections:
 
 ```algol
 // Map over array
-let numbers: [i32; 5] = [1, 2, 3, 4, 5]
-let doubled: [i32; 5] = numbers.map(fn(x): i32 { x * 2 })
+numbers: [i32; 5] = [1, 2, 3, 4, 5]
+doubled: [i32; 5] = numbers.map(fn(x) -> i32 { x * 2 })
 
 // Map with type annotation
-let doubled: [i32; 5] = numbers.map(fn(x: i32): i32 { x * 2 })
+doubled: [i32; 5] = numbers.map(fn(x: i32) -> i32 { x * 2 })
 
 // Map over table column
-let ages: [i32; 3] = [25, 30, 28]
-let adult_ages: [i32; 3] = ages.map(fn(age: i32): i32 {
+ages: [i32; 3] = [25, 30, 28]
+adult_ages: [i32; 3] = ages.map(fn(age: i32) -> i32 {
   age * 2
 })
 
 // Nested map
-let matrix: [[i32; 3]; 2] = [[1, 2, 3], [4, 5, 6]]
-let transposed: [i32] = matrix.map(fn(row: [i32; 3]): i32 {
-  row.map(fn(x: i32): i32 { x * 2 })
+matrix: [[i32; 3]; 2] = [[1, 2, 3], [4, 5, 6]]
+transposed: [i32] = matrix.map(fn(row: [i32; 3]) -> i32 {
+  row.map(fn(x: i32) -> i32 { x * 2 })
 })
 ```
 
@@ -372,7 +379,7 @@ llm(
 
 ```algol
 // Basic text completion
-let response: [u8] = llm(
+response: [u8] = llm(
   prompt: "Complete this sentence: The future of AI is",
   model_size: "medium",
   reasoning_effort: 0.5,
@@ -380,7 +387,7 @@ let response: [u8] = llm(
 )
 
 // Structured output
-let analysis: table = llm(
+analysis: table = llm(
   prompt: "Analyze the sentiment of the following text and return a table with columns: sentiment, confidence, keywords",
   model_size: "large",
   reasoning_effort: 0.8,
@@ -391,7 +398,7 @@ let analysis: table = llm(
 )
 
 // With context examples
-let classification: [u8] = llm(
+classification: [u8] = llm(
   prompt: "Classify the following email as: spam, important, or update",
   model_size: "small",
   reasoning_effort: 0.3,
@@ -403,7 +410,7 @@ let classification: [u8] = llm(
 )
 
 // Numerical output
-let score: f32 = llm(
+score: f32 = llm(
   prompt: "Rate the complexity of this algorithm from 0.0 to 1.0:",
   model_size: "medium",
   reasoning_effort: 0.5,
@@ -411,7 +418,7 @@ let score: f32 = llm(
 )
 
 // Array output
-let suggestions: [u8] = llm(
+suggestions: [u8] = llm(
   prompt: "Suggest 3 improvements for this code",
   model_size: "large",
   reasoning_effort: 0.9,
@@ -435,12 +442,12 @@ The compiler validates that the structure matches the expected type:
 
 ```algol
 // Type-safe LLM calls
-let result: i32 = llm(...)  // Compiler expects i32 output
-let results: [i32; 5] = llm(...)  // Compiler expects array of 5 integers
-let data: table = llm(...)  // Compiler expects table structure
+result: i32 = llm(...)  // Compiler expects i32 output
+results: [i32; 5] = llm(...)  // Compiler expects array of 5 integers
+data: table = llm(...)  // Compiler expects table structure
 
 // Mismatched types will error at compile time
-let wrong: i32 = llm(...)  // Error if LLM returns non-i32
+wrong: i32 = llm(...)  // Error if LLM returns non-i32
 ```
 
 ## Functions
@@ -448,7 +455,7 @@ let wrong: i32 = llm(...)  // Error if LLM returns non-i32
 ### Definition
 
 ```algol
-fn function_name(param1: type1, param2: type2): return_type {
+fn function_name(param1: type1, param2: type2) -> return_type {
   // Function body
   result_value  // Implicit return of last expression
 }
@@ -458,12 +465,12 @@ fn function_name(param1: type1, param2: type2): return_type {
 
 ```algol
 // Simple function
-fn add(a: i32, b: i32): i32 {
+fn add(a: i32, b: i32) -> i32 {
   a + b
 }
 
 // Multi-statement function
-fn factorial(n: i32): i32 {
+fn factorial(n: i32) -> i32 {
   let result: i32 = 1
   let i: i32 = 1
   {
@@ -475,7 +482,7 @@ fn factorial(n: i32): i32 {
 }
 
 // Recursive function
-fn fibonacci(n: i32): i32 {
+fn fibonacci(n: i32) -> i32 {
   condition: n <= 1 ? ({ n }) : ({
     fibonacci(n - 1) + fibonacci(n - 2)
   })
@@ -485,7 +492,7 @@ fn fibonacci(n: i32): i32 {
 ### Higher-Order Functions
 
 ```algol
-fn map_array(arr: [i32; n], f: fn(i32): i32): [i32; n] {
+fn map_array(arr: [i32; n], f: fn(i32) -> i32): [i32; n] {
   let result: [i32; n] = allocate_array(n)
   let i: i32 = 0
   {
@@ -497,8 +504,8 @@ fn map_array(arr: [i32; n], f: fn(i32): i32): [i32; n] {
 }
 
 // Usage
-let numbers: [i32; 5] = [1, 2, 3, 4, 5]
-let doubled: [i32; 5] = map_array(numbers, fn(x): i32 { x * 2 })
+numbers: [i32; 5] = [1, 2, 3, 4, 5]
+doubled: [i32; 5] = map_array(numbers, fn(x) -> i32 { x * 2 })
 ```
 
 ## Control Flow
@@ -506,10 +513,10 @@ let doubled: [i32; 5] = map_array(numbers, fn(x): i32 { x * 2 })
 ### Conditional Expression
 
 ```algol
-let result = condition ? (true_value) : (false_value)
+result = condition ? (true_value) : (false_value)
 
 // Nested conditionals
-let result = condition1 ? (
+result = condition1 ? (
   condition2 ? (value_a) : (value_b)
 ) : (
   condition3 ? (value_c) : (value_d)
@@ -555,7 +562,7 @@ type Result<T> = {
   error: [u8]
 }
 
-fn divide(a: f32, b: f32): Result<f32> {
+fn divide(a: f32, b: f32) -> Result<f32> {
   condition: b == 0.0 ? ({
     { ok: false, value: 0.0, error: "Division by zero" }
   }) : ({
@@ -563,7 +570,7 @@ fn divide(a: f32, b: f32): Result<f32> {
   })
 }
 
-let result = divide(10.0, 2.0)
+result = divide(10.0, 2.0)
 condition: result.ok ? ({
   result.value  // 5.0
 }) : ({
@@ -607,21 +614,21 @@ condition: result.ok ? ({
 
 ```algol
 // Explicit type conversion
-fn to_i32(x: f32): i32 {
+fn to_i32(x: f32) -> i32 {
   // Converts f32 to i32 (truncates)
 }
 
-fn to_f32(x: i32): f32 {
+fn to_f32(x: i32) -> f32 {
   // Converts i32 to f32
 }
 
-fn to_u8(x: i32): u8 {
+fn to_u8(x: i32) -> u8 {
   // Converts i32 to u8 (checked conversion, error on overflow)
 }
 
 // Example
-let x: f32 = 3.14
-let y: i32 = to_i32(x)  // 3
+x: f32 = 3.14
+y: i32 = to_i32(x)  // 3
 ```
 
 ## Example Programs
@@ -629,35 +636,35 @@ let y: i32 = to_i32(x)  // 3
 ### Simple Calculator
 
 ```algol
-fn calculate(a: i32, b: i32, op: [u8]): i32 {
+fn calculate(a: i32, b: i32, op: [u8]) -> i32 {
   condition: op == "+" ? ({ a + b })
     : op == "-" ? ({ a - b })
     : op == "*" ? ({ a * b })
     : ({ a / b })
 }
 
-let result = calculate(10, 5, "+")  // 15
+result = calculate(10, 5, "+")  // 15
 ```
 
 ### Vector Processing
 
 ```algol
-fn process_vectors(v1: [f32; 3], v2: [f32; 3]): f32 {
+fn process_vectors(v1: [f32; 3], v2: [f32; 3]) -> f32 {
   let sum: [f32; 3] = v1 + v2
   let diff: [f32; 3] = v1 - v2
   let similarity: f32 = dot(v1, v2) / (norm(v1) * norm(v2))
   similarity
 }
 
-let a: [f32; 3] = [1.0, 2.0, 3.0]
-let b: [f32; 3] = [2.0, 3.0, 4.0]
-let sim: f32 = process_vectors(a, b)
+a: [f32; 3] = [1.0, 2.0, 3.0]
+b: [f32; 3] = [2.0, 3.0, 4.0]
+sim: f32 = process_vectors(a, b)
 ```
 
 ### LLM-Powered Analysis
 
 ```algol
-fn analyze_sentiment(text: [u8]): table {
+fn analyze_sentiment(text: [u8]) -> table {
   let result: table = llm(
     prompt: "Analyze sentiment and extract key information:",
     model_size: "medium",
@@ -675,8 +682,8 @@ fn analyze_sentiment(text: [u8]): table {
   result
 }
 
-let review: [u8] = "This product exceeded my expectations!"
-let analysis = analyze_sentiment(review)
+review: [u8] = "This product exceeded my expectations!"
+analysis = analyze_sentiment(review)
 ```
 
 ## Compilation and Execution
