@@ -138,6 +138,7 @@ type ExpressionNode =
   | IdentifierNode
   | NumberLiteralNode
   | StringLiteralNode
+  | TemplateLiteralNode
   | ArrayLiteralNode
   | TableLiteralNode
   | BinaryExpressionNode
@@ -147,6 +148,7 @@ type ExpressionNode =
   | CallExpressionNode
   | MemberExpressionNode
   | IndexExpressionNode
+  | SliceExpressionNode
   | LLMExpressionNode
   | LambdaNode
   | BlockExpressionNode
@@ -166,6 +168,11 @@ interface NumberLiteralNode extends ASTNode {
 interface StringLiteralNode extends ASTNode {
   type: "StringLiteral"
   value: string
+}
+
+interface TemplateLiteralNode extends ASTNode {
+  type: "TemplateLiteral"
+  parts: (string | ExpressionNode)[]
 }
 
 interface ArrayLiteralNode extends ASTNode {
@@ -221,6 +228,13 @@ interface IndexExpressionNode extends ASTNode {
   type: "IndexExpression"
   object: ExpressionNode
   index: ExpressionNode
+}
+
+interface SliceExpressionNode extends ASTNode {
+  type: "SliceExpression"
+  object: ExpressionNode
+  start: ExpressionNode
+  end: ExpressionNode
 }
 
 interface LLMExpressionNode extends ASTNode {
@@ -780,6 +794,8 @@ class SemanticAnalyzer {
         return this.visitNumberLiteral(node as NumberLiteralNode)
       case "StringLiteral":
         return this.visitStringLiteral(node as StringLiteralNode)
+      case "TemplateLiteral":
+        return this.visitTemplateLiteral(node as TemplateLiteralNode)
       case "ArrayLiteral":
         return this.visitArrayLiteral(node as ArrayLiteralNode)
       case "TableLiteral":
@@ -794,6 +810,8 @@ class SemanticAnalyzer {
         return this.visitMemberExpression(node as MemberExpressionNode)
       case "IndexExpression":
         return this.visitIndexExpression(node as IndexExpressionNode)
+      case "SliceExpression":
+        return this.visitSliceExpression(node as SliceExpressionNode)
       case "LLMExpression":
         return this.visitLLMExpression(node as LLMExpressionNode)
       case "Lambda":
@@ -838,6 +856,17 @@ class SemanticAnalyzer {
   }
 
   private visitStringLiteral(node: StringLiteralNode): Type | null {
+    return new ArrayType(new UnsignedType("u8"), [])
+  }
+
+  private visitTemplateLiteral(node: TemplateLiteralNode): Type | null {
+    // Visit all expression parts to type-check them
+    for (const part of node.parts) {
+      if (typeof part !== "string") {
+        this.visitExpression(part)
+      }
+    }
+    // Template literals always return strings ([u8])
     return new ArrayType(new UnsignedType("u8"), [])
   }
 
@@ -1259,6 +1288,28 @@ class SemanticAnalyzer {
     return null
   }
 
+  private visitSliceExpression(node: SliceExpressionNode): Type | null {
+    const objectType = this.visitExpression(node.object)
+    if (!objectType) return null
+
+    const startType = this.visitExpression(node.start)
+    const endType = this.visitExpression(node.end)
+
+    if (startType && !(isIntegerType(startType) || isUnsignedType(startType))) {
+      this.emitError(`Slice start must be integer type, got ${startType.toString()}`, node.start.position)
+    }
+    if (endType && !(isIntegerType(endType) || isUnsignedType(endType))) {
+      this.emitError(`Slice end must be integer type, got ${endType.toString()}`, node.end.position)
+    }
+
+    if (isArrayType(objectType)) {
+      return objectType
+    }
+
+    this.emitError(`Cannot slice non-array type ${objectType.toString()}`, node.position)
+    return null
+  }
+
   private visitLLMExpression(node: LLMExpressionNode): Type | null {
     const promptType = this.visitExpression(node.prompt)
 
@@ -1338,6 +1389,7 @@ export type {
   CallExpressionNode,
   MemberExpressionNode,
   IndexExpressionNode,
+  SliceExpressionNode,
   LLMExpressionNode,
   LambdaNode,
   BlockExpressionNode,

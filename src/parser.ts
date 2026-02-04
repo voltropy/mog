@@ -794,6 +794,11 @@ private comparison(): ExpressionNode {
       }
     }
 
+    // Template string: "Hello, {name}!"
+    if (this.checkType("TEMPLATE_STRING_PART")) {
+      return this.parseTemplateString()
+    }
+
     if (this.matchType("POSIX_CONSTANT")) {
       const token = this.previous()
       return {
@@ -812,13 +817,26 @@ private comparison(): ExpressionNode {
       }
 
       while (this.matchType("LBRACKET")) {
-        const index = this.expression()
-        this.consume("RBRACKET", "Expected ] after index")
-        object = {
-          type: "IndexExpression",
-          object,
-          index,
-          position: this.combinePositions(object, index),
+        const firstExpr = this.expression()
+        
+        if (this.matchType("COLON")) {
+          const endExpr = this.expression()
+          this.consume("RBRACKET", "Expected ] after slice expression")
+          object = {
+            type: "SliceExpression",
+            object,
+            start: firstExpr,
+            end: endExpr,
+            position: this.combinePositions(object, endExpr),
+          }
+        } else {
+          this.consume("RBRACKET", "Expected ] after index")
+          object = {
+            type: "IndexExpression",
+            object,
+            index: firstExpr,
+            position: this.combinePositions(object, firstExpr),
+          }
         }
       }
 
@@ -1027,6 +1045,36 @@ private comparison(): ExpressionNode {
     return {
       start: a.position.start,
       end: b.position.end,
+    }
+  }
+
+  private parseTemplateString(): ExpressionNode {
+    const start = this.peek().position.start
+    const parts: (string | ExpressionNode)[] = []
+
+    while (this.checkType("TEMPLATE_STRING_PART")) {
+      const strPart = this.advance()
+      if (strPart.value) {
+        parts.push(strPart.value)
+      }
+
+      if (this.checkType("TEMPLATE_INTERP_START")) {
+        this.advance() // consume {
+        const expr = this.expression()
+        parts.push(expr)
+        this.consume("TEMPLATE_INTERP_END", "Expected } after expression")
+      }
+    }
+
+    this.consume("TEMPLATE_STRING_END", "Expected \" at end of template string")
+
+    return {
+      type: "TemplateLiteral",
+      parts,
+      position: {
+        start,
+        end: this.previous().position.end,
+      },
     }
   }
 }

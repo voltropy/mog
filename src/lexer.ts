@@ -44,6 +44,11 @@ type TokenType =
   | "IDENTIFIER"
   | "NUMBER"
   | "STRING"
+  | "TEMPLATE_STRING_START"
+  | "TEMPLATE_STRING_PART"
+  | "TEMPLATE_STRING_END"
+  | "TEMPLATE_INTERP_START"
+  | "TEMPLATE_INTERP_END"
   | "TYPE"
   | "POSIX_CONSTANT"
   | "UNKNOWN"
@@ -694,6 +699,81 @@ class Lexer {
           value,
           position: { start: startPos, end: this.currentPosition() },
         })
+        continue
+      }
+
+      // Template string handling: "Hello, {name}!"
+      // A template string starts with "{ and contains {expr} interpolations
+      if (this.peek() === '"' && this.peek(1) === '{') {
+        this.advance(1) // consume "
+        // Parse template string parts
+        while (this.peek() !== '"' && this.pos < this.input.length) {
+          if (this.peek() === '{') {
+            this.advance(1)
+            tokens.push({
+              type: "TEMPLATE_INTERP_START",
+              value: "{",
+              position: { start: startPos, end: this.currentPosition() },
+            })
+            // Parse the expression inside {}
+            while (this.peek() !== '}' && this.pos < this.input.length) {
+              const exprStart = this.currentPosition()
+              // Skip whitespace
+              while (this.peek() === ' ' || this.peek() === '\t') {
+                this.advance(1)
+              }
+              // Parse identifier or expression
+              const identifierMatch = this.match(identifierRegex)
+              if (identifierMatch) {
+                tokens.push({
+                  type: "IDENTIFIER",
+                  value: identifierMatch,
+                  position: { start: exprStart, end: this.currentPosition() },
+                })
+                this.advance(identifierMatch.length)
+                // Check for more complex expressions (just handle simple vars for now)
+                break
+              }
+              break
+            }
+            if (this.peek() === '}') {
+              this.advance(1)
+              tokens.push({
+                type: "TEMPLATE_INTERP_END",
+                value: "}",
+                position: { start: startPos, end: this.currentPosition() },
+              })
+            }
+          } else {
+            // Collect string literal part
+            let strValue = ''
+            while (this.peek() !== '{' && this.peek() !== '"' && this.pos < this.input.length) {
+              if (this.peek() === '\\') {
+                this.advance(1)
+                strValue += this.peek()
+                this.advance(1)
+              } else {
+                strValue += this.peek()
+                this.advance(1)
+              }
+            }
+            if (strValue) {
+              tokens.push({
+                type: "TEMPLATE_STRING_PART",
+                value: strValue,
+                position: { start: startPos, end: this.currentPosition() },
+              })
+            }
+          }
+        }
+        if (this.peek() === '"') {
+          this.advance(1)
+          tokens.push({
+            type: "TEMPLATE_STRING_END",
+            value: '"',
+            position: { start: startPos, end: this.currentPosition() },
+          })
+        }
         continue
       }
 

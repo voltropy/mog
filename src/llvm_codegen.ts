@@ -101,6 +101,7 @@ class LLVMIRGenerator {
         ir.push("define i32 @main(i32 %argc, ptr %argv) {")
         ir.push("entry:")
         ir.push("  call void @gc_init()")
+        ir.push("  call void @gc_push_frame()")
         
         // Build array of length argc with argv pointers
         ir.push("  %args_array = call ptr @array_alloc(i64 8, i64 1, i64 %argc)")
@@ -143,10 +144,12 @@ class LLVMIRGenerator {
         ir.push("define i32 @main(i32 %argc, ptr %argv) {")
         ir.push("entry:")
         ir.push("  call void @gc_init()")
+        ir.push("  call void @gc_push_frame()")
         ir.push("  %result = call i64 @program_user()")
       }
       
       ir.push("  %truncated = trunc i64 %result to i32")
+      ir.push("  call void @gc_pop_frame()")
       ir.push("  ret i32 %truncated")
       ir.push("}")
     } else {
@@ -188,6 +191,10 @@ class LLVMIRGenerator {
     for (const stmt of statements) {
       if (stmt.type === "FunctionDeclaration") {
         functions.push(stmt)
+        // Recursively find nested function declarations in the function body
+        if (stmt.body?.statements) {
+          functions.push(...this.findFunctionDeclarationsRecursive(stmt.body.statements))
+        }
       } else if (stmt.type === "Block") {
         functions.push(...this.findFunctionDeclarationsRecursive(stmt.statements))
       }
@@ -204,6 +211,8 @@ class LLVMIRGenerator {
     ir.push("declare void @gc_init()")
     ir.push("declare ptr @gc_alloc(i64 %size)")
     ir.push("declare void @gc_collect()")
+    ir.push("declare void @gc_push_frame()")
+    ir.push("declare void @gc_pop_frame()")
     ir.push("")
 
     ir.push("; Declare array functions")
@@ -211,6 +220,7 @@ class LLVMIRGenerator {
     ir.push("declare i64 @array_get(ptr %array, i64 %index)")
     ir.push("declare void @array_set(ptr %array, i64 %index, i64 %value)")
     ir.push("declare i64 @array_length(ptr %array)")
+    ir.push("declare ptr @array_slice(ptr %array, i64 %start, i64 %end)")
     ir.push("")
 
     ir.push("; Declare table functions")
@@ -260,17 +270,19 @@ class LLVMIRGenerator {
         this.generateExpression(ir, statement.expression)
         break
       case "Block":
-        const prevTerminated = this.blockTerminated
         this.blockTerminated = false
         for (const stmt of statement.statements) {
           this.generateStatement(ir, stmt)
           if (this.blockTerminated) break
         }
-        this.blockTerminated = prevTerminated
         break
-      case "Return":
+      case "Return": {
+        let value = null
         if (statement.value) {
-          const value = this.generateExpression(ir, statement.value)
+          value = this.generateExpression(ir, statement.value)
+        }
+        ir.push("  call void @gc_pop_frame()")
+        if (value) {
           const returnType = this.currentFunction?.returnType || "i64"
           ir.push(`  ret ${returnType} ${value}`)
         } else {
@@ -278,6 +290,7 @@ class LLVMIRGenerator {
         }
         this.blockTerminated = true
         break
+      }
       case "Conditional":
         this.generateConditional(ir, statement)
         break
@@ -317,6 +330,8 @@ class LLVMIRGenerator {
         ir.push(`  ${ptrReg} = getelementptr [${expr.value.length + 1} x i8], ptr ${name}, i64 0, i64 0`)
         return ptrReg
       }
+      case "TemplateLiteral":
+        return this.generateTemplateLiteral(ir, expr)
       case "Identifier": {
         const name = expr.name
         const ptrReg = `%${name}_local`
@@ -358,6 +373,8 @@ class LLVMIRGenerator {
         return this.generateMemberExpression(ir, expr)
       case "IndexExpression":
         return this.generateIndexExpression(ir, expr)
+      case "SliceExpression":
+        return this.generateSliceExpression(ir, expr)
       case "LLMCall":
         return this.generateLLMCall(ir, expr)
       case "MapExpression":
@@ -386,6 +403,21 @@ class LLVMIRGenerator {
       return
     }
 
+    // Collect strings from template literals
+    if (node.type === "TemplateLiteral") {
+      for (const part of node.parts) {
+        if (typeof part === "string") {
+          const name = `@str${this.stringCounter++}`
+          const escaped = part.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+          const strDef = `${name} = private unnamed_addr constant [${part.length + 1} x i8] c"${escaped}\\00"`
+          this.stringConstants.push(strDef)
+        } else {
+          this.collectStringFromNode(part)
+        }
+      }
+      return
+    }
+
     // Collect MemberExpression property names as string constants
     if (node.type === "MemberExpression") {
       const name = `@key_${node.property}_${this.stringCounter++}`
@@ -408,6 +440,45 @@ class LLVMIRGenerator {
 
   private collectStringConstants(ast: any): void {
     this.collectStringFromNode(ast)
+  }
+
+  private generateTemplateLiteral(ir: string[], expr: any): string {
+    const parts = expr.parts as (string | any)[]
+    if (parts.length === 0) {
+      // Empty string
+      const name = this.generateStringLiteral(ir, "")
+      const ptrReg = `%${this.valueCounter++}`
+      ir.push(`  ${ptrReg} = getelementptr [1 x i8], ptr ${name}, i64 0, i64 0`)
+      return ptrReg
+    }
+
+    // Collect all string parts into registers
+    const partRegs: string[] = []
+    for (const part of parts) {
+      if (typeof part === "string") {
+        // String literal part
+        const name = this.generateStringLiteral(ir, part)
+        const ptrReg = `%${this.valueCounter++}`
+        ir.push(`  ${ptrReg} = getelementptr [${part.length + 1} x i8], ptr ${name}, i64 0, i64 0`)
+        partRegs.push(ptrReg)
+      } else {
+        // Expression part - generate it and convert to string
+        const exprReg = this.generateExpression(ir, part)
+        // For now, assume it's already a string pointer
+        // TODO: convert numbers to strings
+        partRegs.push(exprReg)
+      }
+    }
+
+    // Concatenate all parts using string_concat
+    let result = partRegs[0]
+    for (let i = 1; i < partRegs.length; i++) {
+      const concatResult = `%${this.valueCounter++}`
+      ir.push(`  ${concatResult} = call ptr @string_concat(ptr ${result}, ptr ${partRegs[i]})`)
+      result = concatResult
+    }
+
+    return result
   }
 
   private generateBinaryExpression(ir: string[], expr: any): string {
@@ -728,11 +799,12 @@ class LLVMIRGenerator {
 
   private generateTableLiteral(ir: string[], expr: any): string {
     const tableReg = `%${this.valueCounter++}`
-    const capacity = expr.entries.length > 0 ? expr.entries.length * 2 : 4
+    const capacity = expr.columns.length > 0 ? expr.columns.length * 2 : 4
     ir.push(`  ${tableReg} = call ptr @table_new(i64 ${capacity})`)
 
-    for (let i = 0; i < expr.entries.length; i++) {
-      const { key, value } = expr.entries[i]
+    for (const col of expr.columns) {
+      const key = col.name
+      const value = col.values[0]
       const keyStr = this.generateStringLiteral(ir, key)
       const valueReg = this.generateExpression(ir, value)
       if (valueReg) {
@@ -770,6 +842,24 @@ class LLVMIRGenerator {
     }
     const reg = `%${this.valueCounter++}`
     ir.push(`  ${reg} = call i64 @array_get(ptr ${arrayPtr}, i64 ${index})`)
+    return reg
+  }
+
+  private generateSliceExpression(ir: string[], expr: any): string {
+    const array = this.generateExpression(ir, expr.object)
+    const start = this.generateExpression(ir, expr.start)
+    const end = this.generateExpression(ir, expr.end)
+
+    const isNestedIndex = expr.object?.type === "IndexExpression"
+    let arrayPtr = array
+    if (isNestedIndex) {
+      const r = `%${this.valueCounter++}`
+      ir.push(`  ${r} = inttoptr i64 ${array} to ptr`)
+      arrayPtr = r
+    }
+
+    const reg = `%${this.valueCounter++}`
+    ir.push(`  ${reg} = call ptr @array_slice(ptr ${arrayPtr}, i64 ${start}, i64 ${end})`)
     return reg
   }
 
@@ -851,6 +941,7 @@ class LLVMIRGenerator {
   private generateBlock(ir: string[], statement: any): void {
     for (const stmt of statement.statements) {
       this.generateStatement(ir, stmt)
+      if (this.blockTerminated) break
     }
   }
 
@@ -897,18 +988,20 @@ class LLVMIRGenerator {
   private generateBlockWithTerminator(ir: string[], statement: any): boolean {
     if (statement.type === "Block") {
       const lastStmt = statement.statements[statement.statements.length - 1]
-      if (lastStmt && lastStmt.type === "Return") {
+      if (lastStmt && (lastStmt.type === "Return" || lastStmt.type === "Break" || lastStmt.type === "Continue")) {
         for (const stmt of statement.statements) {
           this.generateStatement(ir, stmt)
+          if (this.blockTerminated) break
         }
         return true
       }
       for (const stmt of statement.statements) {
         this.generateStatement(ir, stmt)
+        if (this.blockTerminated) break
       }
       return false
     } else {
-      if (statement.type === "Return") {
+      if (statement.type === "Return" || statement.type === "Break" || statement.type === "Continue") {
         this.generateStatement(ir, statement)
         return true
       }
@@ -976,8 +1069,10 @@ class LLVMIRGenerator {
 
     ir.push(`${bodyLabel}:`)
     this.generateStatement(ir, body)
-    ir.push(`  br label %${incLabel}`)
-    ir.push("")
+    if (!this.blockTerminated) {
+      ir.push(`  br label %${incLabel}`)
+      ir.push("")
+    }
 
     ir.push(`${incLabel}:`)
     const currentValue = this.generateExpression(ir, { type: "Identifier", name: variable })
@@ -1103,6 +1198,7 @@ class LLVMIRGenerator {
 
     ir.push(`define ${llvmReturnType} @${name}(${paramStr}) {`)
     ir.push("entry:")
+    ir.push("  call void @gc_push_frame()")
 
     for (const param of llvmParams) {
       const paramReg = `%${param.name}`
@@ -1127,6 +1223,7 @@ class LLVMIRGenerator {
     }
 
     if (!hasReturn) {
+      ir.push("  call void @gc_pop_frame()")
       if (returnType !== "void") {
         ir.push(`  ret ${llvmReturnType} 0`)
       } else {
@@ -1156,7 +1253,9 @@ class LLVMIRGenerator {
     ir.push("define i32 @main() {")
     ir.push("entry:")
     ir.push("  call void @gc_init()")
+    ir.push("  call void @gc_push_frame()")
     ir.push("  call void @program()")
+    ir.push("  call void @gc_pop_frame()")
     ir.push("  ret i32 0")
     ir.push("}")
   }

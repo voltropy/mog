@@ -3,55 +3,275 @@
 #include <string.h>
 #include <stdio.h>
 
-/* GC Implementation - Mark and Sweep */
+/* Platform-specific includes for page allocation */
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
+/* --- Object Kind Enum --- */
+typedef enum {
+  OBJ_RAW,      /* Raw memory block (no internal pointers) */
+  OBJ_ARRAY,    /* Array with dimensions/strides/data */
+  OBJ_TABLE,    /* Hash table with buckets/entries */
+  OBJ_STRING,   /* String buffer */
+  OBJ_ENTRY     /* Table entry with key/value */
+} ObjectKind;
+
+/* --- GC Block Header --- */
 typedef struct Block {
   size_t size;
   uint8_t marked;
+  ObjectKind kind;
   struct Block* next;
 } Block;
 
+/* --- Mark Stack for Non-Recursive Marking --- */
+typedef struct {
+  Block** data;
+  size_t capacity;
+  size_t count;
+} MarkStack;
+
+static MarkStack mark_stack = {NULL, 0, 0};
+
+static void mark_stack_init(void) {
+  mark_stack.capacity = 1024;
+  mark_stack.data = (Block**)malloc(sizeof(Block*) * mark_stack.capacity);
+  mark_stack.count = 0;
+}
+
+static void mark_stack_push(Block* block) {
+  if (!block || block->marked) return;
+  
+  if (mark_stack.count >= mark_stack.capacity) {
+    mark_stack.capacity *= 2;
+    mark_stack.data = (Block**)realloc(mark_stack.data, sizeof(Block*) * mark_stack.capacity);
+  }
+  
+  mark_stack.data[mark_stack.count++] = block;
+  block->marked = 1;
+}
+
+static Block* mark_stack_pop(void) {
+  if (mark_stack.count == 0) return NULL;
+  return mark_stack.data[--mark_stack.count];
+}
+
+/* --- Large Object Allocator Constants --- */
+#define LARGE_OBJECT_THRESHOLD 4096  /* 1 page threshold for large objects */
+#define MAX_CACHED_MAPPINGS 16       /* Maximum number of freed mappings to cache */
+
+/* --- Large Object Tracking --- */
+typedef struct CachedMapping {
+  void* addr;
+  size_t size;
+  struct CachedMapping* next;
+} CachedMapping;
+
+typedef struct LargeBlock {
+  Block base;
+  void* mapping;
+  size_t mapping_size;
+} LargeBlock;
+
+/* --- Standard GC Globals --- */
 static Block* heap = NULL;
 static size_t heap_size = 0;
 static size_t alloc_threshold = 1024 * 1024;
 static size_t alloc_count = 0;
+static size_t gc_allocated_bytes = 0;
+static size_t gc_live_bytes = 0;
+static size_t gc_total_collections = 0;
+static double gc_growth_factor = 2.0;
+static size_t gc_min_threshold = 64 * 1024;
 
-void gc_init(void) {
-  heap = NULL;
-  heap_size = 0;
-  alloc_count = 0;
-}
+/* Large object cache */
+static CachedMapping* mapping_cache = NULL;
+static size_t mapping_cache_count = 0;
+static size_t page_size = 0;
 
-void gc_mark(Block* ptr) {
-  if (!ptr || ptr->marked) return;
-  ptr->marked = 1;
-}
+/* --- Shadow Stack for Root Tracking --- */
+#define MAX_FRAME_SLOTS 256
 
-void gc_mark_roots(void) {
-}
+typedef struct GCFrame {
+  struct GCFrame* prev;
+  int count;
+  void** slots[MAX_FRAME_SLOTS];
+} GCFrame;
 
-void gc_sweep(void) {
-  Block** ptr = &heap;
-  while (*ptr) {
-    if (!(*ptr)->marked) {
-      Block* to_free = *ptr;
-      *ptr = to_free->next;
-      heap_size -= to_free->size;
-      free(to_free);
-    } else {
-      (*ptr)->marked = 0;
-      ptr = &(*ptr)->next;
-    }
+static GCFrame* current_frame = NULL;
+
+/* Forward declarations */
+void gc_init(void);
+void* gc_alloc(size_t size);
+void* gc_alloc_kind(size_t size, ObjectKind kind);
+void gc_collect(void);
+void gc_mark(Block* ptr);
+void gc_mark_roots(void);
+void gc_sweep(void);
+void gc_stats(void);
+void gc_push_frame(void);
+void gc_pop_frame(void);
+void gc_add_root(void** slot);
+
+/* --- Platform-Specific Page Allocation --- */
+
+static void init_page_size(void) {
+  if (page_size == 0) {
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    page_size = si.dwPageSize;
+#else
+    page_size = (size_t)sysconf(_SC_PAGESIZE);
+    if (page_size == 0) page_size = 4096;
+#endif
   }
 }
 
-void gc_collect(void) {
-  gc_mark_roots();
-  gc_sweep();
-  alloc_count = 0;
+static size_t round_up_to_pages(size_t size) {
+  init_page_size();
+  return (size + page_size - 1) & ~(page_size - 1);
 }
 
-void* gc_alloc(size_t size) {
+static void* page_alloc(size_t size) {
+  size_t aligned_size = round_up_to_pages(size);
+  
+#ifdef _WIN32
+  void* addr = VirtualAlloc(NULL, aligned_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+  if (addr == NULL) return NULL;
+#else
+  void* addr = mmap(NULL, aligned_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (addr == MAP_FAILED) return NULL;
+#endif
+  
+  return addr;
+}
+
+static void page_free(void* addr, size_t size) {
+  if (addr == NULL) return;
+  
+#ifdef _WIN32
+  VirtualFree(addr, 0, MEM_RELEASE);
+#else
+  size_t aligned_size = round_up_to_pages(size);
+  munmap(addr, aligned_size);
+#endif
+}
+
+/* --- Large Object Cache Management --- */
+
+static void* cache_get_mapping(size_t min_size, size_t* out_actual_size) {
+  CachedMapping** current = &mapping_cache;
+  CachedMapping* best_fit = NULL;
+  CachedMapping** best_fit_prev = NULL;
+  
+  while (*current) {
+    CachedMapping* mapping = *current;
+    if (mapping->size >= min_size) {
+      if (!best_fit || mapping->size < best_fit->size) {
+        best_fit = mapping;
+        best_fit_prev = current;
+      }
+    }
+    current = &mapping->next;
+  }
+  
+  if (best_fit) {
+    *best_fit_prev = best_fit->next;
+    mapping_cache_count--;
+    void* addr = best_fit->addr;
+    *out_actual_size = best_fit->size;
+    free(best_fit);
+    return addr;
+  }
+  
+  *out_actual_size = 0;
+  return NULL;
+}
+
+static void cache_put_mapping(void* addr, size_t size) {
+  if (mapping_cache_count >= MAX_CACHED_MAPPINGS) {
+    if (mapping_cache) {
+      CachedMapping* oldest = mapping_cache;
+      mapping_cache = oldest->next;
+      page_free(oldest->addr, oldest->size);
+      free(oldest);
+      mapping_cache_count--;
+    }
+  }
+  
+  CachedMapping* entry = (CachedMapping*)malloc(sizeof(CachedMapping));
+  if (entry) {
+    entry->addr = addr;
+    entry->size = size;
+    entry->next = mapping_cache;
+    mapping_cache = entry;
+    mapping_cache_count++;
+  } else {
+    page_free(addr, size);
+  }
+}
+
+static void cache_clear(void) {
+  while (mapping_cache) {
+    CachedMapping* mapping = mapping_cache;
+    mapping_cache = mapping->next;
+    page_free(mapping->addr, mapping->size);
+    free(mapping);
+  }
+  mapping_cache_count = 0;
+}
+
+/* --- Large Object Allocation --- */
+
+static int is_large_block(Block* block) {
+  return block->size >= LARGE_OBJECT_THRESHOLD;
+}
+
+static void* large_object_alloc(size_t size, ObjectKind kind) {
+  size_t actual_mapping_size = 0;
+  void* mapping = cache_get_mapping(size, &actual_mapping_size);
+  
+  if (mapping == NULL) {
+    mapping = page_alloc(size);
+    if (mapping == NULL) {
+      cache_clear();
+      mapping = page_alloc(size);
+      if (mapping == NULL) {
+        fprintf(stderr, "Out of memory (large object allocation)\n");
+        exit(1);
+      }
+    }
+    actual_mapping_size = round_up_to_pages(size);
+  }
+  
+  LargeBlock* block = (LargeBlock*)malloc(sizeof(LargeBlock));
+  if (!block) {
+    cache_put_mapping(mapping, actual_mapping_size);
+    fprintf(stderr, "Out of memory (large object header)\n");
+    exit(1);
+  }
+  
+  block->base.size = size;
+  block->base.marked = 0;
+  block->base.kind = kind;
+  block->base.next = heap;
+  block->mapping = mapping;
+  block->mapping_size = actual_mapping_size;
+  
+  heap = (Block*)block;
+  heap_size += size;
+  
+  return mapping;
+}
+
+/* --- Small Object Allocation --- */
+
+static void* small_object_alloc(size_t size, ObjectKind kind) {
   void* ptr = malloc(sizeof(Block) + size);
   if (!ptr) {
     gc_collect();
@@ -65,19 +285,60 @@ void* gc_alloc(size_t size) {
   Block* block = (Block*)ptr;
   block->size = size;
   block->marked = 0;
+  block->kind = kind;
   block->next = heap;
   heap = block;
   heap_size += size;
+  
+  return (void*)((uintptr_t)ptr + sizeof(Block));
+}
+
+/* --- GC Functions --- */
+
+void gc_init(void) {
+  heap = NULL;
+  heap_size = 0;
+  alloc_count = 0;
+  gc_allocated_bytes = 0;
+  gc_live_bytes = 0;
+  gc_total_collections = 0;
+  page_size = 0;
+  mapping_cache = NULL;
+  mapping_cache_count = 0;
+  current_frame = NULL;
+  mark_stack_init();
+}
+
+void* gc_alloc(size_t size) {
+  return gc_alloc_kind(size, OBJ_RAW);
+}
+
+void* gc_alloc_kind(size_t size, ObjectKind kind) {
+  void* result;
+  
+  if (size >= LARGE_OBJECT_THRESHOLD) {
+    result = large_object_alloc(size, kind);
+  } else {
+    result = small_object_alloc(size, kind);
+  }
+  
   alloc_count += size;
+  gc_allocated_bytes += size;
   
   if (alloc_count >= alloc_threshold) {
     gc_collect();
   }
   
-  return (void*)((uintptr_t)ptr + sizeof(Block));
+  return result;
 }
 
-/* Array Implementation */
+/* Get Block header from user pointer */
+static Block* ptr_to_block(void* ptr) {
+  if (!ptr) return NULL;
+  return (Block*)((uintptr_t)ptr - sizeof(Block));
+}
+
+/* --- Type Definitions (needed for tracing) --- */
 
 typedef struct Array {
   uint64_t element_size;
@@ -87,6 +348,207 @@ typedef struct Array {
   void* data;
 } Array;
 
+typedef struct TableEntry {
+  char* key;
+  uint64_t key_len;
+  uint64_t value;
+  struct TableEntry* next;
+} TableEntry;
+
+typedef struct Table {
+  TableEntry** buckets;
+  uint64_t capacity;
+  uint64_t count;
+} Table;
+
+/* --- Tracing Functions --- */
+
+void gc_trace_array(Array* arr);
+void gc_trace_table(Table* table);
+void gc_trace_table_entry(TableEntry* entry);
+
+void gc_mark(Block* ptr) {
+  if (!ptr || ptr->marked) return;
+  
+  mark_stack_push(ptr);
+  
+  /* Process mark stack iteratively */
+  while (mark_stack.count > 0) {
+    Block* block = mark_stack_pop();
+    
+    /* Trace based on object kind */
+    switch (block->kind) {
+      case OBJ_ARRAY:
+        gc_trace_array((Array*)((uintptr_t)block + sizeof(Block)));
+        break;
+      case OBJ_TABLE:
+        gc_trace_table((Table*)((uintptr_t)block + sizeof(Block)));
+        break;
+      case OBJ_ENTRY:
+        gc_trace_table_entry((TableEntry*)((uintptr_t)block + sizeof(Block)));
+        break;
+      case OBJ_RAW:
+      case OBJ_STRING:
+      default:
+        /* No internal pointers to trace */
+        break;
+    }
+  }
+}
+
+void gc_trace_array(Array* arr) {
+  if (!arr) return;
+  
+  /* Mark dimensions array */
+  if (arr->dimensions) {
+    Block* dim_block = ptr_to_block(arr->dimensions);
+    if (dim_block) mark_stack_push(dim_block);
+  }
+  
+  /* Mark strides array */
+  if (arr->strides) {
+    Block* stride_block = ptr_to_block(arr->strides);
+    if (stride_block) mark_stack_push(stride_block);
+  }
+  
+  /* Mark data - for now treat as raw, could be reference array in future */
+  if (arr->data) {
+    Block* data_block = ptr_to_block(arr->data);
+    if (data_block) mark_stack_push(data_block);
+  }
+}
+
+void gc_trace_table(Table* table) {
+  if (!table) return;
+  
+  /* Mark buckets array */
+  if (table->buckets) {
+    Block* buckets_block = ptr_to_block(table->buckets);
+    if (buckets_block) mark_stack_push(buckets_block);
+  }
+  
+  /* Mark all entries in all buckets */
+  for (uint64_t i = 0; i < table->capacity; i++) {
+    TableEntry* entry = table->buckets[i];
+    while (entry) {
+      Block* entry_block = ptr_to_block(entry);
+      if (entry_block && !entry_block->marked) {
+        mark_stack_push(entry_block);
+        /* Trace entry internals */
+        gc_trace_table_entry(entry);
+      }
+      entry = entry->next;
+    }
+  }
+}
+
+void gc_trace_table_entry(TableEntry* entry) {
+  if (!entry) return;
+  
+  /* Mark the key string */
+  if (entry->key) {
+    Block* key_block = ptr_to_block(entry->key);
+    if (key_block) mark_stack_push(key_block);
+  }
+  
+  /* Note: entry->value could be a pointer to another heap object.
+     For now we assume values are primitives (i64).
+     If values can be references, we'd need to trace them here. */
+}
+
+/* --- Shadow Stack Implementation --- */
+
+void gc_push_frame(void) {
+  GCFrame* frame = (GCFrame*)malloc(sizeof(GCFrame));
+  if (!frame) {
+    fprintf(stderr, "Out of memory (GC frame)\n");
+    exit(1);
+  }
+  
+  frame->prev = current_frame;
+  frame->count = 0;
+  current_frame = frame;
+}
+
+void gc_pop_frame(void) {
+  if (!current_frame) return;
+  
+  GCFrame* frame = current_frame;
+  current_frame = frame->prev;
+  free(frame);
+}
+
+void gc_add_root(void** slot) {
+  if (!current_frame || !slot) return;
+  
+  if (current_frame->count < MAX_FRAME_SLOTS) {
+    current_frame->slots[current_frame->count++] = slot;
+  }
+}
+
+/* Mark all roots from shadow stack */
+void gc_mark_roots(void) {
+  GCFrame* frame = current_frame;
+  
+  while (frame) {
+    for (int i = 0; i < frame->count; i++) {
+      void* ptr = *frame->slots[i];
+      if (ptr) {
+        Block* block = ptr_to_block(ptr);
+        if (block) gc_mark(block);
+      }
+    }
+    frame = frame->prev;
+  }
+}
+
+void gc_sweep(void) {
+  gc_live_bytes = 0;
+  Block** ptr = &heap;
+  while (*ptr) {
+    if (!(*ptr)->marked) {
+      Block* to_free = *ptr;
+      *ptr = to_free->next;
+      heap_size -= to_free->size;
+      
+      if (is_large_block(to_free)) {
+        LargeBlock* large = (LargeBlock*)to_free;
+        cache_put_mapping(large->mapping, large->mapping_size);
+      }
+      
+      free(to_free);
+    } else {
+      gc_live_bytes += (*ptr)->size;
+      (*ptr)->marked = 0;
+      ptr = &(*ptr)->next;
+    }
+  }
+}
+
+void gc_collect(void) {
+  gc_mark_roots();
+  gc_sweep();
+  gc_total_collections++;
+  
+  size_t new_threshold = (size_t)(gc_live_bytes * gc_growth_factor);
+  if (new_threshold < gc_min_threshold) {
+    new_threshold = gc_min_threshold;
+  }
+  alloc_threshold = new_threshold;
+  
+  gc_allocated_bytes = 0;
+  alloc_count = 0;
+}
+
+void gc_stats(void) {
+  fprintf(stderr, "[GC] collections=%zu allocated=%zu live=%zu threshold=%zu\n",
+          gc_total_collections, gc_allocated_bytes, gc_live_bytes, alloc_threshold);
+}
+
+/* --- Array Implementation --- */
+
+/* Array struct defined above for tracing */
+
 uint64_t array_length(void* array_ptr) {
   Array* arr = (Array*)array_ptr;
   if (!arr || arr->dimension_count == 0) return 0;
@@ -94,7 +556,7 @@ uint64_t array_length(void* array_ptr) {
 }
 
 void* array_alloc(uint64_t element_size, uint64_t dimension_count, uint64_t* dimensions) {
-  Array* arr = (Array*)gc_alloc(sizeof(Array));
+  Array* arr = (Array*)gc_alloc_kind(sizeof(Array), OBJ_ARRAY);
   arr->element_size = element_size;
   arr->dimension_count = dimension_count;
   
@@ -126,20 +588,34 @@ void array_set(void* array_ptr, uint64_t index, uint64_t value) {
   *(uint64_t*)(data + index * arr->element_size) = value;
 }
 
-/* Table Implementation */
+void* array_slice(void* array_ptr, uint64_t start, uint64_t end) {
+  Array* arr = (Array*)array_ptr;
+  uint64_t slice_len = end - start;
+  if (slice_len > arr->dimensions[0] - start) {
+    slice_len = arr->dimensions[0] - start;
+  }
+  
+  Array* slice = (Array*)gc_alloc_kind(sizeof(Array), OBJ_ARRAY);
+  slice->element_size = arr->element_size;
+  slice->dimension_count = 1;
+  slice->dimensions = (uint64_t*)gc_alloc(sizeof(uint64_t));
+  slice->dimensions[0] = slice_len;
+  slice->strides = (uint64_t*)gc_alloc(sizeof(uint64_t));
+  slice->strides[0] = 1;
+  slice->data = gc_alloc(arr->element_size * slice_len);
+  
+  uint8_t* src_data = (uint8_t*)arr->data;
+  uint8_t* dst_data = (uint8_t*)slice->data;
+  for (uint64_t i = 0; i < slice_len; i++) {
+    *(uint64_t*)(dst_data + i * arr->element_size) = 
+      *(uint64_t*)(src_data + (start + i) * arr->element_size);
+  }
+  
+  return slice;
+}
 
-typedef struct TableEntry {
-  char* key;
-  uint64_t key_len;
-  uint64_t value;
-  struct TableEntry* next;
-} TableEntry;
-
-typedef struct Table {
-  TableEntry** buckets;
-  uint64_t capacity;
-  uint64_t count;
-} Table;
+/* --- Table Implementation --- */
+/* TableEntry and Table structs defined above for tracing */
 
 uint64_t table_hash(const char* key, uint64_t key_len) {
   uint64_t hash = 5381;
@@ -150,7 +626,7 @@ uint64_t table_hash(const char* key, uint64_t key_len) {
 }
 
 void* table_new(uint64_t initial_capacity) {
-  Table* table = (Table*)gc_alloc(sizeof(Table));
+  Table* table = (Table*)gc_alloc_kind(sizeof(Table), OBJ_TABLE);
   table->capacity = initial_capacity;
   table->count = 0;
   table->buckets = (TableEntry**)gc_alloc(sizeof(TableEntry*) * initial_capacity);
@@ -190,7 +666,7 @@ void table_set(void* table_ptr, const char* key, uint64_t key_len, uint64_t valu
     entry = entry->next;
   }
   
-  TableEntry* new_entry = (TableEntry*)gc_alloc(sizeof(TableEntry));
+  TableEntry* new_entry = (TableEntry*)gc_alloc_kind(sizeof(TableEntry), OBJ_ENTRY);
   new_entry->key = (char*)gc_alloc(key_len);
   memcpy(new_entry->key, key, key_len);
   new_entry->key_len = key_len;
@@ -207,62 +683,60 @@ void* llm_call(const char* prompt, const char* options, const char* return_type)
   printf("[LLM Call] Options: %s\n", options);
   printf("[LLM Call] Return Type: %s\n", return_type);
   
-  /* Placeholder: return the prompt as-is */
   uint64_t len = strlen(prompt);
   void* result = gc_alloc(len + 1);
   memcpy(result, prompt, len + 1);
-  
   return result;
 }
 
-/* Vector and Matrix Operations */
+/* Vector Operations */
 
 void* vector_add(void* a, void* b, uint64_t size) {
-  uint64_t* result = (uint64_t*)gc_alloc(sizeof(uint64_t) * size);
-  uint64_t* arr_a = (uint64_t*)a;
-  uint64_t* arr_b = (uint64_t*)b;
+  double* result = (double*)gc_alloc(sizeof(double) * size);
+  double* av = (double*)a;
+  double* bv = (double*)b;
   
   for (uint64_t i = 0; i < size; i++) {
-    result[i] = arr_a[i] + arr_b[i];
+    result[i] = av[i] + bv[i];
   }
   
   return result;
 }
 
 void* vector_sub(void* a, void* b, uint64_t size) {
-  uint64_t* result = (uint64_t*)gc_alloc(sizeof(uint64_t) * size);
-  uint64_t* arr_a = (uint64_t*)a;
-  uint64_t* arr_b = (uint64_t*)b;
+  double* result = (double*)gc_alloc(sizeof(double) * size);
+  double* av = (double*)a;
+  double* bv = (double*)b;
   
   for (uint64_t i = 0; i < size; i++) {
-    result[i] = arr_a[i] - arr_b[i];
+    result[i] = av[i] - bv[i];
   }
   
   return result;
 }
 
 uint64_t vector_dot(void* a, void* b, uint64_t size) {
-  uint64_t* arr_a = (uint64_t*)a;
-  uint64_t* arr_b = (uint64_t*)b;
-  uint64_t result = 0;
+  double* av = (double*)a;
+  double* bv = (double*)b;
+  double sum = 0;
   
   for (uint64_t i = 0; i < size; i++) {
-    result += arr_a[i] * arr_b[i];
+    sum += av[i] * bv[i];
   }
   
-  return result;
+  return (uint64_t)sum;
 }
 
 void* matrix_mul(void* a, void* b, uint64_t rows_a, uint64_t cols_a, uint64_t cols_b) {
-  uint64_t* result = (uint64_t*)gc_alloc(sizeof(uint64_t) * rows_a * cols_b);
-  uint64_t* mat_a = (uint64_t*)a;
-  uint64_t* mat_b = (uint64_t*)b;
+  double* result = (double*)gc_alloc(sizeof(double) * rows_a * cols_b);
+  double* am = (double*)a;
+  double* bm = (double*)b;
   
   for (uint64_t i = 0; i < rows_a; i++) {
     for (uint64_t j = 0; j < cols_b; j++) {
-      uint64_t sum = 0;
+      double sum = 0;
       for (uint64_t k = 0; k < cols_a; k++) {
-        sum += mat_a[i * cols_a + k] * mat_b[k * cols_b + j];
+        sum += am[i * cols_a + k] * bm[k * cols_b + j];
       }
       result[i * cols_b + j] = sum;
     }
@@ -271,45 +745,7 @@ void* matrix_mul(void* a, void* b, uint64_t rows_a, uint64_t cols_a, uint64_t co
   return result;
 }
 
-/* Print Functions */
-
-void print_i64(int64_t value) {
-  printf("%lld", (long long)value);
-}
-
-void print_u64(uint64_t value) {
-  printf("%llu", (unsigned long long)value);
-}
-
-void print_f64(double value) {
-  printf("%f", value);
-}
-
-void print_string(const char* str) {
-  printf("%s", str);
-}
-
-void println_i64(int64_t value) {
-  printf("%lld\n", (long long)value);
-}
-
-void println_u64(uint64_t value) {
-  printf("%llu\n", (unsigned long long)value);
-}
-
-void println_f64(double value) {
-  printf("%f\n", value);
-}
-
-void println_string(const char* str) {
-  printf("%s\n", str);
-}
-
-void println(void) {
-  printf("\n");
-}
-
-/* String Functions */
+/* String Operations */
 
 uint64_t string_length(const char* str) {
   if (!str) return 0;
@@ -317,49 +753,67 @@ uint64_t string_length(const char* str) {
 }
 
 char* string_concat(const char* a, const char* b) {
-  if (!a) a = "";
-  if (!b) b = "";
-  size_t len_a = strlen(a);
-  size_t len_b = strlen(b);
+  uint64_t len_a = strlen(a);
+  uint64_t len_b = strlen(b);
+  
   char* result = (char*)gc_alloc(len_a + len_b + 1);
   memcpy(result, a, len_a);
-  memcpy(result + len_a, b, len_b);
-  result[len_a + len_b] = '\0';
+  memcpy(result + len_a, b, len_b + 1);
+  
   return result;
 }
 
-/* Input Functions */
+/* I/O Functions */
+
+void print_i64(int64_t value) {
+  printf("%ld", value);
+}
+
+void print_u64(uint64_t value) {
+  printf("%lu", value);
+}
+
+void print_f64(double value) {
+  printf("%f", value);
+}
+
+void print_string(const char* str) {
+  printf("%s", str ? str : "(null)");
+}
+
+void println(void) {
+  printf("\n");
+}
+
+void println_i64(int64_t value) {
+  printf("%ld\n", value);
+}
+
+void println_u64(uint64_t value) {
+  printf("%lu\n", value);
+}
+
+void println_f64(double value) {
+  printf("%f\n", value);
+}
+
+void println_string(const char* str) {
+  printf("%s\n", str ? str : "(null)");
+}
 
 int64_t input_i64(void) {
   int64_t value;
-  scanf("%lld", (long long*)&value);
+  scanf("%ld", &value);
   return value;
 }
 
 uint64_t input_u64(void) {
   uint64_t value;
-  scanf("%llu", (unsigned long long*)&value);
+  scanf("%lu", &value);
   return value;
 }
 
-double input_f64(void) {
-  double value;
-  scanf("%lf", &value);
-  return value;
-}
-
-char* input_string(void) {
-  char* buffer = (char*)gc_alloc(1024);
-  if (fgets(buffer, 1024, stdin) != NULL) {
-    size_t len = strlen(buffer);
-    if (len > 0 && buffer[len-1] == '\n') {
-      buffer[len-1] = '\0';
-    }
-  }
-  return buffer;
-}
-
-/* CLI Argument Helpers */
+/* CLI Argument Access */
 
 uint64_t get_argc_value(void* cli_table) {
   if (!cli_table) return 0;
@@ -369,7 +823,7 @@ uint64_t get_argc_value(void* cli_table) {
 uint64_t get_argv_value(void* cli_table, uint64_t index) {
   if (!cli_table) return 0;
   
-  Array* args_array = (Array*)table_get(cli_table, "args", 4);
+  uint64_t args_array = table_get(cli_table, "args", 4);
   if (!args_array) return 0;
   
   return array_get((void*)args_array, index);
