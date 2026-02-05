@@ -442,6 +442,10 @@ class LLVMIRGenerator {
         return this.generateArrayFill(ir, expr)
       case "MapLiteral":
         return this.generateMapLiteral(ir, expr)
+      case "StructLiteral":
+        return this.generateStructLiteral(ir, expr)
+      case "SoALiteral":
+        return this.generateSoALiteral(ir, expr)
       case "MemberExpression":
         return this.generateMemberExpression(ir, expr)
       case "IndexExpression":
@@ -1447,6 +1451,55 @@ class LLVMIRGenerator {
     return tableReg
   }
 
+  private generateStructLiteral(ir: string[], expr: any): string {
+    // For now, structs are represented as maps for simplicity
+    // Create a map with field names as keys
+    const structReg = `%${this.valueCounter++}`
+    const capacity = expr.fields.length > 0 ? expr.fields.length * 2 : 4
+    ir.push(`  ${structReg} = call ptr @map_new(i64 ${capacity})`)
+
+    for (const field of expr.fields) {
+      const key = field.name
+      const valueReg = this.generateExpression(ir, field.value)
+      if (valueReg) {
+        const keyStr = this.generateStringLiteral(ir, key)
+        ir.push(`  call void @map_set(ptr ${structReg}, ptr ${keyStr}, i64 ${key.length}, i64 ${valueReg})`)
+      }
+    }
+
+    return structReg
+  }
+
+  private generateSoALiteral(ir: string[], expr: any): string {
+    // SoA is represented as a map of field names to arrays
+    const soaReg = `%${this.valueCounter++}`
+    const capacity = expr.columns.length > 0 ? expr.columns.length * 2 : 4
+    ir.push(`  ${soaReg} = call ptr @map_new(i64 ${capacity})`)
+
+    for (const col of expr.columns) {
+      const fieldName = col.name
+      const values = col.values
+      
+      // Create array for this column
+      const arrReg = `%${this.valueCounter++}`
+      ir.push(`  ${arrReg} = call ptr @array_new(i64 ${values.length})`)
+      
+      // Add elements to array
+      for (let i = 0; i < values.length; i++) {
+        const elemReg = this.generateExpression(ir, values[i])
+        if (elemReg) {
+          ir.push(`  call void @array_push(ptr ${arrReg}, i64 ${elemReg})`)
+        }
+      }
+      
+      // Store array in SoA map
+      const keyStr = this.generateStringLiteral(ir, fieldName)
+      ir.push(`  call void @map_set(ptr ${soaReg}, ptr ${keyStr}, i64 ${fieldName.length}, i64 ptrtoint ptr ${arrReg} to i64)`)
+    }
+
+    return soaReg
+  }
+
   private generateMemberExpression(ir: string[], expr: any): string {
     const obj = this.generateExpression(ir, expr.object)
     // Generate the key string constant
@@ -2305,11 +2358,20 @@ class LLVMIRGenerator {
         return "ptr"
       case "MapType":
         return "ptr"
+      case "StructType":
+        // Structs are heap-allocated, represented as pointers
+        return "ptr"
+      case "AOSType":
+        // AoS is an array of structs, represented as pointer
+        return "ptr"
+      case "SOAType":
+        // SoA is heap-allocated, represented as pointer
+        return "ptr"
       case "PointerType":
         return "ptr"
       case "VoidType":
         return "void"
-default:
+ default:
         return "i64"
     }
   }
