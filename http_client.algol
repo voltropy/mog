@@ -1,0 +1,100 @@
+// Simple HTTP client using POSIX sockets
+// Makes a GET request to httpbin.org
+
+fn main() -> i64 {
+  // Socket constants
+  AF_INET: i64 = 2;      // AF_INET
+  SOCK_STREAM: i64 = 1;  // SOCK_STREAM
+  
+  print_string("=== HTTP Client Test ===");
+  println();
+  
+  // Create socket
+  sockfd: i64 = sys_socket(AF_INET, SOCK_STREAM, 0);
+  print_string("Socket created, fd: ");
+  print(sockfd);
+  println();
+  
+  if (sockfd < 0) {
+    print_string("Failed to create socket");
+    println();
+    return 1;
+  }
+  
+  // Use httpbin.org IP (DNS lookup: 52.204.75.48)
+  ip_addr: i64 = sys_inet_addr("52.204.75.48");
+  
+  // Connect to httpbin.org:80
+  result: i64 = sys_connect(sockfd, ip_addr, 80);
+  print_string("Connect result: ");
+  print(result);
+  println();
+  
+  if (result < 0) {
+    print_string("Failed to connect");
+    println();
+    sys_close(sockfd);
+    return 1;
+  }
+  
+  print_string("Connected successfully!");
+  println();
+  
+  // Build HTTP request - HTTP/1.0 to get Connection: close
+  request: ptr = "GET /get HTTP/1.0\r\nHost: httpbin.org\r\n\r\n";
+  request_len: i64 = 40;
+  
+  // Send request
+  bytes_sent: i64 = sys_send(sockfd, request, request_len);
+  print_string("Bytes sent: ");
+  print(bytes_sent);
+  println();
+  
+  if (bytes_sent < 0) {
+    print_string("Failed to send request");
+    println();
+    sys_close(sockfd);
+    return 1;
+  }
+  
+  // Receive response
+  buf: ptr = gc_alloc(8192);
+  total: i64 = 0;
+  receiving: i64 = 1;
+  
+  while (receiving) {
+    bytes: i64 = sys_recv(sockfd, buf + total, 8192);
+    
+    if (bytes <= 0) {
+      receiving := 0;
+    } else {
+      total := total + bytes;
+      print_string("Received chunk: ");
+      print(bytes);
+      print_string(" bytes");
+      println();
+    }
+  }
+  
+  // Close socket
+  sys_close(sockfd);
+  
+  print_string("Total bytes received: ");
+  print(total);
+  println();
+  println();
+  
+  // Null-terminate for printing
+  buf[total] := 0;
+  
+  print_string("=== HTTP Response ===");
+  println();
+  print_string(buf);
+  println();
+  println();
+  
+  print_string("HTTP request completed!");
+  println();
+  
+  return 0;
+}

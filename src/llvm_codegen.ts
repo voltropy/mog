@@ -482,8 +482,32 @@ class LLVMIRGenerator {
     if (node.type === "StringLiteral") {
       const name = `@str${this.stringCounter++}`
       this.stringNameMap.set(node.value, name)
-      const escaped = node.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-      const strDef = `${name} = private unnamed_addr constant [${node.value.length + 1} x i8] c"${escaped}\\00"`
+      // Convert string to LLVM IR format
+      // The node.value contains actual characters (\r becomes carriage return, etc.)
+      // We need to escape for LLVM IR and convert control chars to LLVM escape sequences
+      // node.value now contains decoded characters (actual \r, \n, etc.)
+      // Need to convert to LLVM IR escape sequences
+      let llvmEscaped = ""
+      for (const char of node.value) {
+        const code = char.charCodeAt(0)
+        if (char === "\\") {
+          llvmEscaped += "\\\\"
+        } else if (char === '"') {
+          llvmEscaped += '\\"'
+        } else if (code === 10) {  // newline - actual \n char
+          llvmEscaped += "\\0A"
+        } else if (code === 13) {  // carriage return - actual \r char
+          llvmEscaped += "\\0D"
+        } else if (code === 9) {   // tab - actual \t char
+          llvmEscaped += "\\09"
+        } else if (code < 32 || code > 126) {
+          // Other non-printable chars - use hex escape
+          llvmEscaped += `\\${code.toString(16).padStart(2, "0").toUpperCase()}`
+        } else {
+          llvmEscaped += char
+        }
+      }
+      const strDef = `${name} = private unnamed_addr constant [${node.value.length + 1} x i8] c"${llvmEscaped}\\00"`
       this.stringConstants.push(strDef)
       return
     }
@@ -493,8 +517,14 @@ class LLVMIRGenerator {
       for (const part of node.parts) {
         if (typeof part === "string") {
           const name = `@str${this.stringCounter++}`
-          const escaped = part.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-          const strDef = `${name} = private unnamed_addr constant [${part.length + 1} x i8] c"${escaped}\\00"`
+          // Escape backslash and quote for LLVM IR, then convert escape sequences to LLVM format
+          const llvmEscaped = part
+            .replace(/\\/g, "\\\\")    // Escape backslash
+            .replace(/"/g, '\\"')      // Escape quote
+            .replace(/\n/g, "\\0A")     // Newline -> \0A
+            .replace(/\r/g, "\\0D")     // Carriage return -> \0D
+            .replace(/\t/g, "\\09")     // Tab -> \09
+          const strDef = `${name} = private unnamed_addr constant [${part.length + 1} x i8] c"${llvmEscaped}\\00"`
           this.stringConstants.push(strDef)
         } else {
           this.collectStringFromNode(part)
@@ -506,8 +536,13 @@ class LLVMIRGenerator {
     // Collect MemberExpression property names as string constants
     if (node.type === "MemberExpression") {
       const name = `@key_${node.property}_${this.stringCounter++}`
-      const escaped = node.property.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-      const strDef = `${name} = private unnamed_addr constant [${node.property.length + 1} x i8] c"${escaped}\\00"`
+      const llvmEscaped = node.property
+        .replace(/\\/g, "\\\\")    // Escape backslash
+        .replace(/"/g, '\\"')      // Escape quote
+        .replace(/\n/g, "\\0A")     // Newline -> \0A
+        .replace(/\r/g, "\\0D")     // Carriage return -> \0D
+        .replace(/\t/g, "\\09")     // Tab -> \09
+      const strDef = `${name} = private unnamed_addr constant [${node.property.length + 1} x i8] c"${llvmEscaped}\\00"`
       this.stringConstants.push(strDef)
     }
 
@@ -659,6 +694,11 @@ class LLVMIRGenerator {
     // Check for vector operations - at least one operand is an array
     if (this.isVectorOperation(expr.left, expr.right)) {
       return this.generateVectorOperation(ir, expr, left, right)
+    }
+
+    // Handle pointer arithmetic: ptr + offset or ptr - offset
+    if (this.isPointerArithmetic(expr, left, right)) {
+      return this.generatePointerArithmetic(ir, expr, left, right)
     }
 
     const opMap: Record<string, string[]> = {
@@ -1159,7 +1199,6 @@ class LLVMIRGenerator {
       case "sys_send":
       case "sys_recv":
       case "sys_close":
-      case "sys_inet_addr":
       case "sys_errno": {
         const resultReg = allocateResult()
         switch (funcName) {
@@ -1172,14 +1211,18 @@ class LLVMIRGenerator {
           case "sys_close":
             ir.push(`  ${resultReg} = call i64 @sys_close(i64 ${args[0]})`)
             break
-          case "sys_inet_addr":
-            ir.push(`  ${resultReg} = call i64 @sys_inet_addr(ptr ${args[0]})`)
-            break
           case "sys_errno":
             ir.push(`  ${resultReg} = call i64 @sys_errno()`)
             break
         }
         return resultReg
+      }
+      case "sys_inet_addr": {
+        const inetResult = `%${this.valueCounter++}`
+        ir.push(`  ${inetResult} = call i32 @sys_inet_addr(ptr ${args[0]})`)
+        const zextReg = allocateResult()
+        ir.push(`  ${zextReg} = zext i32 ${inetResult} to i64`)
+        return zextReg
       }
       default:
         return "0"
@@ -1339,40 +1382,63 @@ class LLVMIRGenerator {
 
         ir.push(`  call void @map_set(ptr ${obj}, ptr ${keyPtr}, i64 ${keyLen}, i64 ${valueReg})`)
       } else {
-        // Array assignment: array[index] := value
-        // Handle nested array access
-        const isNestedIndex = target.object?.type === "IndexExpression"
-        let arrayPtr = obj
-        if (isNestedIndex) {
-          const r = `%${this.valueCounter++}`
-          ir.push(`  ${r} = inttoptr i64 ${obj} to ptr`)
-          arrayPtr = r
-        }
+        // Check if this is a raw pointer (from gc_alloc) vs an array object
+        const objVar = target.object?.type === "Identifier" ? this.variableTypes.get(target.object.name) : null
+        const isRawPointer = objVar?.type === "PointerType"
+        
+        if (isRawPointer) {
+          // Raw pointer access: use getelementptr + store directly
+          // Handle nested array access (pointer arithmetic on raw ptr)
+          const isNestedIndex = target.object?.type === "IndexExpression"
+          let ptrReg = obj
+          if (isNestedIndex) {
+            const r = `%${this.valueCounter++}`
+            ir.push(`  ${r} = inttoptr i64 ${obj} to ptr`)
+            ptrReg = r
+          }
+          
+          // Calculate element address: ptr + index
+          const elemPtr = `%${this.valueCounter++}`
+          ir.push(`  ${elemPtr} = getelementptr i8, ptr ${ptrReg}, i64 ${index}`)
+          
+          // Store the value
+          ir.push(`  store i64 ${valueReg}, ptr ${elemPtr}`)
+        } else {
+          // Array assignment: array[index] := value
+          // Handle nested array access
+          const isNestedIndex = target.object?.type === "IndexExpression"
+          let arrayPtr = obj
+          if (isNestedIndex) {
+            const r = `%${this.valueCounter++}`
+            ir.push(`  ${r} = inttoptr i64 ${obj} to ptr`)
+            arrayPtr = r
+          }
 
-        // Determine element type to use appropriate setter
-        const elementType = this.getArrayElementType(target.object)
+          // Determine element type to use appropriate setter
+          const elementType = this.getArrayElementType(target.object)
 
-        // Emit bounds check elision hint in release mode for AoS/SoA operations
-        if (this.shouldElideBoundsCheck()) {
-          ir.push(`  ; BOUNDS_CHECK_ELIDED: release mode optimization`)
-        }
+          // Emit bounds check elision hint in release mode for AoS/SoA operations
+          if (this.shouldElideBoundsCheck()) {
+            ir.push(`  ; BOUNDS_CHECK_ELIDED: release mode optimization`)
+          }
 
-        if (elementType?.type === "FloatType") {
-          if (elementType.kind === "f32") {
-            // Convert i64 value to float
-            const floatReg = `%${this.valueCounter++}`
-            ir.push(`  ${floatReg} = uitofp i64 ${valueReg} to float`)
-            ir.push(`  call void @array_set_f32(ptr ${arrayPtr}, i64 ${index}, float ${floatReg})`)
-          } else if (elementType.kind === "f64") {
-            // Convert i64 value to double
-            const doubleReg = `%${this.valueCounter++}`
-            ir.push(`  ${doubleReg} = uitofp i64 ${valueReg} to double`)
-            ir.push(`  call void @array_set_f64(ptr ${arrayPtr}, i64 ${index}, double ${doubleReg})`)
+          if (elementType?.type === "FloatType") {
+            if (elementType.kind === "f32") {
+              // Convert i64 value to float
+              const floatReg = `%${this.valueCounter++}`
+              ir.push(`  ${floatReg} = uitofp i64 ${valueReg} to float`)
+              ir.push(`  call void @array_set_f32(ptr ${arrayPtr}, i64 ${index}, float ${floatReg})`)
+            } else if (elementType.kind === "f64") {
+              // Convert i64 value to double
+              const doubleReg = `%${this.valueCounter++}`
+              ir.push(`  ${doubleReg} = uitofp i64 ${valueReg} to double`)
+              ir.push(`  call void @array_set_f64(ptr ${arrayPtr}, i64 ${index}, double ${doubleReg})`)
+            } else {
+              ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
+            }
           } else {
             ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
           }
-        } else {
-          ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
         }
       }
     } else if (target && target.type === "MemberExpression") {
@@ -1655,6 +1721,28 @@ class LLVMIRGenerator {
       const reg = `%${this.valueCounter++}`
       ir.push(`  ${reg} = call i64 @map_get(ptr ${arrayPtr}, ptr ${keyPtr}, i64 ${keyLen})`)
       return reg
+    }
+
+    // Check if this is a raw pointer (from gc_alloc)
+    const objVar = expr.object?.type === "Identifier" ? this.variableTypes.get(expr.object.name) : null
+    if (objVar?.type === "PointerType") {
+      // Raw pointer access: use getelementptr + load directly
+      const isNestedIndex = expr.object?.type === "IndexExpression"
+      let ptrReg = arrayPtr
+      if (isNestedIndex) {
+        const r = `%${this.valueCounter++}`
+        ir.push(`  ${r} = inttoptr i64 ${obj} to ptr`)
+        ptrReg = r
+      }
+      
+      // Calculate element address: ptr + index
+      const elemPtr = `%${this.valueCounter++}`
+      ir.push(`  ${elemPtr} = getelementptr i8, ptr ${ptrReg}, i64 ${index}`)
+      
+      // Load the value
+      const valReg = `%${this.valueCounter++}`
+      ir.push(`  ${valReg} = load i64, ptr ${elemPtr}`)
+      return valReg
     }
 
     // Determine element type to use appropriate getter
@@ -2432,7 +2520,7 @@ class LLVMIRGenerator {
     ir.push("declare i64 @sys_recv(i64, ptr, i64, i32)")
     ir.push("declare i64 @sys_close(i64)")
     ir.push("declare i64 @sys_fcntl(i64, i32, i64)")
-    ir.push("declare i64 @sys_inet_addr(ptr)")
+    ir.push("declare i32 @sys_inet_addr(ptr)")
     ir.push("declare i64 @sys_select(i64, ptr, ptr, ptr, ptr)")
     ir.push("declare i64 @sys_errno()")
     ir.push("")
@@ -2696,6 +2784,38 @@ private getIntBits(type: LLVMType): number {
         return `0x${bits.toString(16).padStart(16, '0')}`
       }
     }
+  }
+
+  private isPointerArithmetic(expr: any, leftReg: string, rightReg: string): boolean {
+    // Check if this is pointer arithmetic: ptr + offset or ptr - offset
+    // This is a heuristic - if left looks like a pointer register (contains "ptr" in the name)
+    // and the operator is + or -, treat it as pointer arithmetic
+    return (expr.operator === "+" || expr.operator === "-") &&
+           (leftReg.startsWith("%ptr") || this.isPointerExpression(expr.left))
+  }
+
+  private isPointerExpression(expr: any): boolean {
+    if (!expr) return false
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      return varType?.type === "PointerType" || varType?.type === "Pointer"
+    }
+    return false
+  }
+
+  private generatePointerArithmetic(ir: string[], expr: any, leftReg: string, rightReg: string): string {
+    const resultReg = `%${this.valueCounter++}`
+    // LLVM uses getelementptr for pointer arithmetic
+    // gep i8, ptr %left, i64 %right gives ptr = left + right bytes
+    if (expr.operator === "+") {
+      ir.push(`  ${resultReg} = getelementptr i8, ptr ${leftReg}, i64 ${rightReg}`)
+    } else { // operator === "-"
+      // Negate the offset for subtraction
+      const negReg = `%${this.valueCounter++}`
+      ir.push(`  ${negReg} = sub i64 0, ${rightReg}`)
+      ir.push(`  ${resultReg} = getelementptr i8, ptr ${leftReg}, i64 ${negReg}`)
+    }
+    return resultReg
   }
 }
 

@@ -4,6 +4,24 @@ import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } 
 import { IntegerType, UnsignedType, FloatType, ArrayType, MapType, PointerType, VoidType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
+// Decode escape sequences in string literals
+function decodeEscapeSequences(str: string): string {
+  return str.replace(/\\(.)|\\x([0-9a-fA-F]{2})/g, (match, char, hex) => {
+    if (hex !== undefined) {
+      return String.fromCharCode(parseInt(hex, 16))
+    }
+    switch (char) {
+      case "n": return "\n"
+      case "r": return "\r"
+      case "t": return "\t"
+      case "\\": return "\\"
+      case '"': return '"'
+      case "'": return "'"
+      default: return match  // Unknown escape, keep as-is
+    }
+  })
+}
+
 type ParseResult<T> = T | null
 
 class Parser {
@@ -881,7 +899,7 @@ private comparison(): ExpressionNode {
       const token = this.previous()
       return {
         type: "StringLiteral",
-        value: token.value.slice(1, -1),
+        value: decodeEscapeSequences(token.value.slice(1, -1)),
         position: token.position,
       }
     }

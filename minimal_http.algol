@@ -1,0 +1,35 @@
+// Minimal HTTP test
+fn main() -> i64 {
+  sockfd: i64 = sys_socket(2, 1, 0);
+  print_string("Socket: ");
+  print(sockfd);
+  println();
+  
+  ip_addr: i64 = sys_inet_addr("52.204.75.48");
+  conn: i64 = sys_connect(sockfd, ip_addr, 80);
+  print_string("Connect: ");
+  print(conn);
+  println();
+  
+  // Simple GET request
+  req: ptr = "GET / HTTP/1.0\r\n\r\n";
+  sent: i64 = sys_send(sockfd, req, 18);
+  print_string("Sent: ");
+  print(sent);
+  println();
+  
+  buf: ptr = gc_alloc(4096);
+  recv: i64 = sys_recv(sockfd, buf, 4096);
+  print_string("Recv: ");
+  print(recv);
+  println();
+  
+  if (recv > 0) {
+    print_string("Response: ");
+    print_string(buf);
+    println();
+  }
+  
+  sys_close(sockfd);
+  return 0;
+}

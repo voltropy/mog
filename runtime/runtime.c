@@ -1167,8 +1167,10 @@ int64_t sys_socket(int domain, int type, int protocol) {
 
 int64_t sys_connect(int64_t sockfd, uint32_t addr, uint16_t port) {
   struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
   sa.sin_port = htons(port);
+  /* addr is already in network byte order from inet_addr */
   sa.sin_addr.s_addr = addr;
   return connect(sockfd, (struct sockaddr*)&sa, sizeof(sa));
 }
@@ -1181,6 +1183,27 @@ int64_t sys_recv(int sockfd, char* buf, size_t len, int flags) {
   return recv(sockfd, buf, len, flags);
 }
 
+int64_t sys_recv_timeout(int sockfd, char* buf, size_t len, int64_t timeout_ms, int flags) {
+  fd_set readfds;
+  struct timeval tv;
+  
+  FD_ZERO(&readfds);
+  FD_SET(sockfd, &readfds);
+  
+  tv.tv_sec = timeout_ms / 1000;
+  tv.tv_usec = (timeout_ms % 1000) * 1000;
+  
+  int ready = select(sockfd + 1, &readfds, NULL, NULL, &tv);
+  if (ready < 0) {
+    return -1;  /* Error */
+  }
+  if (ready == 0) {
+    return -2;  /* Timeout */
+  }
+  
+  return recv(sockfd, buf, len, flags);
+}
+
 int64_t sys_close(int fd) {
   return close(fd);
 }
@@ -1189,9 +1212,10 @@ int64_t sys_fcntl(int fd, int cmd, int arg) {
   return fcntl(fd, cmd, arg);
 }
 
-/* inet_addr wrapper - converts string IP to i64 */
-int64_t sys_inet_addr(const char* cp) {
-  return (int64_t)inet_addr(cp);
+/* inet_addr wrapper - converts string IP to network byte order */
+uint32_t sys_inet_addr(const char* cp) {
+  /* inet_addr already returns network byte order, use directly */
+  return inet_addr(cp);
 }
 
 /* fd_set management for select() */
