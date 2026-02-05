@@ -21,7 +21,7 @@ AlgolScript is designed for a world where AI writes code:
 - **AI integration** - Built-in LLM function calling as a native language feature
 - **Compiled performance** - LLVM backend produces optimized native executables
 - **Automatic memory management** - Garbage collection eliminates memory management complexity
-- **Comprehensive test suite** - 376 tests ensuring reliability
+- **Comprehensive test suite** - 458 tests ensuring reliability
 
 ## Installation
 
