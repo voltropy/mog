@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import * as types from "./types"
 import {
   i8,
   i16,
@@ -24,18 +25,24 @@ import {
   UnsignedType,
   FloatType,
   ArrayType,
-  TableType,
+  MapType,
   VoidType,
+  StructType,
+  AOSType,
+  SOAType,
   TypeVar,
   TypeInferenceContext,
   array,
-  table,
+  map,
   isIntegerType,
   isUnsignedType,
   isFloatType,
   isArrayType,
-  isTableType,
+  isMapType,
   isVoidType,
+  isStructType,
+  isAOSType,
+  isSOAType,
   isNumericType,
   isSigned,
   sameType,
@@ -43,7 +50,25 @@ import {
   getCommonType,
   checkBounds,
   inferType,
+  compatibleTypes,
 } from "./types"
+
+// Helper functions for creating Map-based struct fields
+function createFieldMap(fields: { name: string; type: types.Type }[]): Map<string, types.Type> {
+  const map = new Map<string, types.Type>()
+  for (const f of fields) {
+    map.set(f.name, f.type)
+  }
+  return map
+}
+
+function createSoAFieldMap(fields: { name: string; type: ArrayType }[]): Map<string, ArrayType> {
+  const map = new Map<string, ArrayType>()
+  for (const f of fields) {
+    map.set(f.name, f.type)
+  }
+  return map
+}
 
 describe("Type Constructors", () => {
   describe("Integer Types", () => {
@@ -199,8 +224,8 @@ describe("Type Constructors", () => {
   })
 
   describe("Table Types", () => {
-    test("table function creates table type", () => {
-      const tbl = table(i32, f64)
+    test("map function creates map type", () => {
+      const tbl = map(i32, f64)
       expect(tbl.keyType).toBe(i32)
       expect(tbl.valueType).toBe(f64)
     })
@@ -241,9 +266,9 @@ describe("Type Guards", () => {
     expect(isArrayType(i32)).toBe(false)
   })
 
-  test("isTableType identifies table types", () => {
-    expect(isTableType(table(i32, f64))).toBe(true)
-    expect(isTableType(i32)).toBe(false)
+  test("isMapType identifies map types", () => {
+    expect(isMapType(map(i32, f64))).toBe(true)
+    expect(isMapType(i32)).toBe(false)
   })
 
   test("isVoidType identifies void type", () => {
@@ -331,16 +356,16 @@ describe("sameType", () => {
     expect(sameType(arr1, arr2)).toBe(false)
   })
 
-  test("table types with same key and value are equal", () => {
-    const tbl1 = table(i32, f64)
-    const tbl2 = table(i32, f64)
+  test("map types with same key and value are equal", () => {
+    const tbl1 = map(i32, f64)
+    const tbl2 = map(i32, f64)
     expect(sameType(tbl1, tbl2)).toBe(true)
   })
 
-  test("table types with different key or value are not equal", () => {
-    const tbl1 = table(i32, f64)
-    const tbl2 = table(i32, f32)
-    const tbl3 = table(u32, f64)
+  test("map types with different key or value are not equal", () => {
+    const tbl1 = map(i32, f64)
+    const tbl2 = map(i32, f32)
+    const tbl3 = map(u32, f64)
     expect(sameType(tbl1, tbl2)).toBe(false)
     expect(sameType(tbl1, tbl3)).toBe(false)
   })
@@ -369,7 +394,7 @@ describe("canCoerce (strict mode - no implicit coercion)", () => {
     expect(canCoerce(u32, i32)).toBe(false)
     expect(canCoerce(i32, f32)).toBe(false)
     expect(canCoerce(array(i32, []), array(i64, []))).toBe(false)
-    expect(canCoerce(table(i32, f64), table(i32, f32))).toBe(false)
+    expect(canCoerce(map(i32, f64), map(i32, f32))).toBe(false)
   })
 })
 
@@ -434,8 +459,8 @@ describe("getCommonType", () => {
 
   test("non-numeric types return null", () => {
     expect(getCommonType(array(i32, []), i32)).toBe(null)
-    expect(getCommonType(table(i32, f64), i32)).toBe(null)
-    expect(getCommonType(array(i32, []), table(u8, u32))).toBe(null)
+    expect(getCommonType(map(i32, f64), i32)).toBe(null)
+    expect(getCommonType(array(i32, []), map(u8, u32))).toBe(null)
   })
 
   test("void type behavior in getCommonType", () => {
@@ -801,9 +826,9 @@ describe("toString", () => {
     expect(array(i32, [3, 4]).toString()).toBe("[i32[3][4]]")
   })
 
-  test("table types have correct string representation", () => {
-    expect(table(i32, f64).toString()).toBe("{i32: f64}")
-    expect(table(u8, i32).toString()).toBe("{u8: i32}")
+  test("map types have correct string representation", () => {
+    expect(map(i32, f64).toString()).toBe("{i32: f64}")
+    expect(map(u8, i32).toString()).toBe("{u8: i32}")
   })
 
   test("void type has correct string representation", () => {
@@ -893,5 +918,305 @@ describe("Edge Cases and Type Compatibility", () => {
     const arr3 = array(i32, [10, 20])
     expect(sameType(arr1, arr2)).toBe(false)
     expect(sameType(arr2, arr3)).toBe(false)
+  })
+})
+
+describe("StructType", () => {
+  test("StructType constructor creates type with fields", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    expect(pointType.name).toBe("Point")
+    expect(pointType.fields.size).toBe(2)
+    expect(pointType.fields.get("x")).toBe(f64)
+    expect(pointType.fields.get("y")).toBe(f64)
+  })
+
+  test("StructType with mixed field types", () => {
+    const particleType = new types.StructType("Particle", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 },
+      { name: "mass", type: f64 },
+      { name: "id", type: i32 },
+      { name: "active", type: new types.UnsignedType("u8") }
+    ]))
+    expect(particleType.fields.size).toBe(5)
+    expect(particleType.fields.get("id")).toBe(i32)
+  })
+
+  test("StructType toString", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    expect(pointType.toString()).toBe("struct Point { x: f64, y: f64 }")
+  })
+
+  test("StructType with empty fields", () => {
+    const emptyType = new types.StructType("Empty", new Map())
+    expect(emptyType.fields.size).toBe(0)
+    expect(emptyType.toString()).toBe("struct Empty {  }")
+  })
+})
+
+describe("AOSType (Array of Structs)", () => {
+  test("AOSType constructor creates dynamic array type", () => {
+    const particleType = new types.StructType("Particle", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aosType = new types.AOSType(particleType)
+    expect(aosType.elementType).toBe(particleType)
+    expect(aosType.size).toBeNull()
+  })
+
+  test("AOSType constructor with fixed capacity", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aosType = new types.AOSType(pointType, 100)
+    expect(aosType.elementType).toBe(pointType)
+    expect(aosType.size).toBe(100)
+  })
+
+  test("AOSType toString", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aosDynamic = new types.AOSType(pointType)
+    const aosFixed = new types.AOSType(pointType, 50)
+    expect(aosDynamic.toString()).toBe("[Point]")
+    expect(aosFixed.toString()).toBe("[Point; 50]")
+  })
+})
+
+describe("SOAType (Struct of Arrays)", () => {
+  test("SOAType constructor creates SoA type", () => {
+    const soaType = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) }
+    ]))
+    expect(soaType.fields.size).toBe(2)
+    expect(soaType.fields.get("x")).toEqual(array(f64, []))
+  })
+
+  test("SOAType with multiple array fields", () => {
+    const soaType = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) },
+      { name: "vx", type: array(f64, []) },
+      { name: "vy", type: array(f64, []) },
+      { name: "id", type: array(i32, []) }
+    ]))
+    expect(soaType.fields.size).toBe(5)
+    expect(soaType.fields.has("id")).toBe(true)
+  })
+
+  test("SOAType toString", () => {
+    const soaType = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) }
+    ]))
+    expect(soaType.toString()).toBe("{x: [f64], y: [f64]}")
+  })
+})
+
+describe("isStructType type guard", () => {
+  test("returns true for StructType", () => {
+    const structType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    expect(types.isStructType(structType)).toBe(true)
+  })
+
+  test("returns false for non-struct types", () => {
+    expect(types.isStructType(i32)).toBe(false)
+    expect(types.isStructType(f64)).toBe(false)
+    expect(types.isStructType(array(i32, []))).toBe(false)
+    expect(types.isStructType(map(i32, f64))).toBe(false)
+  })
+})
+
+describe("isAOSType type guard", () => {
+  test("returns true for AOSType", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aosType = new types.AOSType(pointType)
+    expect(types.isAOSType(aosType)).toBe(true)
+  })
+
+  test("returns false for non-AoS types", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    expect(types.isAOSType(i32)).toBe(false)
+    expect(types.isAOSType(f64)).toBe(false)
+    expect(types.isAOSType(array(i32, []))).toBe(false)
+    expect(types.isAOSType(pointType)).toBe(false)
+  })
+})
+
+describe("isSOAType type guard", () => {
+  test("returns true for SOAType", () => {
+    const soaType = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) }
+    ]))
+    expect(types.isSOAType(soaType)).toBe(true)
+  })
+
+  test("returns false for non-SoA types", () => {
+    expect(types.isSOAType(i32)).toBe(false)
+    expect(types.isSOAType(f64)).toBe(false)
+    expect(types.isSOAType(array(i32, []))).toBe(false)
+  })
+})
+
+describe("Struct type equality", () => {
+  test("same struct type is equal to itself", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    expect(sameType(pointType, pointType)).toBe(true)
+  })
+
+  test("struct types with same fields are equal", () => {
+    const point1 = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const point2 = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    expect(sameType(point1, point2)).toBe(true)
+  })
+
+  test("struct types with different names are not equal", () => {
+    const point = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const vec2 = new types.StructType("Vec2", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    expect(sameType(point, vec2)).toBe(false)
+  })
+
+  test("struct types with different fields are not equal", () => {
+    const point2d = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const point3d = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 },
+      { name: "z", type: f64 }
+    ]))
+    expect(sameType(point2d, point3d)).toBe(false)
+  })
+})
+
+describe("AoS type equality", () => {
+  test("same AoS types are equal", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aos1 = new types.AOSType(pointType)
+    const aos2 = new types.AOSType(pointType)
+    expect(sameType(aos1, aos2)).toBe(true)
+  })
+
+  test("AoS types with different capacities are not equal", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aos1 = new types.AOSType(pointType, 100)
+    const aos2 = new types.AOSType(pointType, 200)
+    expect(sameType(aos1, aos2)).toBe(false)
+  })
+
+  test("dynamic and fixed AoS types are not equal", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aosDynamic = new types.AOSType(pointType)
+    const aosFixed = new types.AOSType(pointType, 100)
+    expect(sameType(aosDynamic, aosFixed)).toBe(false)
+  })
+})
+
+describe("SoA type equality", () => {
+  test("same SoA types are equal", () => {
+    const soa1 = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) }
+    ]))
+    const soa2 = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) }
+    ]))
+    expect(sameType(soa1, soa2)).toBe(true)
+  })
+
+  test("SoA types with different fields are not equal", () => {
+    const soa1 = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) }
+    ]))
+    const soa2 = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) },
+      { name: "z", type: array(f64, []) }
+    ]))
+    expect(sameType(soa1, soa2)).toBe(false)
+  })
+})
+
+describe("Data structure type compatibility", () => {
+  test("Map types are not compatible with Struct types", () => {
+    const mapType = map(i32, f64)
+    const structType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    expect(sameType(mapType, structType)).toBe(false)
+    expect(types.compatibleTypes(mapType, structType)).toBe(false)
+  })
+
+  test("Struct types are not compatible with AoS types", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aosType = new types.AOSType(pointType)
+    expect(sameType(pointType, aosType)).toBe(false)
+    expect(types.compatibleTypes(pointType, aosType)).toBe(false)
+  })
+
+  test("AoS types are not compatible with SoA types", () => {
+    const pointType = new types.StructType("Point", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ]))
+    const aosType = new types.AOSType(pointType)
+    const soaType = new types.SOAType(createSoAFieldMap([
+      { name: "x", type: array(f64, []) },
+      { name: "y", type: array(f64, []) }
+    ]))
+    expect(sameType(aosType, soaType)).toBe(false)
+    expect(types.compatibleTypes(aosType, soaType)).toBe(false)
   })
 })

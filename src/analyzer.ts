@@ -4,6 +4,7 @@ import {
   isUnsignedType,
   isFloatType,
   isArrayType,
+  isMapType,
   isTableType,
   isPointerType,
   isVoidType,
@@ -16,9 +17,11 @@ import {
   UnsignedType,
   FloatType,
   ArrayType,
-  TableType,
+  MapType,
   PointerType,
   VoidType,
+  StructType,
+  SOAType,
 } from "./types.js"
 
 interface Position {
@@ -55,6 +58,26 @@ type StatementNode =
   | ForEachLoopNode
   | BreakNode
   | ContinueNode
+  | SoADeclarationNode
+  | StructDefinitionNode
+  | StructDeclarationNode
+
+interface SoADeclarationNode extends ASTNode {
+  type: "SoADeclaration"
+  fields: { name: string; fieldType: ArrayType }[]
+}
+
+interface StructDefinitionNode extends ASTNode {
+  type: "StructDefinition"
+  name: string
+  fields: { name: string; fieldType: Type }[]
+}
+
+interface StructDeclarationNode extends ASTNode {
+  type: "StructDeclaration"
+  name: string
+  fields: { name: string; fieldType: Type }[]
+}
 
 interface VariableDeclarationNode extends ASTNode {
   type: "VariableDeclaration"
@@ -142,7 +165,9 @@ type ExpressionNode =
   | TemplateLiteralNode
   | ArrayLiteralNode
   | ArrayFillNode
-  | TableLiteralNode
+  | MapLiteralNode
+  | StructLiteralNode
+  | SoALiteralNode
   | BinaryExpressionNode
   | UnaryExpressionNode
   | AssignmentExpressionNode
@@ -188,9 +213,20 @@ interface ArrayFillNode extends ASTNode {
   count: ExpressionNode
 }
 
-interface TableLiteralNode extends ASTNode {
-  type: "TableLiteral"
-  columns: { name: string; columnType: Type | null; values: ExpressionNode[] }[]
+interface MapLiteralNode extends ASTNode {
+  type: "MapLiteral"
+  entries: { key: string; value: ExpressionNode }[]
+}
+
+interface StructLiteralNode extends ASTNode {
+  type: "StructLiteral"
+  structName: string | null
+  fields: { name: string; value: ExpressionNode }[]
+}
+
+interface SoALiteralNode extends ASTNode {
+  type: "SoALiteral"
+  columns: { name: string; values: ExpressionNode[] }[]
 }
 
 interface BinaryExpressionNode extends ASTNode {
@@ -243,6 +279,7 @@ interface SliceExpressionNode extends ASTNode {
   object: ExpressionNode
   start: ExpressionNode
   end: ExpressionNode
+  step: ExpressionNode | null
 }
 
 interface LLMExpressionNode extends ASTNode {
@@ -283,7 +320,7 @@ interface SemanticError {
 
 interface SymbolInfo {
   name: string
-  symbolType: "variable" | "function" | "parameter"
+  symbolType: "variable" | "function" | "parameter" | "type"
   declaredType: Type | null
   inferredType: Type | null
   depth: number
@@ -309,7 +346,7 @@ class SymbolTable {
     }
   }
 
-  declare(name: string, symbolType: "variable" | "function" | "parameter", declaredType: Type | null = null): void {
+  declare(name: string, symbolType: "variable" | "function" | "parameter" | "type", declaredType: Type | null = null): void {
     const currentScope = this.stack[this.stack.length - 1]
     if (currentScope.has(name)) {
       return
@@ -353,6 +390,7 @@ class SemanticAnalyzer {
   private errors: SemanticError[] = []
   private warnings: SemanticError[] = []
   private currentFunction: string | null = null
+  private loopDepth: number = 0
 
   constructor() {
     this.symbolTable = new SymbolTable()
@@ -496,9 +534,6 @@ class SemanticAnalyzer {
     }
   }
 
-  private errors: SemanticError[] = []
-  private warnings: SemanticError[] = []
-
   private emitError(message: string, position: { start: Position; end: Position }): void {
     this.errors.push({ message, position })
   }
@@ -548,13 +583,26 @@ class SemanticAnalyzer {
         this.visitForEachLoop(node as ForEachLoopNode)
         break
       case "Break":
-        // Break is valid inside loops - semantic check could verify context
+        if (this.loopDepth === 0) {
+          this.emitError("break statement can only be used inside a loop", node.position)
+        }
         break
       case "Continue":
-        // Continue is valid inside loops - semantic check could verify context
+        if (this.loopDepth === 0) {
+          this.emitError("continue statement can only be used inside a loop", node.position)
+        }
         break
       case "FunctionDeclaration":
         this.visitFunctionDeclaration(node as FunctionDeclarationNode)
+        break
+      case "SoADeclaration":
+        this.visitSoADeclaration(node as SoADeclarationNode)
+        break
+      case "StructDefinition":
+        this.visitStructDefinition(node as StructDefinitionNode)
+        break
+      case "StructDeclaration":
+        this.visitStructDeclaration(node as StructDeclarationNode)
         break
     }
   }
@@ -657,11 +705,12 @@ class SemanticAnalyzer {
         }
       }
     } else if (node.target !== undefined) {
-      const objectValue = this.visitExpression(node.target.object)
+      const target = node.target as any
+      const objectValue = this.visitExpression(target.object)
       
       // Handle IndexExpression (arrays)
-      if (node.target.type === "IndexExpression") {
-        const indexValue = this.visitExpression(node.target.index)
+      if (target.type === "IndexExpression") {
+        const indexValue = this.visitExpression(target.index)
 
         let targetType: Type | null = null
         if (objectValue && isArrayType(objectValue)) {
@@ -754,7 +803,9 @@ class SemanticAnalyzer {
       }
     }
 
+    this.loopDepth++
     this.visitBlock(node.body)
+    this.loopDepth--
   }
 
   private visitForLoop(node: ForLoopNode): void {
@@ -769,7 +820,9 @@ class SemanticAnalyzer {
 
     this.symbolTable.pushScope()
     this.symbolTable.declare(node.variable, "variable", startType || new IntegerType("i64"))
+    this.loopDepth++
     this.visitBlock(node.body)
+    this.loopDepth--
     this.symbolTable.popScope()
   }
 
@@ -783,7 +836,9 @@ class SemanticAnalyzer {
     this.symbolTable.pushScope()
     this.symbolTable.declare(node.variable, "variable", node.varType)
     this.symbolTable.setCurrentType(node.variable, node.varType)
+    this.loopDepth++
     this.visitBlock(node.body)
+    this.loopDepth--
     this.symbolTable.popScope()
   }
 
@@ -807,6 +862,219 @@ class SemanticAnalyzer {
     this.currentFunction = prevFunction
   }
 
+  private visitSoADeclaration(node: SoADeclarationNode): void {
+    // Validate that all fields are array types
+    const fields = new Map<string, ArrayType>()
+
+    for (const field of node.fields) {
+      // The parser guarantees fieldType is ArrayType, but we validate at runtime
+      const fieldType = field.fieldType as Type
+      if (!isArrayType(fieldType)) {
+        this.emitError(
+          `SoA field '${field.name}' must be an array type, got ${fieldType.toString()}`,
+          node.position
+        )
+        continue
+      }
+
+      // Validate element type is valid (not another SoA, void, etc.)
+      const elementType = fieldType.elementType
+      if (elementType instanceof VoidType) {
+        this.emitError(
+          `SoA field '${field.name}' cannot have void element type`,
+          node.position
+        )
+        continue
+      }
+
+      fields.set(field.name, field.fieldType)
+    }
+
+    // Create SOAType from fields and store in symbol table
+    const soaType = new SOAType(fields)
+    // @ts-ignore - resultType is set dynamically
+    node.resultType = soaType
+  }
+
+  private visitStructDefinition(node: StructDefinitionNode): void {
+    // Validate that all field types are valid
+    const fields = new Map<string, Type>()
+
+    for (const field of node.fields) {
+      // Check for void type fields
+      if (field.fieldType instanceof VoidType) {
+        this.emitError(
+          `Struct field '${field.name}' cannot have void type`,
+          node.position
+        )
+        continue
+      }
+
+      fields.set(field.name, field.fieldType)
+    }
+
+    // Create StructType and store in symbol table as a type definition
+    const structType = new StructType(node.name, fields)
+    this.symbolTable.declare(node.name, "type", structType)
+    // @ts-ignore - resultType is set dynamically
+    node.resultType = structType
+  }
+
+  private visitStructDeclaration(node: StructDeclarationNode): void {
+    // Same implementation as visitStructDefinition
+    const fields = new Map<string, Type>()
+
+    for (const field of node.fields) {
+      // Check for void type fields
+      if (field.fieldType instanceof VoidType) {
+        this.emitError(
+          `Struct field '${field.name}' cannot have void type`,
+          node.position
+        )
+        continue
+      }
+
+      fields.set(field.name, field.fieldType)
+    }
+
+    // Create StructType and store in symbol table as a type definition
+    const structType = new StructType(node.name, fields)
+    this.symbolTable.declare(node.name, "type", structType)
+    // @ts-ignore - resultType is set dynamically
+    node.resultType = structType
+  }
+
+  private visitSoALiteral(node: any): Type | null {
+    // node has columns: { name: string; values: ExpressionNode[] }[]
+    const columns = node.columns
+    if (!columns || columns.length === 0) {
+      this.emitError("SoA literal must have at least one column", node.position)
+      return null
+    }
+
+    const fieldTypes = new Map<string, ArrayType>()
+    let expectedLength: number | null = null
+
+    for (const column of columns) {
+      // Get the array type from the column values
+      const elementTypes: Type[] = []
+      for (const elem of column.values) {
+        const elemType = this.visitExpression(elem)
+        if (elemType) {
+          elementTypes.push(elemType)
+        }
+      }
+
+      if (elementTypes.length === 0) {
+        this.emitError(
+          `SoA column '${column.name}' has no elements`,
+          node.position
+        )
+        continue
+      }
+
+      // Check all elements in the column have the same type
+      let commonType = elementTypes[0]
+      for (let i = 1; i < elementTypes.length; i++) {
+        if (!sameType(commonType, elementTypes[i])) {
+          this.emitError(
+            `SoA column '${column.name}' has incompatible element types: ${commonType.toString()} and ${elementTypes[i].toString()}`,
+            node.position
+          )
+          continue
+        }
+      }
+
+      // Check column length consistency
+      if (expectedLength === null) {
+        expectedLength = column.values.length
+      } else if (column.values.length !== expectedLength) {
+        this.emitError(
+          `SoA column '${column.name}' has ${column.values.length} elements, expected ${expectedLength} (all columns must have same length)`,
+          node.position
+        )
+      }
+
+      // Create array type for this column
+      const arrayType = new ArrayType(commonType)
+      fieldTypes.set(column.name, arrayType)
+    }
+
+    if (fieldTypes.size === 0) {
+      return null
+    }
+
+    return new SOAType(fieldTypes)
+  }
+
+  private visitStructLiteral(node: StructLiteralNode): Type | null {
+    // If structName is provided, look up the type definition
+    if (node.structName) {
+      const structTypeDef = this.symbolTable.lookup(node.structName)
+      if (!structTypeDef) {
+        this.emitError(`Undefined struct type '${node.structName}'`, node.position)
+        return null
+      }
+
+      if (structTypeDef.symbolType !== "type") {
+        this.emitError(`'${node.structName}' is not a struct type`, node.position)
+        return null
+      }
+
+      if (!structTypeDef.declaredType || !(structTypeDef.declaredType instanceof StructType)) {
+        this.emitError(`'${node.structName}' is not a struct type`, node.position)
+        return null
+      }
+
+      const expectedStruct = structTypeDef.declaredType as StructType
+
+      // Validate field types match expected struct definition
+      for (const field of node.fields) {
+        const fieldType = this.visitExpression(field.value)
+        const expectedFieldType = expectedStruct.fields.get(field.name)
+
+        if (expectedFieldType) {
+          if (fieldType && !compatibleTypes(fieldType, expectedFieldType)) {
+            this.emitError(
+              `Struct field '${field.name}' type mismatch: cannot assign ${fieldType.toString()} to ${expectedFieldType.toString()}`,
+              node.position
+            )
+          }
+        } else {
+          this.emitError(
+            `Struct '${node.structName}' does not have field '${field.name}'`,
+            node.position
+          )
+        }
+      }
+
+      // Check for missing fields
+      for (const [fieldName, _] of expectedStruct.fields) {
+        const hasField = node.fields.some((f) => f.name === fieldName)
+        if (!hasField) {
+          this.emitError(
+            `Missing field '${fieldName}' in struct literal for '${node.structName}'`,
+            node.position
+          )
+        }
+      }
+
+      return expectedStruct
+    }
+
+    // Anonymous struct literal - infer type from fields
+    const fields = new Map<string, Type>()
+    for (const field of node.fields) {
+      const fieldType = this.visitExpression(field.value)
+      if (fieldType) {
+        fields.set(field.name, fieldType)
+      }
+    }
+
+    // Create anonymous struct type
+    return new StructType("<anonymous>", fields)
+  }
+
   private visitExpression(node: ExpressionNode): Type | null {
     let result: Type | null = null
     switch (node.type) {
@@ -828,8 +1096,14 @@ class SemanticAnalyzer {
       case "ArrayFill":
         result = this.visitArrayFill(node as ArrayFillNode)
         break
-      case "TableLiteral":
-        result = this.visitTableLiteral(node as TableLiteralNode)
+      case "MapLiteral":
+        result = this.visitMapLiteral(node as MapLiteralNode)
+        break
+      case "SoALiteral":
+        result = this.visitSoALiteral(node as any)
+        break
+      case "StructLiteral":
+        result = this.visitStructLiteral(node as StructLiteralNode)
         break
       case "BinaryExpression":
         result = this.visitBinaryExpression(node as BinaryExpressionNode)
@@ -984,55 +1258,30 @@ class SemanticAnalyzer {
 
     // The count needs to be a compile-time constant for now
     // Return an array type with the element type but unknown dimensions
-    return new ArrayType(elementType, null)
+    return new ArrayType(elementType)
   }
 
-  private visitTableLiteral(node: TableLiteralNode): Type | null {
-    const keyTypes: (Type | null)[] = []
-    const valueTypes: Type[] = []
-
-    for (const col of node.columns) {
-      if (col.columnType) {
-        keyTypes.push(col.columnType)
-      }
-
-      if (col.values.length === 0) {
-        continue
-      }
-
-      const firstValueType = this.visitExpression(col.values[0])
-
-      if (!firstValueType) {
-        continue
-      }
-
-      const colTypes: Type[] = [firstValueType]
-
-      for (let i = 1; i < col.values.length; i++) {
-        const valType = this.visitExpression(col.values[i])
-        if (valType) {
-          colTypes.push(valType)
-        }
-      }
-
-      if (colTypes.length > 0) {
-        let commonType = colTypes[0]
-
-        for (let i = 1; i < colTypes.length; i++) {
-          if (!sameType(commonType, colTypes[i])) {
-            this.emitError(`Table column '${col.name}' has incompatible types`, node.position)
-          }
-        }
-
-        valueTypes.push(commonType)
-      }
-    }
-
-    if (valueTypes.length === 0) {
+  private visitMapLiteral(node: MapLiteralNode): Type | null {
+    if (node.entries.length === 0) {
       return null
     }
 
-    return new TableType(new IntegerType("i32"), valueTypes[0])
+    // Visit first entry to get the value type
+    const firstValueType = this.visitExpression(node.entries[0].value)
+
+    if (!firstValueType) {
+      return null
+    }
+
+    // Check that all values have compatible types
+    for (let i = 1; i < node.entries.length; i++) {
+      const entryType = this.visitExpression(node.entries[i].value)
+      if (entryType && !sameType(firstValueType, entryType)) {
+        this.emitError(`Map entry '${node.entries[i].key}' has incompatible type`, node.position)
+      }
+    }
+
+    return new MapType(new IntegerType("i32"), firstValueType)
   }
 
   private visitBinaryExpression(node: BinaryExpressionNode): Type | null {
@@ -1131,7 +1380,7 @@ class SemanticAnalyzer {
   }
 
   private visitUnaryExpression(node: UnaryExpressionNode): Type | null {
-    const argumentType = this.visitExpression(node.argument)
+    const argumentType = this.visitExpression(node.operand)
 
     if (!argumentType) {
       return null
@@ -1339,9 +1588,9 @@ class SemanticAnalyzer {
       const identifier = node.object as IdentifierNode
       const symbol = this.symbolTable.lookup(identifier.name)
 
-      if (symbol && symbol.declaredType && isTableType(symbol.declaredType)) {
-        const tableType = symbol.declaredType as TableType
-        return tableType.valueType
+      if (symbol && symbol.declaredType && isMapType(symbol.declaredType)) {
+        const mapType = symbol.declaredType as MapType
+        return mapType.valueType
       }
     }
 
@@ -1380,14 +1629,14 @@ class SemanticAnalyzer {
       return null
     }
 
-    // Handle table indexing: table[key]
-    if (isTableType(objectType)) {
-      const tableType = objectType as TableType
-      // For tables, index can be string or integer
+    // Handle map indexing: map[key]
+    if (isMapType(objectType)) {
+      const mapType = objectType as MapType
+      // For maps, index can be string or integer
       if (!isStringType(indexType) && !isIntegerType(indexType) && !isUnsignedType(indexType)) {
-        this.emitError(`Table key must be string or integer type, got ${indexType.toString()}`, node.index.position)
+        this.emitError(`Map key must be string or integer type, got ${indexType.toString()}`, node.index.position)
       }
-      return tableType.valueType
+      return mapType.valueType
     }
 
     if (!(isIntegerType(indexType) || isUnsignedType(indexType))) {
@@ -1428,6 +1677,14 @@ class SemanticAnalyzer {
     }
     if (endType && !(isIntegerType(endType) || isUnsignedType(endType))) {
       this.emitError(`Slice end must be integer type, got ${endType.toString()}`, node.end.position)
+    }
+
+    // Type check step if provided
+    if (node.step) {
+      const stepType = this.visitExpression(node.step)
+      if (stepType && !(isIntegerType(stepType) || isUnsignedType(stepType))) {
+        this.emitError(`Slice step must be integer type, got ${stepType.toString()}`, node.step.position)
+      }
     }
 
     if (isArrayType(objectType)) {
@@ -1517,7 +1774,7 @@ export type {
   NumberLiteralNode,
   StringLiteralNode,
   ArrayLiteralNode,
-  TableLiteralNode,
+  MapLiteralNode,
   BinaryExpressionNode,
   UnaryExpressionNode,
   CallExpressionNode,

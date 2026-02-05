@@ -13,6 +13,8 @@ type TokenType =
   | "continue"
   | "cast"
   | "not"
+  | "struct"
+  | "soa"
   | "MODULO"
   | "BITWISE_AND"
   | "BITWISE_OR"
@@ -126,6 +128,8 @@ class Lexer {
     const continueRegex = /continue\b/y
     const castRegex = /cast\b/y
     const notRegex = /not\b/y
+    const structRegex = /struct\b/y
+    const soaRegex = /soa\b/y
     const llmRegex = /LLM\b/y
     const notEqualRegex = /!=/y
     const equalEqualRegex = /==/y
@@ -329,6 +333,30 @@ class Lexer {
       value = this.match(notRegex)
       if (value) {
         type = "not"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(structRegex)
+      if (value) {
+        type = "struct"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(soaRegex)
+      if (value) {
+        type = "soa"
         this.advance(value.length)
         tokens.push({
           type,
@@ -731,6 +759,137 @@ class Lexer {
           value,
           position: { start: startPos, end: this.currentPosition() },
         })
+        continue
+      }
+
+      // F-string handling: f"Hello, {name}!" or f'Hello, {name}!'
+      if (this.peek() === 'f' && (this.peek(1) === '"' || this.peek(1) === "'")) {
+        this.advance(1) // consume f
+        const quoteChar = this.peek() // " or '
+        this.advance(1) // consume opening quote
+        tokens.push({
+          type: "TEMPLATE_STRING_START",
+          value: quoteChar,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        // Parse f-string parts
+        while (this.peek() !== quoteChar && this.pos < this.input.length) {
+          if (this.peek() === '{') {
+            // Check for escaped brace {{ -> literal {
+            if (this.peek(1) === '{') {
+              this.advance(2)
+              tokens.push({
+                type: "TEMPLATE_STRING_PART",
+                value: '{',
+                position: { start: startPos, end: this.currentPosition() },
+              })
+              continue
+            }
+            this.advance(1)
+            tokens.push({
+              type: "TEMPLATE_INTERP_START",
+              value: "{",
+              position: { start: startPos, end: this.currentPosition() },
+            })
+            // Parse the expression inside {} - collect all tokens until }
+            const exprStartPos = this.currentPosition()
+            let braceDepth = 1
+            let exprStr = ''
+            while (braceDepth > 0 && this.pos < this.input.length) {
+              const c = this.peek()
+              if (c === '{') {
+                braceDepth++
+                exprStr += c
+                this.advance(1)
+              } else if (c === '}') {
+                braceDepth--
+                if (braceDepth > 0) {
+                  exprStr += c
+                }
+                this.advance(1)
+              } else if (c === quoteChar) {
+                // Error: unterminated expression
+                break
+              } else {
+                exprStr += c
+                this.advance(1)
+              }
+            }
+            // Push the expression string as a TEMPLATE_STRING_PART (will be re-tokenized by parser)
+            if (exprStr.length > 0) {
+              tokens.push({
+                type: "TEMPLATE_STRING_PART",
+                value: exprStr,
+                position: { start: exprStartPos, end: this.currentPosition() },
+              })
+            }
+            tokens.push({
+              type: "TEMPLATE_INTERP_END",
+              value: "}",
+              position: { start: startPos, end: this.currentPosition() },
+            })
+          } else if (this.peek() === '}') {
+            // Check for escaped brace }} -> literal }
+            if (this.peek(1) === '}') {
+              this.advance(2)
+              tokens.push({
+                type: "TEMPLATE_STRING_PART",
+                value: '}',
+                position: { start: startPos, end: this.currentPosition() },
+              })
+              continue
+            }
+            // Single } inside f-string text - treat as literal
+            this.advance(1)
+            tokens.push({
+              type: "TEMPLATE_STRING_PART",
+              value: '}',
+              position: { start: startPos, end: this.currentPosition() },
+            })
+          } else {
+            // Collect string literal part
+            let strValue = ''
+            while (this.peek() !== '{' && this.peek() !== quoteChar && this.pos < this.input.length) {
+              // Check for escaped brace }} in text - stop before it
+              if (this.peek() === '}' && this.peek(1) === '}') {
+                break
+              }
+              if (this.peek() === '\\') {
+                this.advance(1)
+                const escaped = this.peek()
+                switch (escaped) {
+                  case 'n': strValue += '\n'; break
+                  case 't': strValue += '\t'; break
+                  case 'r': strValue += '\r'; break
+                  case '\\': strValue += '\\'; break
+                  case quoteChar: strValue += quoteChar; break
+                  case '{': strValue += '{'; break
+                  case '}': strValue += '}'; break
+                  default: strValue += escaped; break
+                }
+                this.advance(1)
+              } else {
+                strValue += this.peek()
+                this.advance(1)
+              }
+            }
+            if (strValue) {
+              tokens.push({
+                type: "TEMPLATE_STRING_PART",
+                value: strValue,
+                position: { start: startPos, end: this.currentPosition() },
+              })
+            }
+          }
+        }
+        if (this.peek() === quoteChar) {
+          this.advance(1)
+          tokens.push({
+            type: "TEMPLATE_STRING_END",
+            value: quoteChar,
+            position: { start: startPos, end: this.currentPosition() },
+          })
+        }
         continue
       }
 

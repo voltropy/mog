@@ -105,10 +105,10 @@ class ArrayType {
   }
 }
 
-class TableType {
+class MapType {
   keyType: Type
   valueType: Type
-  type = "TableType"
+  type = "MapType"
 
   constructor(keyType: Type, valueType: Type) {
     this.keyType = keyType
@@ -119,6 +119,9 @@ class TableType {
     return `{${this.keyType}: ${this.valueType}}`
   }
 }
+
+// Backward compatibility alias
+const TableType = MapType
 
 class PointerType {
   type = "PointerType"
@@ -141,7 +144,60 @@ class VoidType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | ArrayType | TableType | PointerType | VoidType
+class StructType {
+  name: string
+  fields: Map<string, Type>
+  type = "StructType"
+
+  constructor(name: string, fields: Map<string, Type> = new Map()) {
+    this.name = name
+    this.fields = fields
+  }
+
+  toString(): string {
+    const fieldEntries = Array.from(this.fields.entries())
+      .map(([key, val]) => `${key}: ${val}`)
+      .join(", ")
+    return `struct ${this.name} { ${fieldEntries} }`
+  }
+}
+
+class AOSType {
+  elementType: StructType
+  size: number | null
+  type = "AOSType"
+
+  constructor(elementType: StructType, size: number | null = null) {
+    this.elementType = elementType
+    this.size = size
+  }
+
+  toString(): string {
+    if (this.size !== null) {
+      return `[${this.elementType.name}; ${this.size}]`
+    }
+    return `[${this.elementType.name}]`
+  }
+}
+
+class SOAType {
+  fields: Map<string, ArrayType>
+  type = "SOAType"
+
+  constructor(fields: Map<string, ArrayType>) {
+    this.fields = fields
+  }
+
+  toString(): string {
+    const fieldStrings: string[] = []
+    for (const [name, arrayType] of this.fields.entries()) {
+      fieldStrings.push(`${name}: ${arrayType}`)
+    }
+    return `{${fieldStrings.join(", ")}}`
+  }
+}
+
+type Type = IntegerType | UnsignedType | FloatType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -170,8 +226,8 @@ function array(elementType: Type, dimensions: number[] = []): ArrayType {
   return new ArrayType(elementType, dimensions)
 }
 
-function table(keyType: Type, valueType: Type): TableType {
-  return new TableType(keyType, valueType)
+function map(keyType: Type, valueType: Type): MapType {
+  return new MapType(keyType, valueType)
 }
 
 const stringType = array(u8, [])
@@ -192,9 +248,13 @@ function isArrayType(type: Type): type is ArrayType {
   return type instanceof ArrayType
 }
 
-function isTableType(type: Type): type is TableType {
-  return type instanceof TableType
+function isMapType(type: Type): type is MapType {
+  return type instanceof MapType
 }
+
+// Backward compatibility aliases
+const isTableType = isMapType
+const table = map
 
 function isVoidType(type: Type): type is VoidType {
   return type instanceof VoidType
@@ -202,6 +262,18 @@ function isVoidType(type: Type): type is VoidType {
 
 function isPointerType(type: Type): type is PointerType {
   return type instanceof PointerType
+}
+
+function isStructType(type: Type): type is StructType {
+  return type instanceof StructType
+}
+
+function isAOSType(type: Type): type is AOSType {
+  return type instanceof AOSType
+}
+
+function isSOAType(type: Type): type is SOAType {
+  return type instanceof SOAType
 }
 
 function isNumericType(type: Type): boolean {
@@ -224,11 +296,33 @@ function sameType(a: Type, b: Type): boolean {
     }
     return true
   }
-  if (a instanceof TableType && b instanceof TableType) {
+  if (a instanceof MapType && b instanceof MapType) {
     return sameType(a.keyType, b.keyType) && sameType(a.valueType, b.valueType)
   }
   if (a instanceof VoidType && b instanceof VoidType) return true
   if (a instanceof PointerType && b instanceof PointerType) return true
+  if (a instanceof StructType && b instanceof StructType) {
+    if (a.name !== b.name) return false
+    if (a.fields.size !== b.fields.size) return false
+    for (const [name, aFieldType] of a.fields.entries()) {
+      const bFieldType = b.fields.get(name)
+      if (!bFieldType || !sameType(aFieldType, bFieldType)) return false
+    }
+    return true
+  }
+  if (a instanceof AOSType && b instanceof AOSType) {
+    if (!sameType(a.elementType, b.elementType)) return false
+    if (a.size !== b.size) return false
+    return true
+  }
+  if (a instanceof SOAType && b instanceof SOAType) {
+    if (a.fields.size !== b.fields.size) return false
+    for (const [name, aType] of a.fields.entries()) {
+      const bType = b.fields.get(name)
+      if (!bType || !sameType(aType, bType)) return false
+    }
+    return true
+  }
   return false
 }
 
@@ -432,20 +526,29 @@ export {
   UnsignedType,
   FloatType,
   ArrayType,
+  MapType,
   TableType,
   PointerType,
   VoidType,
+  StructType,
+  AOSType,
+  SOAType,
   TypeVar,
   TypeInferenceContext,
   array,
+  map,
   table,
   isIntegerType,
   isUnsignedType,
   isFloatType,
   isArrayType,
+  isMapType,
   isTableType,
   isVoidType,
   isPointerType,
+  isStructType,
+  isAOSType,
+  isSOAType,
   isNumericType,
   isSigned,
   sameType,

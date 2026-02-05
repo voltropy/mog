@@ -1,6 +1,7 @@
 import type { Token } from "./lexer.js"
+import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, ArrayType, TableType, PointerType, VoidType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, ArrayType, MapType, PointerType, VoidType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
 type ParseResult<T> = T | null
@@ -57,6 +58,9 @@ class Parser {
     }
     if (this.matchType("fn")) {
       return this.functionDeclaration()
+    }
+    if (this.matchType("struct")) {
+      return this.structDeclaration()
     }
     if (this.matchType("return")) {
       return this.returnStatement()
@@ -151,6 +155,32 @@ if (!this.checkType("RPAREN")) {
       params,
       returnType,
       body,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private structDeclaration(): StatementNode {
+    const name = this.consume("IDENTIFIER", "Expected struct name").value
+    this.consume("LBRACE", "Expected { after struct name")
+
+    const fields: { name: string; fieldType: string }[] = []
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      const fieldName = this.consume("IDENTIFIER", "Expected field name").value
+      this.consume("COLON", "Expected : after field name")
+      const fieldType = this.consume("TYPE", "Expected type after :").value
+      fields.push({ name: fieldName, fieldType })
+      this.matchType("COMMA")
+    }
+
+    this.consume("RBRACE", "Expected } after struct fields")
+
+    return {
+      type: "StructDeclaration",
+      name,
+      fields,
       position: {
         start: { line: 1, column: 1, index: 0 },
         end: this.lastPosition(),
@@ -412,12 +442,20 @@ if (!this.checkType("RPAREN")) {
     
     // Handle array types that start with [ (e.g., [u8] or [f32; 3])
     let typeName: string
+    let declaredType: { name: string; type: string } | null = null
     if (this.checkType("LBRACKET")) {
       // Parse array type like [u8], [i32], [f32; 3], or nested [[f64; 3]; 2], etc.
       typeName = this.parseArrayTypeAnnotation()
-    } else {
+    } else if (this.checkType("TYPE")) {
       let typeToken = this.consume("TYPE", "Expected type annotation")
       typeName = typeToken.value
+    } else if (this.checkType("IDENTIFIER")) {
+      // Handle custom type names (e.g., Point, Particle)
+      let typeToken = this.consume("IDENTIFIER", "Expected type annotation")
+      typeName = typeToken.value
+      declaredType = { name: typeName, type: "CustomType" }
+    } else {
+      throw new Error("Expected type annotation")
     }
     
     // Handle trailing [] for array of type (e.g., f64[][])
@@ -427,10 +465,16 @@ if (!this.checkType("RPAREN")) {
     }
     
     const varType = this.parseType(typeName)
-    this.consume("EQUAL", "Expected = after type")
-    this.matchType("ASSIGN")
+    
+    // Handle both `=` and `:=` assignment operators
+    if (this.matchType("ASSIGN")) {
+      // Walrus operator :=
+    } else {
+      this.consume("EQUAL", "Expected = or := after type")
+      this.matchType("ASSIGN")
+    }
 
-    const value: ExpressionNode = this.expression()
+    const initializer: ExpressionNode = this.expression()
 
     this.consume("SEMICOLON", "Expected ; after variable declaration")
 
@@ -438,7 +482,9 @@ if (!this.checkType("RPAREN")) {
       type: "VariableDeclaration",
       name,
       varType,
-      value,
+      value: initializer,
+      declaredType: declaredType || { name: typeName, type: "PrimitiveType" },
+      initializer,
       position: {
         start: { line: 1, column: 1, index: 0 },
         end: this.lastPosition(),
@@ -693,46 +739,6 @@ private comparison(): ExpressionNode {
     return expr
   }
 
-  private additive(): ExpressionNode {
-    let expr = this.bitwise()
-
-    while (this.matchType("PLUS") || this.matchType("MINUS")) {
-      const operator = this.previous()
-      const right = this.bitwise()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
-  }
-
-  private multiplicative(): ExpressionNode {
-    let expr = this.unary()
-
-    while (
-      this.matchType("TIMES") ||
-      this.matchType("DIVIDE") ||
-      this.matchType("MODULO")
-    ) {
-      const operator = this.previous()
-      const right = this.unary()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
-  }
-
   private bitwise(): ExpressionNode {
     let expr = this.multiplicative()
 
@@ -819,6 +825,7 @@ private comparison(): ExpressionNode {
         type: "NumberLiteral",
         value: token.value,
         position: token.position,
+        literalType: null,
       }
     }
 
@@ -831,8 +838,8 @@ private comparison(): ExpressionNode {
       }
     }
 
-    // Template string: "Hello, {name}!"
-    if (this.checkType("TEMPLATE_STRING_PART")) {
+    // Template string: f"Hello, {name}!"
+    if (this.checkType("TEMPLATE_STRING_START")) {
       return this.parseTemplateString()
     }
 
@@ -847,6 +854,30 @@ private comparison(): ExpressionNode {
 
     if (this.matchType("IDENTIFIER")) {
       const token = this.previous()
+
+      // Check for struct literal: TypeName { field: value, ... }
+      if (this.matchType("LBRACE")) {
+        const fields: { name: string; value: ExpressionNode }[] = []
+        if (!this.checkType("RBRACE")) {
+          do {
+            const fieldName = this.consume("IDENTIFIER", "Expected field name").value
+            this.consume("COLON", "Expected ':' after field name")
+            const fieldValue = this.expression()
+            fields.push({ name: fieldName, value: fieldValue })
+          } while (this.matchType("COMMA"))
+        }
+        this.consume("RBRACE", "Expected '}' after struct literal fields")
+        return {
+          type: "StructLiteral",
+          structName: token.value,
+          fields,
+          position: this.combinePositions(
+            { position: token.position } as ExpressionNode,
+            this.previous()
+          ),
+        }
+      }
+
       let object: ExpressionNode = {
         type: "Identifier",
         name: token.value,
@@ -912,7 +943,7 @@ private comparison(): ExpressionNode {
     }
 
     if (this.matchType("LBRACE")) {
-      return this.tableLiteral()
+      return this.mapLiteral()
     }
 
     if (this.matchType("LPAREN")) {
@@ -1014,28 +1045,27 @@ private comparison(): ExpressionNode {
     }
   }
 
-  private tableLiteral(): ExpressionNode {
+  private mapLiteral(): ExpressionNode {
     const start = this.previous().position.start
-    const columns: any[] = []
+    const entries: { key: string; value: ExpressionNode }[] = []
 
     while (!this.checkType("RBRACE") && !this.isAtEnd()) {
-      const key = this.consume("IDENTIFIER", "Expected key in table literal")
+      const fieldName = this.consume("IDENTIFIER", "Expected field name in map literal")
 
-      this.consume("COLON", "Expected : after key")
+      this.consume("COLON", "Expected : after field name")
 
-      const values: ExpressionNode[] = []
-      values.push(this.expression())
+      const value = this.expression()
 
-      columns.push({ name: key.value, values, columnType: null })
+      entries.push({ key: fieldName.value, value })
 
       this.matchType("COMMA")
     }
 
-    this.consume("RBRACE", "Expected } after table literal")
+    this.consume("RBRACE", "Expected } after map literal")
 
     return {
-      type: "TableLiteral",
-      columns,
+      type: "MapLiteral",
+      entries,
       position: {
         start,
         end: this.lastPosition(),
@@ -1184,17 +1214,32 @@ private comparison(): ExpressionNode {
     const start = this.peek().position.start
     const parts: (string | ExpressionNode)[] = []
 
-    while (this.checkType("TEMPLATE_STRING_PART")) {
-      const strPart = this.advance()
-      if (strPart.value) {
-        parts.push(strPart.value)
-      }
+    // Consume TEMPLATE_STRING_START (contains the f" or f' prefix)
+    this.advance()
 
-      if (this.checkType("TEMPLATE_INTERP_START")) {
+    // Process string parts and interpolations
+    while (!this.checkType("TEMPLATE_STRING_END") && !this.isAtEnd()) {
+      if (this.checkType("TEMPLATE_STRING_PART")) {
+        const strPart = this.advance()
+        if (strPart.value) {
+          parts.push(strPart.value)
+        }
+      } else if (this.checkType("TEMPLATE_INTERP_START")) {
         this.advance() // consume {
-        const expr = this.expression()
-        parts.push(expr)
+
+        // The expression is in the next TEMPLATE_STRING_PART token
+        if (this.checkType("TEMPLATE_STRING_PART")) {
+          const exprToken = this.advance()
+          const exprTokens = tokenize(exprToken.value).filter(t => t.type !== "WHITESPACE")
+          const exprParser = new Parser(exprTokens)
+          const expr = exprParser.expression()
+          parts.push(expr)
+        }
+
         this.consume("TEMPLATE_INTERP_END", "Expected } after expression")
+      } else {
+        // Unexpected token, break to avoid infinite loop
+        break
       }
     }
 

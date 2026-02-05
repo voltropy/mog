@@ -26,6 +26,56 @@ describe("parser literals", () => {
     expect(stmt.expression.type).toBe("StringLiteral")
     expect(stmt.expression.value).toBe("hello")
   })
+
+  test("f-string with simple interpolation", () => {
+    const ast = parse('{ f"Hello, {name}!"; }')
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.type).toBe("TemplateLiteral")
+    expect(stmt.expression.parts).toHaveLength(3)
+    expect(stmt.expression.parts[0]).toBe("Hello, ")
+    expect(stmt.expression.parts[1].type).toBe("Identifier")
+    expect(stmt.expression.parts[1].name).toBe("name")
+    expect(stmt.expression.parts[2]).toBe("!")
+  })
+
+  test("f-string with expression interpolation", () => {
+    const ast = parse('{ f"Result: {x + y}"; }')
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.type).toBe("TemplateLiteral")
+    expect(stmt.expression.parts).toHaveLength(2)
+    expect(stmt.expression.parts[0]).toBe("Result: ")
+    expect(stmt.expression.parts[1].type).toBe("BinaryExpression")
+    expect(stmt.expression.parts[1].operator).toBe("+")
+  })
+
+  test("f-string with multiple interpolations", () => {
+    const ast = parse('{ f"{a} and {b}"; }')
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.type).toBe("TemplateLiteral")
+    expect(stmt.expression.parts).toHaveLength(3)
+    expect(stmt.expression.parts[0].type).toBe("Identifier")
+    expect(stmt.expression.parts[0].name).toBe("a")
+    expect(stmt.expression.parts[1]).toBe(" and ")
+    expect(stmt.expression.parts[2].type).toBe("Identifier")
+    expect(stmt.expression.parts[2].name).toBe("b")
+  })
+
+  test("f-string with function call interpolation", () => {
+    const ast = parse('{ f"Value: {getValue()}"; }')
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.type).toBe("TemplateLiteral")
+    expect(stmt.expression.parts).toHaveLength(2)
+    expect(stmt.expression.parts[1].type).toBe("CallExpression")
+    expect(stmt.expression.parts[1].callee.name).toBe("getValue")
+  })
+
+  test("single-quoted f-string", () => {
+    const ast = parse("{ f'Hello, {name}!'; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.type).toBe("TemplateLiteral")
+    expect(stmt.expression.parts[0]).toBe("Hello, ")
+    expect(stmt.expression.parts[1].type).toBe("Identifier")
+  })
 })
 
 describe("parser identifiers", () => {
@@ -203,21 +253,21 @@ describe("parser array literals", () => {
   })
 })
 
-describe("parser table literals", () => {
-  test("empty table", () => {
-    const ast = parse("{ t = {}; }")
+describe("parser map literals", () => {
+  test("empty map", () => {
+    const ast = parse("{ m = {}; }")
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.right.type).toBe("TableLiteral")
-    expect(stmt.expression.right.columns.length).toBe(0)
+    expect(stmt.expression.right.type).toBe("MapLiteral")
+    expect(stmt.expression.right.entries.length).toBe(0)
   })
 
-  test("table with columns", () => {
-    const ast = parse("{ t = { a: 1, b: 2 }; }")
+  test("map with entries", () => {
+    const ast = parse("{ m = { a: 1, b: 2 }; }")
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.right.type).toBe("TableLiteral")
-    expect(stmt.expression.right.columns.length).toBe(2)
-    expect(stmt.expression.right.columns[0].name).toBe("a")
-    expect(stmt.expression.right.columns[1].name).toBe("b")
+    expect(stmt.expression.right.type).toBe("MapLiteral")
+    expect(stmt.expression.right.entries.length).toBe(2)
+    expect(stmt.expression.right.entries[0].key).toBe("a")
+    expect(stmt.expression.right.entries[1].key).toBe("b")
   })
 })
 
@@ -276,5 +326,245 @@ describe("parser complex nested structures", () => {
     const stmt = ast.statements[0] as any
     expect(stmt.expression.args.length).toBe(2)
     expect(stmt.expression.args[0].type).toBe("CallExpression")
+  })
+})
+
+describe("parser Map operations", () => {
+  test("empty Map literal", () => {
+    const ast = parse("{ m = {}; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.right.type).toBe("MapLiteral")
+    expect(stmt.expression.right.entries.length).toBe(0)
+  })
+
+  test("Map literal with entries", () => {
+    const ast = parse('{ m = { host: "localhost", port: 8080 }; }')
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.right.type).toBe("MapLiteral")
+    expect(stmt.expression.right.entries.length).toBe(2)
+    expect(stmt.expression.right.entries[0].key).toBe("host")
+    expect(stmt.expression.right.entries[1].key).toBe("port")
+  })
+
+  test("Map dot access", () => {
+    const ast = parse("{ x := config.host; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.value.type).toBe("MemberExpression")
+    expect(stmt.expression.value.object.name).toBe("config")
+    expect(stmt.expression.value.property).toBe("host")
+  })
+
+  test("Map bracket access with string", () => {
+    const ast = parse('{ x := config["port"]; }')
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.value.type).toBe("IndexExpression")
+    expect(stmt.expression.value.object.name).toBe("config")
+  })
+
+  test("Map bracket access with variable", () => {
+    const ast = parse("{ key := \"host\"; x := config[key]; }")
+    const block = ast.statements[0] as any
+    const stmts = block.statements as any[]
+    const indexStmt = stmts[1]
+    expect(indexStmt.expression.value.type).toBe("IndexExpression")
+  })
+
+  test("Map assignment via dot access", () => {
+    const ast = parse("{ config.host := \"127.0.0.1\"; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("ExpressionStatement")
+    expect(stmt.expression.type).toBe("AssignmentExpression")
+    expect(stmt.expression.target.type).toBe("MemberExpression")
+  })
+
+  test("Map assignment via bracket access", () => {
+    const ast = parse('{ config["port"] := 3000; }')
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("ExpressionStatement")
+    expect(stmt.expression.type).toBe("AssignmentExpression")
+    expect(stmt.expression.target.type).toBe("IndexExpression")
+  })
+})
+
+describe("parser struct definitions", () => {
+  test("simple struct definition", () => {
+    const ast = parse("struct Point { x: f64, y: f64 }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("StructDeclaration")
+    expect(stmt.name).toBe("Point")
+    expect(stmt.fields.length).toBe(2)
+    expect(stmt.fields[0].name).toBe("x")
+    expect(stmt.fields[0].fieldType).toBe("f64")
+    expect(stmt.fields[1].name).toBe("y")
+    expect(stmt.fields[1].fieldType).toBe("f64")
+  })
+
+  test("struct with multiple field types", () => {
+    const ast = parse(`struct Particle {
+      x: f64,
+      y: f64,
+      mass: f64,
+      id: i32
+    }`)
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("StructDeclaration")
+    expect(stmt.name).toBe("Particle")
+    expect(stmt.fields.length).toBe(4)
+    expect(stmt.fields[0].fieldType).toBe("f64")
+    expect(stmt.fields[3].fieldType).toBe("i32")
+  })
+
+  test("struct definition with i64 field", () => {
+    const ast = parse(`struct Counter {
+      value: i64,
+      name: string
+    }`)
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("StructDeclaration")
+    expect(stmt.fields[0].fieldType).toBe("i64")
+  })
+})
+
+describe("parser struct literals", () => {
+  test("struct literal with type annotation", () => {
+    const ast = parse("{ p: Point := { x: 1.0, y: 2.0 }; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.declaredType.name).toBe("Point")
+    expect(stmt.initializer.type).toBe("MapLiteral")
+    expect(stmt.initializer.entries.length).toBe(2)
+  })
+
+  test("struct literal field values", () => {
+    const ast = parse("{ p: Point := { x: 1.5, y: 2.5 }; }")
+    const stmt = ast.statements[0] as any
+    const lit = stmt.initializer as any
+    expect(lit.entries[0].key).toBe("x")
+    expect(lit.entries[0].value.value).toBe("1.5")
+    expect(lit.entries[1].key).toBe("y")
+    expect(lit.entries[1].value.value).toBe("2.5")
+  })
+
+  test("struct literal with expression values", () => {
+    const ast = parse("{ p: Point := { x: 1.0 + 2.0, y: 3.0 * 4.0 }; }")
+    const stmt = ast.statements[0] as any
+    const lit = stmt.initializer as any
+    expect(lit.entries[0].value.type).toBe("BinaryExpression")
+    expect(lit.entries[1].value.type).toBe("BinaryExpression")
+  })
+})
+
+describe("parser struct field access", () => {
+  test("struct field read access", () => {
+    const ast = parse("{ x := p.x; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.value.type).toBe("MemberExpression")
+    expect(stmt.expression.value.object.name).toBe("p")
+    expect(stmt.expression.value.property).toBe("x")
+  })
+
+  test("struct field assignment", () => {
+    const ast = parse("{ p.x := 5.0; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("ExpressionStatement")
+    expect(stmt.expression.target.type).toBe("MemberExpression")
+    expect(stmt.expression.target.property).toBe("x")
+  })
+
+  test("nested struct field access", () => {
+    const ast = parse("{ x := outer.inner.value; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.value.type).toBe("MemberExpression")
+    expect(stmt.expression.value.object.type).toBe("MemberExpression")
+  })
+})
+
+describe("parser AoS (Array of Structs)", () => {
+  test("AoS type annotation", () => {
+    const ast = parse("{ particles: [Particle] := []; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.declaredType.type).toBe("AOSType")
+    expect(stmt.declaredType.elementType).toBe("Particle")
+  })
+
+  test("AoS with fixed capacity", () => {
+    const ast = parse("{ particles: [Particle; 100] := []; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.declaredType.type).toBe("AOSType")
+    expect(stmt.declaredType.elementType).toBe("Particle")
+    expect(stmt.declaredType.capacity).toBe(100)
+  })
+
+  test("AoS literal with struct elements", () => {
+    const ast = parse("{ particles: [Particle] := [{ x: 0.0, y: 0.0 }, { x: 1.0, y: 1.0 }]; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.initializer.type).toBe("ArrayLiteral")
+    expect(stmt.initializer.elements.length).toBe(2)
+  })
+
+  test("AoS index then field access", () => {
+    const ast = parse("{ x := particles[0].x; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.value.type).toBe("MemberExpression")
+    expect(stmt.expression.value.object.type).toBe("IndexExpression")
+  })
+
+  test("AoS element field assignment", () => {
+    const ast = parse("{ particles[0].x := 5.0; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("ExpressionStatement")
+    expect(stmt.expression.target.type).toBe("MemberExpression")
+  })
+
+  test("AoS full element assignment", () => {
+    const ast = parse("{ particles[0] := { x: 2.0, y: 2.0 }; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("ExpressionStatement")
+    expect(stmt.expression.target.type).toBe("IndexExpression")
+    expect(stmt.expression.value.type).toBe("MapLiteral")
+  })
+})
+
+describe("parser SoA (Struct of Arrays)", () => {
+  test("SoA declaration", () => {
+    const ast = parse(`soa Particles {
+      x: [f64],
+      y: [f64],
+      vx: [f64],
+      vy: [f64]
+    }`)
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("SoADeclaration")
+    expect(stmt.name).toBe("Particles")
+    expect(stmt.fields.length).toBe(4)
+    expect(stmt.fields[0].name).toBe("x")
+    expect(stmt.fields[0].fieldType.type).toBe("ArrayType")
+  })
+
+  test("SoA literal", () => {
+    const ast = parse(`{
+      particles: Particles := {
+        x: [0.0, 1.0, 2.0],
+        y: [0.0, 1.0, 2.0],
+        vx: [1.0, 0.0, 0.5],
+        vy: [0.0, 1.0, 0.5]
+      };
+    }`)
+    const stmt = ast.statements[0] as any
+    expect(stmt.initializer.type).toBe("MapLiteral")
+    expect(stmt.initializer.entries.length).toBe(4)
+  })
+
+  test("SoA field then index access", () => {
+    const ast = parse("{ x := particles.x[0]; }")
+    const block = ast.statements[0] as any
+    const stmt = block.statements[0]
+    expect(stmt.expression.value.type).toBe("MemberExpression")
+  })
+
+  test("SoA field assignment", () => {
+    const ast = parse("{ particles.x[0] := 5.0; }")
+    const stmt = ast.statements[0] as any
+    expect(stmt.type).toBe("ExpressionStatement")
+    expect(stmt.expression.target.type).toBe("MemberExpression")
   })
 })

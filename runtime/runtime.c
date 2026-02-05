@@ -31,9 +31,9 @@ static uint64_t gc_last_sweep_time = 0;
 typedef enum {
   OBJ_RAW,      /* Raw memory block (no internal pointers) */
   OBJ_ARRAY,    /* Array with dimensions/strides/data */
-  OBJ_TABLE,    /* Hash table with buckets/entries */
+  OBJ_MAP,      /* Hash map with buckets/entries */
   OBJ_STRING,   /* String buffer */
-  OBJ_ENTRY     /* Table entry with key/value */
+  OBJ_ENTRY     /* Map entry with key/value */
 } ObjectKind;
 
 /* --- GC Block Header --- */
@@ -366,24 +366,24 @@ typedef struct Array {
   void* data;
 } Array;
 
-typedef struct TableEntry {
+typedef struct MapEntry {
   char* key;
   uint64_t key_len;
   uint64_t value;
-  struct TableEntry* next;
-} TableEntry;
+  struct MapEntry* next;
+} MapEntry;
 
-typedef struct Table {
-  TableEntry** buckets;
+typedef struct Map {
+  MapEntry** buckets;
   uint64_t capacity;
   uint64_t count;
-} Table;
+} Map;
 
 /* --- Tracing Functions --- */
 
 void gc_trace_array(Array* arr);
-void gc_trace_table(Table* table);
-void gc_trace_table_entry(TableEntry* entry);
+void gc_trace_map(Map* map);
+void gc_trace_map_entry(MapEntry* entry);
 
 void gc_mark(Block* ptr) {
   if (!ptr || ptr->marked) return;
@@ -399,11 +399,11 @@ void gc_mark(Block* ptr) {
       case OBJ_ARRAY:
         gc_trace_array((Array*)((uintptr_t)block + sizeof(Block)));
         break;
-      case OBJ_TABLE:
-        gc_trace_table((Table*)((uintptr_t)block + sizeof(Block)));
+      case OBJ_MAP:
+        gc_trace_map((Map*)((uintptr_t)block + sizeof(Block)));
         break;
       case OBJ_ENTRY:
-        gc_trace_table_entry((TableEntry*)((uintptr_t)block + sizeof(Block)));
+        gc_trace_map_entry((MapEntry*)((uintptr_t)block + sizeof(Block)));
         break;
       case OBJ_RAW:
       case OBJ_STRING:
@@ -436,31 +436,33 @@ void gc_trace_array(Array* arr) {
   }
 }
 
-void gc_trace_table(Table* table) {
-  if (!table) return;
-  
-  /* Mark buckets array */
-  if (table->buckets) {
-    Block* buckets_block = ptr_to_block(table->buckets);
-    if (buckets_block) mark_stack_push(buckets_block);
+void gc_trace_map(Map* map) {
+  if (!map) return;
+
+  /* Trace the buckets array */
+  if (map->buckets) {
+    Block* buckets_block = ptr_to_block(map->buckets);
+    gc_mark(buckets_block);
   }
-  
-  /* Mark all entries in all buckets */
-  for (uint64_t i = 0; i < table->capacity; i++) {
-    TableEntry* entry = table->buckets[i];
+
+  /* Trace all entries */
+  for (uint64_t i = 0; i < map->capacity; i++) {
+    MapEntry* entry = map->buckets[i];
     while (entry) {
+      /* Trace the entry struct itself (already marked via map, but ensure traced) */
       Block* entry_block = ptr_to_block(entry);
-      if (entry_block && !entry_block->marked) {
-        mark_stack_push(entry_block);
-        /* Trace entry internals */
-        gc_trace_table_entry(entry);
+      gc_mark(entry_block);
+      /* Trace the key string */
+      if (entry->key) {
+        Block* key_block = ptr_to_block(entry->key);
+        gc_mark(key_block);
       }
       entry = entry->next;
     }
   }
 }
 
-void gc_trace_table_entry(TableEntry* entry) {
+void gc_trace_map_entry(MapEntry* entry) {
   if (!entry) return;
   
   /* Mark the key string */
@@ -730,10 +732,44 @@ void* array_slice(void* array_ptr, uint64_t start, uint64_t end) {
   return slice;
 }
 
-/* --- Table Implementation --- */
-/* TableEntry and Table structs defined above for tracing */
+void* array_slice_step(void* array_ptr, uint64_t start, uint64_t end, uint64_t step) {
+  if (step == 0) step = 1;
 
-uint64_t table_hash(const char* key, uint64_t key_len) {
+  Array* arr = (Array*)array_ptr;
+
+  // Calculate number of elements in sliced result
+  uint64_t available_len = end > start ? end - start : 0;
+  if (available_len > arr->dimensions[0] - start) {
+    available_len = arr->dimensions[0] - start;
+  }
+  uint64_t slice_len = (available_len + step - 1) / step;  // Ceiling division
+
+  Array* slice = (Array*)gc_alloc_kind(sizeof(Array), OBJ_ARRAY);
+  slice->element_size = arr->element_size;
+  slice->dimension_count = 1;
+  slice->dimensions = (uint64_t*)gc_alloc(sizeof(uint64_t));
+  slice->dimensions[0] = slice_len;
+  slice->strides = (uint64_t*)gc_alloc(sizeof(uint64_t));
+  slice->strides[0] = 1;
+  slice->data = gc_alloc(arr->element_size * slice_len);
+
+  uint8_t* src_data = (uint8_t*)arr->data;
+  uint8_t* dst_data = (uint8_t*)slice->data;
+  for (uint64_t i = 0; i < slice_len; i++) {
+    uint64_t src_idx = start + i * step;
+    if (src_idx >= arr->dimensions[0]) break;
+    memcpy(dst_data + i * arr->element_size,
+           src_data + src_idx * arr->element_size,
+           arr->element_size);
+  }
+
+  return slice;
+}
+
+/* --- Map Implementation --- */
+/* MapEntry and Map structs defined above for tracing */
+
+uint64_t map_hash(const char* key, uint64_t key_len) {
   uint64_t hash = 5381;
   for (uint64_t i = 0; i < key_len; i++) {
     hash = ((hash << 5) + hash) + key[i];
@@ -741,39 +777,39 @@ uint64_t table_hash(const char* key, uint64_t key_len) {
   return hash;
 }
 
-void* table_new(uint64_t initial_capacity) {
-  Table* table = (Table*)gc_alloc_kind(sizeof(Table), OBJ_TABLE);
-  table->capacity = initial_capacity;
-  table->count = 0;
-  table->buckets = (TableEntry**)gc_alloc(sizeof(TableEntry*) * initial_capacity);
-  
+void* map_new(uint64_t initial_capacity) {
+  Map* map = (Map*)gc_alloc_kind(sizeof(Map), OBJ_MAP);
+  map->capacity = initial_capacity;
+  map->count = 0;
+  map->buckets = (MapEntry**)gc_alloc(sizeof(MapEntry*) * initial_capacity);
+
   for (uint64_t i = 0; i < initial_capacity; i++) {
-    table->buckets[i] = NULL;
+    map->buckets[i] = NULL;
   }
-  
-  return table;
+
+  return map;
 }
 
-uint64_t table_get(void* table_ptr, const char* key, uint64_t key_len) {
-  Table* table = (Table*)table_ptr;
-  uint64_t hash = table_hash(key, key_len) % table->capacity;
-  
-  TableEntry* entry = table->buckets[hash];
+uint64_t map_get(void* map_ptr, const char* key, uint64_t key_len) {
+  Map* map = (Map*)map_ptr;
+  uint64_t hash = map_hash(key, key_len) % map->capacity;
+
+  MapEntry* entry = map->buckets[hash];
   while (entry) {
     if (entry->key_len == key_len && memcmp(entry->key, key, key_len) == 0) {
       return entry->value;
     }
     entry = entry->next;
   }
-  
+
   return 0;
 }
 
-void table_set(void* table_ptr, const char* key, uint64_t key_len, uint64_t value) {
-  Table* table = (Table*)table_ptr;
-  uint64_t hash = table_hash(key, key_len) % table->capacity;
-  
-  TableEntry* entry = table->buckets[hash];
+void map_set(void* map_ptr, const char* key, uint64_t key_len, uint64_t value) {
+  Map* map = (Map*)map_ptr;
+  uint64_t hash = map_hash(key, key_len) % map->capacity;
+
+  MapEntry* entry = map->buckets[hash];
   while (entry) {
     if (entry->key_len == key_len && memcmp(entry->key, key, key_len) == 0) {
       entry->value = value;
@@ -781,15 +817,15 @@ void table_set(void* table_ptr, const char* key, uint64_t key_len, uint64_t valu
     }
     entry = entry->next;
   }
-  
-  TableEntry* new_entry = (TableEntry*)gc_alloc_kind(sizeof(TableEntry), OBJ_ENTRY);
+
+  MapEntry* new_entry = (MapEntry*)gc_alloc_kind(sizeof(MapEntry), OBJ_ENTRY);
   new_entry->key = (char*)gc_alloc(key_len);
   memcpy(new_entry->key, key, key_len);
   new_entry->key_len = key_len;
   new_entry->value = value;
-  new_entry->next = table->buckets[hash];
-  table->buckets[hash] = new_entry;
-  table->count++;
+  new_entry->next = map->buckets[hash];
+  map->buckets[hash] = new_entry;
+  map->count++;
 }
 
 /* Array dimension access */
@@ -1024,6 +1060,38 @@ char* string_slice(const char* str, uint64_t start, uint64_t end) {
   return result;
 }
 
+/* String Conversion Functions */
+
+char* i64_to_string(int64_t value) {
+  // Enough for int64_t including sign and null terminator
+  char buffer[21];
+  snprintf(buffer, sizeof(buffer), "%ld", value);
+  uint64_t len = strlen(buffer);
+  char* result = (char*)gc_alloc(len + 1);
+  memcpy(result, buffer, len + 1);
+  return result;
+}
+
+char* u64_to_string(uint64_t value) {
+  // Enough for uint64_t and null terminator
+  char buffer[21];
+  snprintf(buffer, sizeof(buffer), "%lu", value);
+  uint64_t len = strlen(buffer);
+  char* result = (char*)gc_alloc(len + 1);
+  memcpy(result, buffer, len + 1);
+  return result;
+}
+
+char* f64_to_string(double value) {
+  // Enough for double with precision and null terminator
+  char buffer[64];
+  snprintf(buffer, sizeof(buffer), "%f", value);
+  uint64_t len = strlen(buffer);
+  char* result = (char*)gc_alloc(len + 1);
+  memcpy(result, buffer, len + 1);
+  return result;
+}
+
 /* I/O Functions */
 
 void print_i64(int64_t value) {
@@ -1076,16 +1144,16 @@ uint64_t input_u64(void) {
 
 /* CLI Argument Access */
 
-uint64_t get_argc_value(void* cli_table) {
-  if (!cli_table) return 0;
-  return table_get(cli_table, "argc", 4);
+uint64_t get_argc_value(void* cli_map) {
+  if (!cli_map) return 0;
+  return map_get(cli_map, "argc", 4);
 }
 
-uint64_t get_argv_value(void* cli_table, uint64_t index) {
-  if (!cli_table) return 0;
-  
-  uint64_t args_array = table_get(cli_table, "args", 4);
+uint64_t get_argv_value(void* cli_map, uint64_t index) {
+  if (!cli_map) return 0;
+
+  uint64_t args_array = map_get(cli_map, "args", 4);
   if (!args_array) return 0;
-  
+
   return array_get((void*)args_array, index);
 }

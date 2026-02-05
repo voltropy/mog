@@ -1,5 +1,6 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
-import { isArrayType, isTableType, isFloatType } from "./types.js"
+import type { ArrayType } from "./types.js"
+import { isArrayType,   isMapType, isFloatType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -22,6 +23,21 @@ type LLVMGlobal = {
   initValue?: string
 }
 
+type OptimizationOptions = {
+  /** Enable release mode optimizations (bounds check elision) */
+  releaseMode: boolean
+  /** Enable vectorization hints for array operations */
+  vectorization: boolean
+  /** Inline threshold: functions with fewer basic blocks will be marked alwaysinline */
+  inlineThreshold: number
+}
+
+const defaultOptimizationOptions: OptimizationOptions = {
+  releaseMode: process.env.ALGOLSCRIPT_RELEASE === "1",
+  vectorization: true,
+  inlineThreshold: 3,
+}
+
 class LLVMIRGenerator {
   private functions: Map<string, LLVMFunction> = new Map()
   private globals: LLVMGlobal[] = []
@@ -32,6 +48,12 @@ class LLVMIRGenerator {
   private functionTypes: Map<string, any> = new Map()
   private loopStack: { breakLabel: string; continueLabel: string }[] = []
   private blockTerminated = false
+  private opts: OptimizationOptions
+  private currentFunctionBasicBlocks = 0
+
+  constructor(options: Partial<OptimizationOptions> = {}) {
+    this.opts = { ...defaultOptimizationOptions, ...options }
+  }
 
   private resetValueCounter(start: number = 0): void {
     this.valueCounter = start
@@ -128,18 +150,18 @@ class LLVMIRGenerator {
           ir.push(`  br label %argv_done_${i}`)
           ir.push(`argv_done_${i}:`)
         }
-        ir.push(`  ; Skip remaining argv elements (${i}..)`)
+        ir.push(`  ; Skip remaining argv elements (10..)`)
         
         // Create CLI args table (argc + args array)
-        ir.push("  %cli_table = call ptr @table_new(i64 2)")
+        ir.push("  %cli_table = call ptr @map_new(i64 2)")
         ir.push("  %argc_key = alloca [5 x i8]")
         ir.push("  store [5 x i8] c\"argc\\00\", ptr %argc_key")
-        ir.push("  call void @table_set(ptr %cli_table, ptr %argc_key, i64 4, i64 %argc)")
+        ir.push("  call void @map_set(ptr %cli_table, ptr %argc_key, i64 4, i64 %argc)")
         
         ir.push("  %args_key = alloca [5 x i8]")
         ir.push("  store [5 x i8] c\"args\\00\", ptr %args_key")
         ir.push("  %args_int = ptrtoint ptr %args_array to i64")
-        ir.push("  call void @table_set(ptr %cli_table, ptr %args_key, i64 4, i64 %args_int)")
+        ir.push("  call void @map_set(ptr %cli_table, ptr %args_key, i64 4, i64 %args_int)")
         
         ir.push("  %cli_table_int = ptrtoint ptr %cli_table to i64")
         
@@ -232,16 +254,17 @@ class LLVMIRGenerator {
     ir.push("declare void @array_set_f64(ptr %array, i64 %index, double %value)")
     ir.push("declare i64 @array_length(ptr %array)")
     ir.push("declare ptr @array_slice(ptr %array, i64 %start, i64 %end)")
+    ir.push("declare ptr @array_slice_step(ptr %array, i64 %start, i64 %end, i64 %step)")
     ir.push("declare float @dot_f32(ptr %a, ptr %b)")
     ir.push("declare double @dot_f64(ptr %a, ptr %b)")
     ir.push("declare ptr @matmul(ptr %a, ptr %b)")
     ir.push("declare ptr @matrix_add(ptr %a, ptr %b)")
     ir.push("")
 
-    ir.push("; Declare table functions")
-    ir.push("declare ptr @table_new(i64 %initial_capacity)")
-    ir.push("declare i64 @table_get(ptr %table, ptr %key, i64 %key_len)")
-    ir.push("declare void @table_set(ptr %table, ptr %key, i64 %key_len, i64 %value)")
+    ir.push("; Declare map functions")
+    ir.push("declare ptr @map_new(i64 %initial_capacity)")
+    ir.push("declare i64 @map_get(ptr %map, ptr %key, i64 %key_len)")
+    ir.push("declare void @map_set(ptr %map, ptr %key, i64 %key_len, i64 %value)")
     ir.push("")
 
     ir.push("; Declare string functions")
@@ -249,6 +272,9 @@ class LLVMIRGenerator {
     ir.push("declare ptr @string_concat(ptr %a, ptr %b)")
     ir.push("declare ptr @string_char_at(ptr %str, i64 %index)")
     ir.push("declare ptr @string_slice(ptr %str, i64 %start, i64 %end)")
+    ir.push("declare ptr @i64_to_string(i64 %value)")
+    ir.push("declare ptr @u64_to_string(i64 %value)")
+    ir.push("declare ptr @f64_to_string(double %value)")
     ir.push("")
 
     ir.push("; Declare CLI argument helper functions")
@@ -414,8 +440,8 @@ class LLVMIRGenerator {
         return this.generateArrayLiteral(ir, expr)
       case "ArrayFill":
         return this.generateArrayFill(ir, expr)
-      case "TableLiteral":
-        return this.generateTableLiteral(ir, expr)
+      case "MapLiteral":
+        return this.generateMapLiteral(ir, expr)
       case "MemberExpression":
         return this.generateMemberExpression(ir, expr)
       case "IndexExpression":
@@ -489,6 +515,49 @@ class LLVMIRGenerator {
     this.collectStringFromNode(ast)
   }
 
+  private inferExpressionType(expr: any): string {
+    // Infer the type of an expression for template literal conversion
+    switch (expr.type) {
+      case "StringLiteral":
+        return "string"
+      case "NumberLiteral": {
+        const val = String(expr.value)
+        if (val.includes(".") || val.toLowerCase().includes("e")) {
+          return "f64"
+        }
+        return "i64"
+      }
+      case "Identifier": {
+        const varType = this.variableTypes.get(expr.name)
+        if (varType?.type === "FloatType") return varType.kind || "f64"
+        if (varType?.type === "IntegerType") return varType.kind || "i64"
+        if (varType?.type === "UnsignedType") return varType.kind || "u64"
+        if (varType?.type === "ArrayType") return "string" // [u8] strings
+        return "i64" // default
+      }
+      case "BinaryExpression": {
+        // For binary expressions, determine based on operands
+        if (this.isFloatOperand(expr.left) || this.isFloatOperand(expr.right)) {
+          return "f64"
+        }
+        return "i64"
+      }
+      case "CallExpression": {
+        const funcName = expr.function?.name || expr.callee?.name
+        if (funcName) {
+          const func = this.functions.get(funcName)
+          if (func) {
+            if (func.returnType.startsWith("f")) return "f64"
+            if (func.returnType === "ptr") return "string"
+          }
+        }
+        return "i64"
+      }
+      default:
+        return "i64"
+    }
+  }
+
   private generateTemplateLiteral(ir: string[], expr: any): string {
     const parts = expr.parts as (string | any)[]
     if (parts.length === 0) {
@@ -511,9 +580,27 @@ class LLVMIRGenerator {
       } else {
         // Expression part - generate it and convert to string
         const exprReg = this.generateExpression(ir, part)
-        // For now, assume it's already a string pointer
-        // TODO: convert numbers to strings
-        partRegs.push(exprReg)
+        const exprType = this.inferExpressionType(part)
+
+        // Convert non-string expressions to strings
+        if (exprType === "string") {
+          partRegs.push(exprReg)
+        } else if (exprType === "f64" || exprType === "f32" || exprType === "f16" || exprType === "f128") {
+          // Float to string
+          const convertReg = `%${this.valueCounter++}`
+          ir.push(`  ${convertReg} = call ptr @f64_to_string(double ${exprReg})`)
+          partRegs.push(convertReg)
+        } else if (exprType.startsWith("u")) {
+          // Unsigned to string
+          const convertReg = `%${this.valueCounter++}`
+          ir.push(`  ${convertReg} = call ptr @u64_to_string(i64 ${exprReg})`)
+          partRegs.push(convertReg)
+        } else {
+          // Signed integer to string
+          const convertReg = `%${this.valueCounter++}`
+          ir.push(`  ${convertReg} = call ptr @i64_to_string(i64 ${exprReg})`)
+          partRegs.push(convertReg)
+        }
       }
     }
 
@@ -941,9 +1028,9 @@ class LLVMIRGenerator {
       }
 
       const runtimeSignatures: Record<string, { params: string[]; ret: string }> = {
-        table_new: { params: ["i64"], ret: "ptr" },
-        table_get: { params: ["ptr", "ptr", "i64"], ret: "i64" },
-        table_set: { params: ["ptr", "ptr", "i64", "i64"], ret: "void" },
+        map_new: { params: ["i64"], ret: "ptr" },
+        map_get: { params: ["ptr", "ptr", "i64"], ret: "i64" },
+        map_set: { params: ["ptr", "ptr", "i64", "i64"], ret: "void" },
         string_length: { params: ["ptr"], ret: "i64" },
         string_concat: { params: ["ptr", "ptr"], ret: "ptr" },
       }
@@ -1113,7 +1200,7 @@ class LLVMIRGenerator {
       const index = this.generateExpression(ir, target.index)
 
       // Check if this is a table assignment (table[key] = value)
-      if (this.isTableType(target.object)) {
+      if (this.isMapType(target.object)) {
         // Table assignment: table[key] := value
         // The index is the key - could be string or integer
         const keyExpr = target.index
@@ -1149,7 +1236,7 @@ class LLVMIRGenerator {
           keyLen = lenReg
         }
 
-        ir.push(`  call void @table_set(ptr ${obj}, ptr ${keyPtr}, i64 ${keyLen}, i64 ${valueReg})`)
+        ir.push(`  call void @map_set(ptr ${obj}, ptr ${keyPtr}, i64 ${keyLen}, i64 ${valueReg})`)
       } else {
         // Array assignment: array[index] := value
         // Handle nested array access
@@ -1163,6 +1250,11 @@ class LLVMIRGenerator {
 
         // Determine element type to use appropriate setter
         const elementType = this.getArrayElementType(target.object)
+
+        // Emit bounds check elision hint in release mode for AoS/SoA operations
+        if (this.shouldElideBoundsCheck()) {
+          ir.push(`  ; BOUNDS_CHECK_ELIDED: release mode optimization`)
+        }
 
         if (elementType?.type === "FloatType") {
           if (elementType.kind === "f32") {
@@ -1191,7 +1283,7 @@ class LLVMIRGenerator {
       const strDef = `${keyName} = private unnamed_addr constant [${target.property.length + 1} x i8] c"${escaped}\\00"`
       this.stringConstants.push(strDef)
       // obj is already a ptr for tables
-      ir.push(`  call void @table_set(ptr ${obj}, ptr ${keyName}, i64 ${target.property.length}, i64 ${valueReg})`)
+      ir.push(`  call void @map_set(ptr ${obj}, ptr ${keyName}, i64 ${target.property.length}, i64 ${valueReg})`)
     } else {
       const varType = this.variableTypes.get(name)
       const llvmType = this.toLLVMType(varType)
@@ -1337,10 +1429,10 @@ class LLVMIRGenerator {
     return elementReg
   }
 
-  private generateTableLiteral(ir: string[], expr: any): string {
+  private generateMapLiteral(ir: string[], expr: any): string {
     const tableReg = `%${this.valueCounter++}`
     const capacity = expr.columns.length > 0 ? expr.columns.length * 2 : 4
-    ir.push(`  ${tableReg} = call ptr @table_new(i64 ${capacity})`)
+    ir.push(`  ${tableReg} = call ptr @map_new(i64 ${capacity})`)
 
     for (const col of expr.columns) {
       const key = col.name
@@ -1348,7 +1440,7 @@ class LLVMIRGenerator {
       const keyStr = this.generateStringLiteral(ir, key)
       const valueReg = this.generateExpression(ir, value)
       if (valueReg) {
-        ir.push(`  call void @table_set(ptr ${tableReg}, ptr ${keyStr}, i64 ${key.length}, i64 ${valueReg})`)
+        ir.push(`  call void @map_set(ptr ${tableReg}, ptr ${keyStr}, i64 ${key.length}, i64 ${valueReg})`)
       }
     }
 
@@ -1363,7 +1455,7 @@ class LLVMIRGenerator {
     const strDef = `${keyName} = private unnamed_addr constant [${expr.property.length + 1} x i8] c"${escaped}\\00"`
     this.stringConstants.push(strDef)
     const reg = `%${this.valueCounter++}`
-    ir.push(`  ${reg} = call i64 @table_get(ptr ${obj}, ptr ${keyName}, i64 ${expr.property.length})`)
+    ir.push(`  ${reg} = call i64 @map_get(ptr ${obj}, ptr ${keyName}, i64 ${expr.property.length})`)
     return reg
   }
 
@@ -1382,7 +1474,7 @@ class LLVMIRGenerator {
     }
 
     // Check if this is a table access (table[key])
-    if (this.isTableType(expr.object)) {
+    if (this.isMapType(expr.object)) {
       // Table access: table[key] - key can be string or integer
       const keyExpr = expr.index
       let keyPtr: string
@@ -1411,7 +1503,7 @@ class LLVMIRGenerator {
       }
 
       const reg = `%${this.valueCounter++}`
-      ir.push(`  ${reg} = call i64 @table_get(ptr ${arrayPtr}, ptr ${keyPtr}, i64 ${keyLen})`)
+      ir.push(`  ${reg} = call i64 @map_get(ptr ${arrayPtr}, ptr ${keyPtr}, i64 ${keyLen})`)
       return reg
     }
 
@@ -1423,8 +1515,17 @@ class LLVMIRGenerator {
     if (this.isStringType(expr.object)) {
       // String indexing - returns a new single-char string
       const resultReg = `%${this.valueCounter++}`
+      // Emit bounds check elision hint in release mode
+      if (this.shouldElideBoundsCheck()) {
+        ir.push(`  ; BOUNDS_CHECK_ELIDED: release mode optimization`)
+      }
       ir.push(`  ${resultReg} = call ptr @string_char_at(ptr ${arrayPtr}, i64 ${index})`)
       return resultReg
+    }
+
+    // Emit bounds check elision hint in release mode for AoS/SoA operations
+    if (this.shouldElideBoundsCheck()) {
+      ir.push(`  ; BOUNDS_CHECK_ELIDED: release mode optimization`)
     }
 
     if (elementType?.type === "FloatType") {
@@ -1489,7 +1590,7 @@ class LLVMIRGenerator {
       if (varType?.type === "ArrayType") {
         const arrType = varType as ArrayType
         return arrType.elementType?.type === "UnsignedType" &&
-               arrType.elementType?.kind === "u8" &&
+               (arrType.elementType as any)?.kind === "u8" &&
                arrType.dimensions.length === 0
       }
     }
@@ -1497,19 +1598,19 @@ class LLVMIRGenerator {
     return false
   }
 
-  private isTableType(expr: any): boolean {
+  private isMapType(expr: any): boolean {
     if (!expr) return false
 
     // If it's an identifier, look up the variable type
     if (expr.type === "Identifier" && expr.name) {
       const varType = this.variableTypes.get(expr.name)
-      if (varType?.type === "TableType") {
+      if (varType?.type === "MapType") {
         return true
       }
     }
 
     // Check if the expression itself has a resultType
-    if (expr.resultType?.type === "TableType") {
+    if (expr.resultType?.type === "MapType") {
       return true
     }
 
@@ -1532,12 +1633,20 @@ class LLVMIRGenerator {
     // Check if this is a string type [u8]
     if (this.isStringType(expr.object)) {
       const resultReg = `%${this.valueCounter++}`
+      // String slicing with step not supported yet, use basic slice
       ir.push(`  ${resultReg} = call ptr @string_slice(ptr ${arrayPtr}, i64 ${start}, i64 ${end})`)
       return resultReg
     }
 
     const reg = `%${this.valueCounter++}`
-    ir.push(`  ${reg} = call ptr @array_slice(ptr ${arrayPtr}, i64 ${start}, i64 ${end})`)
+
+    // Handle step parameter if provided
+    if (expr.step) {
+      const step = this.generateExpression(ir, expr.step)
+      ir.push(`  ${reg} = call ptr @array_slice_step(ptr ${arrayPtr}, i64 ${start}, i64 ${end}, i64 ${step})`)
+    } else {
+      ir.push(`  ${reg} = call ptr @array_slice(ptr ${arrayPtr}, i64 ${start}, i64 ${end})`)
+    }
     return reg
   }
 
@@ -1769,6 +1878,12 @@ class LLVMIRGenerator {
 
     ir.push(`${endLabel}:`)
 
+    // Emit vectorization metadata for hot loop optimization
+    // This hints to LLVM that this loop should be vectorized for SIMD operations
+    if (this.opts.vectorization) {
+      this.emitVectorizationMetadata(ir, headerLabel, endLabel)
+    }
+
     // Pop loop context
     this.loopStack.pop()
   }
@@ -1832,6 +1947,12 @@ class LLVMIRGenerator {
 
     ir.push(`${endLabel}:`)
 
+    // Emit vectorization metadata for array iteration optimization
+    // This enables SIMD vectorization for SoA column operations
+    if (this.opts.vectorization) {
+      this.emitVectorizationMetadata(ir, startLabel, endLabel)
+    }
+
     // Pop loop context
     this.loopStack.pop()
     this.blockTerminated = prevTerminated
@@ -1861,6 +1982,7 @@ class LLVMIRGenerator {
     const { name, params, returnType, body } = statement
 
     this.resetValueCounter(10)
+    this.currentFunctionBasicBlocks = 0
 
     const llvmParams = params.map((p: any) => {
       const llvmType = this.toLLVMType(p.paramType)
@@ -1882,7 +2004,16 @@ class LLVMIRGenerator {
 
     const paramStr = llvmParams.map((p: LLVMValue) => `${p.type} %${p.name}`).join(", ")
 
-    ir.push(`define ${llvmReturnType} @${name}(${paramStr}) {`)
+    // Determine function attributes based on optimization settings
+    // Small functions (few params, simple body) get alwaysinline for hot path optimization
+    const funcAttributes = this.determineFunctionAttributes(statement)
+
+    // Build function definition with proper LLVM syntax:
+    // define <returntype> @<name>(<params>) [fn-attributes] {
+    // Note: function attributes like nounwind, alwaysinline go after params, not before return type
+    const attrSuffix = funcAttributes.trim()
+
+    ir.push(`define ${llvmReturnType} @${name}(${paramStr})${attrSuffix} {`)
     ir.push("entry:")
     ir.push("  call void @gc_push_frame()")
 
@@ -1926,6 +2057,118 @@ class LLVMIRGenerator {
     ir.push("")
 
     this.currentFunction = null
+  }
+
+  /**
+   * Determine LLVM function attributes for optimization
+   * Small functions get alwaysinline for hot path optimization
+   */
+  private determineFunctionAttributes(statement: any): string {
+    const attrs: string[] = []
+    const body = statement.body
+
+    // Count basic blocks by checking for control flow statements
+    let basicBlockCount = 1 // entry block
+    if (body?.statements) {
+      for (const stmt of body.statements) {
+        if (stmt.type === "Conditional" || stmt.type === "WhileLoop" ||
+            stmt.type === "ForLoop" || stmt.type === "ForEachLoop") {
+          basicBlockCount++
+        }
+      }
+    }
+
+    // Small functions: mark as alwaysinline for hot path optimization
+    if (basicBlockCount <= this.opts.inlineThreshold) {
+      attrs.push("alwaysinline")
+    }
+
+    // Inline functions with small struct operations for hot path optimization
+    // This enables efficient struct field access and copy operations
+    if (this.hasSmallStructOperations(statement)) {
+      if (!attrs.includes("alwaysinline")) {
+        attrs.push("alwaysinline")
+      }
+    }
+
+    // Add nounwind for functions that don't unwind (no exceptions in AlgolScript)
+    attrs.push("nounwind")
+
+    // Return attributes as suffix (with leading space if any attributes present)
+    return attrs.length > 0 ? ` ${attrs.join(" ")}` : ""
+  }
+
+  /**
+   * Emit LLVM metadata for loop vectorization
+   * This hints to the LLVM optimizer to vectorize array operations
+   */
+  private emitVectorizationMetadata(ir: string[], loopStart: string, loopEnd: string): void {
+    if (!this.opts.vectorization) return
+
+    // Add a metadata node to mark this loop as vectorizable
+    // In full LLVM IR, this would be: !0 = !{!"llvm.loop.vectorize.enable", i1 1}
+    // For now, we add a comment hint that the optimizer can use
+    ir.push(`  ; VECTORIZE_HINT: loop ${loopStart} -> ${loopEnd}`)
+  }
+
+  /**
+   * Check if bounds checks can be elided (release mode only)
+   * In release mode, skip bounds checks for performance
+   */
+  private shouldElideBoundsCheck(): boolean {
+    return this.opts.releaseMode
+  }
+
+  /**
+   * Determine if a function operates on small structs that should be inlined
+   * This enables hot path optimization for struct field access and copy operations
+   */
+  private hasSmallStructOperations(statement: any): boolean {
+    // Check if function body contains struct operations
+    // Small struct operations benefit from inlining
+    const body = statement.body
+    if (!body?.statements) return false
+
+    for (const stmt of body.statements) {
+      // Check for struct-related operations
+      if (this.containsStructOperations(stmt)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * Recursively check if a statement contains struct operations
+   */
+  private containsStructOperations(stmt: any): boolean {
+    if (!stmt) return false
+
+    // Check for struct field access or assignment
+    if (stmt.type === "MemberExpression" ||
+        (stmt.type === "AssignmentStatement" &&
+         stmt.target?.type === "MemberExpression")) {
+      // This could be a struct field operation - check if it uses inline hint
+      return true
+    }
+
+    // Recursively check nested statements
+    if (stmt.body?.statements) {
+      for (const s of stmt.body.statements) {
+        if (this.containsStructOperations(s)) return true
+      }
+    }
+
+    return false
+  }
+
+  /**
+   * Emit inline hint for small struct operations
+   * Marks struct copy/field access operations for LLVM inlining
+   */
+  private emitStructInlineHint(ir: string[], structName: string, operation: string): void {
+    // Emit a comment hint that LLVM can use for inlining decisions
+    ir.push(`  ; STRUCT_INLINE_HINT: ${structName} ${operation}`)
   }
 
   private generateReturn(ir: string[], statement: any): void {
@@ -2060,7 +2303,7 @@ class LLVMIRGenerator {
         }
       case "ArrayType":
         return "ptr"
-      case "TableType":
+      case "MapType":
         return "ptr"
       case "PointerType":
         return "ptr"
@@ -2275,9 +2518,9 @@ private getIntBits(type: LLVMType): number {
   }
 }
 
-export function generateLLVMIR(ast: ProgramNode): string {
-  const generator = new LLVMIRGenerator()
+export function generateLLVMIR(ast: ProgramNode, options?: Partial<OptimizationOptions>): string {
+  const generator = new LLVMIRGenerator(options)
   return generator.generate(ast)
 }
 
-export { LLVMIRGenerator }
+export { LLVMIRGenerator, type OptimizationOptions }

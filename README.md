@@ -240,6 +240,148 @@ tbl[123] := 100;            // Integer key
 val: i64 = table_get(tbl, "key", 3);
 ```
 
+### Map (Key-Value Store)
+
+Maps are associative arrays with dynamic keys, similar to JavaScript objects or Python dictionaries. They are the preferred modern alternative to the legacy `table` type.
+
+Map literals use the same syntax as tables but are type-inferred as Maps:
+```algol
+// Map literal with string keys
+config := {host: "localhost", port: 8080};
+
+// Access patterns
+println(config.host);      // dot notation
+println(config["port"]);   // bracket notation
+
+// Dynamic keys
+key := "host";
+println(config[key]);      // runtime key lookup
+
+// Nested maps
+nested := {server: {host: "0.0.0.0", port: 3000}, debug: true};
+println(nested.server.host);
+```
+
+### Struct Types
+
+Structs group related data with named, typed fields. They provide better type safety and performance than Maps for fixed-schema data.
+
+Defining a struct:
+```algol
+struct Point {
+    x: f64,
+    y: f64
+}
+
+struct Rectangle {
+    top_left: Point,
+    bottom_right: Point
+}
+```
+
+Creating and using structs:
+```algol
+// Struct literal (type inferred from annotation)
+p: Point := {x: 1.0, y: 2.0};
+
+// Nested structs
+rect: Rectangle := {
+    top_left: {x: 0.0, y: 0.0},
+    bottom_right: {x: 100.0, y: 100.0}
+};
+
+// Field access
+println(rect.top_left.x);
+
+// Field assignment
+p.x := 5.0;
+```
+
+### AoS (Array of Structs)
+
+AoS stores an array of struct instances in contiguous memory. This layout is optimal when you frequently access all fields of a single element together (row-major access).
+
+```algol
+// Define a struct
+struct Particle {
+    x: f64,
+    y: f64,
+    vx: f64,
+    vy: f64
+}
+
+// AoS type: [StructName] for dynamic, [StructName; N] for fixed capacity
+particles: [Particle] := [
+    {x: 0.0, y: 0.0, vx: 1.0, vy: 0.0},
+    {x: 1.0, y: 1.0, vx: 0.0, vy: 1.0}
+];
+
+// Access: index then field (aos[i].field)
+first_x := particles[0].x;
+particles[0].x := 5.0;
+
+// Built-in functions
+push(particles, {x: 2.0, y: 2.0, vx: 0.0, vy: 0.0});
+count := len(particles);
+capacity := cap(particles);
+reserve(particles, 100);  // Pre-allocate space
+```
+
+### SoA (Struct of Arrays)
+
+SoA stores each field as a separate column array. This layout enables SIMD vectorization and is optimal for operations on a single field across many elements (column-major access).
+
+```algol
+// SoA struct definition - each field is an array type
+struct Particles {
+    x: [f64],
+    y: [f64],
+    vx: [f64],
+    vy: [f64]
+}
+
+// SoA literal - all field arrays must have the same length
+particles: Particles := {
+    x: [0.0, 1.0, 2.0],
+    y: [0.0, 1.0, 2.0],
+    vx: [1.0, 0.0, 0.5],
+    vy: [0.0, 1.0, 0.5]
+};
+
+// Access: field then index (soa.field[i])
+first_x := particles.x[0];
+particles.x[0] := 5.0;
+
+// Column operations are vectorization-friendly
+for i := 0 to len(particles) {
+    particles.x[i] := particles.x[i] + particles.vx[i];
+    particles.y[i] := particles.y[i] + particles.vy[i];
+}
+
+// Built-in functions
+push(particles, {x: 3.0, y: 3.0, vx: 0.0, vy: 0.0});
+count := len(particles);
+```
+
+### Choosing Between AoS and SoA
+
+| Layout | Best For | Memory Access Pattern | Example Use Case |
+|--------|----------|----------------------|------------------|
+| AoS | Processing whole objects | Row-major | Physics simulation (update all properties per particle) |
+| SoA | Vectorized column operations | Column-major | ML training (compute gradients on one feature across all samples) |
+
+```algol
+// AoS: Good when accessing all fields together
+for i := 0 to len(aos_particles) {
+    update_all_fields(aos_particles[i]);
+}
+
+// SoA: Good for SIMD/vectorized operations
+for i := 0 to len(soa_particles) {
+    soa_particles.x[i] := soa_particles.x[i] * 2.0;  // Sequential memory access
+}
+```
+
 ### Strings
 
 Strings are arrays of unsigned bytes (`u8`) with special syntax support:

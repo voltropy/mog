@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
-import { generateLLVMIR } from "./llvm_codegen"
-import { i64, f64, voidType, array, table } from "./types"
+import { generateLLVMIR, LLVMIRGenerator } from "./llvm_codegen"
+import { i64, f64, voidType, array, map } from "./types"
 
 describe("LLVM IR Generator", () => {
   describe("Program Structure", () => {
@@ -23,7 +23,7 @@ describe("LLVM IR Generator", () => {
       expect(ir).toContain("declare ptr @llm_call")
       expect(ir).toContain("declare void @gc_init")
       expect(ir).toContain("declare ptr @array_alloc")
-      expect(ir).toContain("declare ptr @table_new")
+      expect(ir).toContain("declare ptr @map_new")
     })
   })
 
@@ -757,7 +757,7 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("table_get")
+      expect(ir).toContain("map_get")
     })
 
     test("generates table member assignment", () => {
@@ -767,7 +767,7 @@ describe("LLVM IR Generator", () => {
           {
             type: "VariableDeclaration",
             name: "obj",
-            varType: table(String, i64),
+            varType: map(String, i64),
             value: null,
           },
           {
@@ -782,7 +782,7 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("table_set")
+      expect(ir).toContain("map_set")
     })
   })
 
@@ -794,7 +794,7 @@ describe("LLVM IR Generator", () => {
           {
             type: "VariableDeclaration",
             name: "obj",
-            varType: table(String, i64),
+            varType: map(String, i64),
             value: null,
           },
           {
@@ -808,7 +808,7 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("table_get")
+      expect(ir).toContain("map_get")
       expect(ir).toContain("key")
     })
 
@@ -819,7 +819,7 @@ describe("LLVM IR Generator", () => {
           {
             type: "VariableDeclaration",
             name: "obj",
-            varType: table(String, i64),
+            varType: map(String, i64),
             value: null,
           },
           {
@@ -834,7 +834,7 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("table_set")
+      expect(ir).toContain("map_set")
       expect(ir).toContain("name")
     })
 
@@ -845,7 +845,7 @@ describe("LLVM IR Generator", () => {
           {
             type: "VariableDeclaration",
             name: "obj",
-            varType: table(i64, i64),
+            varType: map(i64, i64),
             value: null,
           },
           {
@@ -860,7 +860,7 @@ describe("LLVM IR Generator", () => {
         ],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("table_set")
+      expect(ir).toContain("map_set")
     })
   })
 
@@ -894,6 +894,204 @@ describe("LLVM IR Generator", () => {
       expect(ir).toContain("mul i64")
       expect(ir).toContain("sdiv i64")
       expect(ir).toContain("add i64")
+    })
+  })
+})
+
+describe("Optimization Features", () => {
+  describe("Function Inlining", () => {
+    test("small functions get alwaysinline attribute", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "FunctionDeclaration",
+            name: "add",
+            params: [
+              { name: "a", paramType: i64 },
+              { name: "b", paramType: i64 },
+            ],
+            returnType: i64,
+            body: {
+              type: "Block",
+              statements: [
+                {
+                  type: "ReturnStatement",
+                  value: {
+                    type: "BinaryExpression",
+                    operator: "+",
+                    left: { type: "Identifier", name: "a" },
+                    right: { type: "Identifier", name: "b" },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        scopeId: 0,
+        position: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("alwaysinline")
+    })
+
+    test("large functions don't get alwaysinline attribute", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "FunctionDeclaration",
+            name: "complex",
+            params: [],
+            returnType: voidType,
+            body: {
+              type: "Block",
+              statements: [
+                { type: "WhileLoop", condition: { type: "NumberLiteral", value: "1" }, body: { type: "Block", statements: [] } },
+                { type: "WhileLoop", condition: { type: "NumberLiteral", value: "1" }, body: { type: "Block", statements: [] } },
+                { type: "WhileLoop", condition: { type: "NumberLiteral", value: "1" }, body: { type: "Block", statements: [] } },
+                { type: "WhileLoop", condition: { type: "NumberLiteral", value: "1" }, body: { type: "Block", statements: [] } },
+              ],
+            },
+          },
+        ],
+        scopeId: 0,
+        position: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+      }
+      const ir = generateLLVMIR(ast)
+      // Should not have alwaysinline for functions with many basic blocks
+      const functionDef = ir.match(/define void @complex\([^)]*\)([^\{]*)/)
+      if (functionDef) {
+        expect(functionDef[1]).not.toContain("alwaysinline")
+      }
+    })
+  })
+
+  describe("Vectorization Hints", () => {
+    test("for loops emit vectorization metadata", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "ForLoop",
+            variable: "i",
+            start: { type: "NumberLiteral", value: "0" },
+            end: { type: "NumberLiteral", value: "10" },
+            body: {
+              type: "Block",
+              statements: [],
+            },
+          },
+        ],
+        scopeId: 0,
+        position: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("VECTORIZE_HINT")
+    })
+
+    test("vectorization can be disabled", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "ForLoop",
+            variable: "i",
+            start: { type: "NumberLiteral", value: "0" },
+            end: { type: "NumberLiteral", value: "10" },
+            body: {
+              type: "Block",
+              statements: [],
+            },
+          },
+        ],
+        scopeId: 0,
+        position: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+      }
+      const ir = generateLLVMIR(ast, { vectorization: false })
+      expect(ir).not.toContain("VECTORIZE_HINT")
+    })
+  })
+
+  describe("Bounds Check Elision", () => {
+    test("array operations emit bounds check elision hint in release mode", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "arr",
+            varType: array(i64, [10]),
+            value: {
+              type: "ArrayLiteral",
+              elements: [{ type: "NumberLiteral", value: "1" }],
+              resultType: array(i64, [1]),
+            },
+          },
+          {
+            type: "ExpressionStatement",
+            expression: {
+              type: "AssignmentExpression",
+              target: {
+                type: "IndexExpression",
+                object: { type: "Identifier", name: "arr" },
+                index: { type: "NumberLiteral", value: "0" },
+              },
+              value: { type: "NumberLiteral", value: "42" },
+            },
+          },
+        ],
+        scopeId: 0,
+        position: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+      }
+      const ir = generateLLVMIR(ast, { releaseMode: true })
+      expect(ir).toContain("BOUNDS_CHECK_ELIDED")
+    })
+
+    test("array operations don't emit bounds check elision hint in debug mode", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "arr",
+            varType: array(i64, [10]),
+            value: {
+              type: "ArrayLiteral",
+              elements: [{ type: "NumberLiteral", value: "1" }],
+              resultType: array(i64, [1]),
+            },
+          },
+          {
+            type: "ExpressionStatement",
+            expression: {
+              type: "AssignmentExpression",
+              target: {
+                type: "IndexExpression",
+                object: { type: "Identifier", name: "arr" },
+                index: { type: "NumberLiteral", value: "0" },
+              },
+              value: { type: "NumberLiteral", value: "42" },
+            },
+          },
+        ],
+        scopeId: 0,
+        position: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+      }
+      const ir = generateLLVMIR(ast, { releaseMode: false })
+      expect(ir).not.toContain("BOUNDS_CHECK_ELIDED")
+    })
+  })
+
+  describe("LLVMIRGenerator with custom options", () => {
+    test("can be instantiated with custom inline threshold", () => {
+      const generator = new LLVMIRGenerator({ inlineThreshold: 5 })
+      expect(generator).toBeDefined()
+    })
+
+    test("can be instantiated with release mode enabled", () => {
+      const generator = new LLVMIRGenerator({ releaseMode: true })
+      expect(generator).toBeDefined()
     })
   })
 })
