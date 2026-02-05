@@ -237,7 +237,7 @@ class LLVMIRGenerator {
 
     ir.push("; Declare GC functions")
     ir.push("declare void @gc_init()")
-    ir.push("declare ptr @gc_alloc(i64 %size)")
+    ir.push("declare ptr @gc_alloc(i64)")
     ir.push("declare void @gc_collect()")
     ir.push("declare void @gc_push_frame()")
     ir.push("declare void @gc_pop_frame()")
@@ -1045,6 +1045,7 @@ class LLVMIRGenerator {
         map_set: { params: ["ptr", "ptr", "i64", "i64"], ret: "void" },
         string_length: { params: ["ptr"], ret: "i64" },
         string_concat: { params: ["ptr", "ptr"], ret: "ptr" },
+        gc_alloc: { params: ["i64"], ret: "ptr" },
       }
 
       const sig = posixSignatures[funcName]
@@ -1142,8 +1143,10 @@ class LLVMIRGenerator {
       }
       case "sys_connect": {
         const a1 = toI32(args[1])
+        const a2 = `%${this.valueCounter++}`
+        ir.push(`  ${a2} = trunc i64 ${args[2]} to i16`)
         const resultReg = allocateResult()
-        ir.push(`  ${resultReg} = call i64 @sys_connect(i64 ${args[0]}, i32 ${a1}, i16 ${args[2]})`)
+        ir.push(`  ${resultReg} = call i64 @sys_connect(i64 ${args[0]}, i32 ${a1}, i16 ${a2})`)
         return resultReg
       }
       case "sys_send":
@@ -1232,6 +1235,14 @@ class LLVMIRGenerator {
       if (funcType) {
         argType = funcType.type
       }
+    }
+    // String literals are arrays (strings)
+    if (!argType && arg?.type === "StringLiteral") {
+      argType = "ArrayType"
+    }
+    // Template literals are also strings
+    if (!argType && arg?.type === "TemplateLiteral") {
+      argType = "ArrayType"
     }
     argType = argType || "IntegerType"
 

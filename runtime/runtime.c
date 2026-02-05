@@ -1065,7 +1065,7 @@ char* string_slice(const char* str, uint64_t start, uint64_t end) {
 char* i64_to_string(int64_t value) {
   // Enough for int64_t including sign and null terminator
   char buffer[21];
-  snprintf(buffer, sizeof(buffer), "%ld", value);
+  snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
   uint64_t len = strlen(buffer);
   char* result = (char*)gc_alloc(len + 1);
   memcpy(result, buffer, len + 1);
@@ -1075,7 +1075,7 @@ char* i64_to_string(int64_t value) {
 char* u64_to_string(uint64_t value) {
   // Enough for uint64_t and null terminator
   char buffer[21];
-  snprintf(buffer, sizeof(buffer), "%lu", value);
+  snprintf(buffer, sizeof(buffer), "%llu", (unsigned long long)value);
   uint64_t len = strlen(buffer);
   char* result = (char*)gc_alloc(len + 1);
   memcpy(result, buffer, len + 1);
@@ -1095,11 +1095,11 @@ char* f64_to_string(double value) {
 /* I/O Functions */
 
 void print_i64(int64_t value) {
-  printf("%ld", value);
+  printf("%lld", (long long)value);
 }
 
 void print_u64(uint64_t value) {
-  printf("%lu", value);
+  printf("%llu", (unsigned long long)value);
 }
 
 void print_f64(double value) {
@@ -1115,11 +1115,11 @@ void println(void) {
 }
 
 void println_i64(int64_t value) {
-  printf("%ld\n", value);
+  printf("%lld\n", (long long)value);
 }
 
 void println_u64(uint64_t value) {
-  printf("%lu\n", value);
+  printf("%llu\n", (unsigned long long)value);
 }
 
 void println_f64(double value) {
@@ -1131,15 +1131,15 @@ void println_string(const char* str) {
 }
 
 int64_t input_i64(void) {
-  int64_t value;
-  scanf("%ld", &value);
-  return value;
+  long long value;
+  scanf("%lld", &value);
+  return (int64_t)value;
 }
 
 uint64_t input_u64(void) {
-  uint64_t value;
-  scanf("%lu", &value);
-  return value;
+  unsigned long long value;
+  scanf("%llu", &value);
+  return (uint64_t)value;
 }
 
 /* --- POSIX Socket Support --- */
@@ -1184,9 +1184,9 @@ int64_t sys_fcntl(int fd, int cmd, int arg) {
   return fcntl(fd, cmd, arg);
 }
 
-/* inet_addr wrapper - converts string IP to uint32_t */
-uint32_t sys_inet_addr(const char* cp) {
-  return inet_addr(cp);
+/* inet_addr wrapper - converts string IP to i64 */
+int64_t sys_inet_addr(const char* cp) {
+  return (int64_t)inet_addr(cp);
 }
 
 /* fd_set management for select() */
