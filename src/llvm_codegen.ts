@@ -61,8 +61,10 @@ class LLVMIRGenerator {
   private labelCounter = 0
   private stringConstants: string[] = []
   private stringCounter = 0
+  private stringNameMap: Map<string, string> = new Map()
   private resetStringCounter(): void {
     this.stringCounter = 0
+    this.stringNameMap.clear()
   }
 
   generate(ast: ProgramNode): string {
@@ -465,8 +467,12 @@ class LLVMIRGenerator {
   }
 
   private generateStringLiteral(_ir: string[], value: string): string {
-    // Strings are already collected and emitted, just return the name
-    const name = `@str${this.stringCounter++}`
+    // Look up the name from the map, or create a new one
+    let name = this.stringNameMap.get(value)
+    if (!name) {
+      name = `@str${this.stringCounter++}`
+      this.stringNameMap.set(value, name)
+    }
     return name
   }
 
@@ -475,6 +481,7 @@ class LLVMIRGenerator {
 
     if (node.type === "StringLiteral") {
       const name = `@str${this.stringCounter++}`
+      this.stringNameMap.set(node.value, name)
       const escaped = node.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
       const strDef = `${name} = private unnamed_addr constant [${node.value.length + 1} x i8] c"${escaped}\\00"`
       this.stringConstants.push(strDef)
@@ -1244,6 +1251,13 @@ class LLVMIRGenerator {
     if (!argType && arg?.type === "TemplateLiteral") {
       argType = "ArrayType"
     }
+    // Pointer types (ptr) are also strings/pointer data
+    if (!argType && arg?.type === "Identifier") {
+      const varType = this.variableTypes.get(arg.name)
+      if (varType?.type === "PointerType" || varType?.type === "ArrayType") {
+        argType = "PointerType"
+      }
+    }
     argType = argType || "IntegerType"
 
     // If generic print/println, determine specific version based on type
@@ -1252,7 +1266,7 @@ class LLVMIRGenerator {
         actualFunc = funcName === "print" ? "print_f64" : "println_f64"
       } else if (argType === "UnsignedType") {
         actualFunc = funcName === "print" ? "print_u64" : "println_u64"
-      } else if (argType === "ArrayType") {
+      } else if (argType === "ArrayType" || argType === "PointerType") {
         actualFunc = funcName === "print" ? "print_string" : "println_string"
       } else {
         actualFunc = funcName === "print" ? "print_i64" : "println_i64"
@@ -1262,7 +1276,7 @@ class LLVMIRGenerator {
     // Generate call with appropriate type
     if (argType === "FloatType") {
       ir.push(`  call void @${actualFunc}(double ${args[0]})`)
-    } else if (argType === "ArrayType") {
+    } else if (argType === "ArrayType" || argType === "PointerType") {
       ir.push(`  call void @${actualFunc}(ptr ${args[0]})`)
     } else {
       ir.push(`  call void @${actualFunc}(i64 ${args[0]})`)
