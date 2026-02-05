@@ -166,7 +166,7 @@ class Lexer {
     const doubleStringRegex = /"(?:[^"\\]|\\.)*"/y
     const singleStringRegex = /'(?:[^'\\]|\\.)*'/y
     const numberRegex = /\b\d+(?:\.\d*)?(?:[eE][+-]?\d+)?\b/y
-    const typeRegex = /\b(?:(?:i|u|f)(?:8|16|32|64|128|256)((?:\[\])*)|ptr)\b/y
+    const typeRegex = /\b(?:(?:i|u|f)(?:8|16|32|64|128|256)((?:\[\])*)|ptr|string)\b/y
     const identifierRegex = /\b[a-zA-Z_][a-zA-Z0-9_]*\b/y
 
     while (this.pos < this.input.length) {

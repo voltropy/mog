@@ -62,6 +62,9 @@ class Parser {
     if (this.matchType("struct")) {
       return this.structDeclaration()
     }
+    if (this.matchType("soa")) {
+      return this.soaDeclaration()
+    }
     if (this.matchType("return")) {
       return this.returnStatement()
     }
@@ -166,11 +169,17 @@ if (!this.checkType("RPAREN")) {
     const name = this.consume("IDENTIFIER", "Expected struct name").value
     this.consume("LBRACE", "Expected { after struct name")
 
-    const fields: { name: string; fieldType: string }[] = []
+    const fields: { name: string; fieldType: any }[] = []
     while (!this.checkType("RBRACE") && !this.isAtEnd()) {
       const fieldName = this.consume("IDENTIFIER", "Expected field name").value
       this.consume("COLON", "Expected : after field name")
-      const fieldType = this.consume("TYPE", "Expected type after :").value
+      // Handle array types in struct fields like [f64]
+      let fieldType: any
+      if (this.checkType("LBRACKET")) {
+        fieldType = this.parseArrayTypeAnnotation()
+      } else {
+        fieldType = this.consume("TYPE", "Expected type after :").value
+      }
       fields.push({ name: fieldName, fieldType })
       this.matchType("COMMA")
     }
@@ -179,6 +188,40 @@ if (!this.checkType("RPAREN")) {
 
     return {
       type: "StructDeclaration",
+      name,
+      fields,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private soaDeclaration(): StatementNode {
+    const name = this.consume("IDENTIFIER", "Expected SoA name").value
+    this.consume("LBRACE", "Expected { after SoA name")
+
+    const fields: { name: string; fieldType: any }[] = []
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      const fieldName = this.consume("IDENTIFIER", "Expected field name").value
+      this.consume("COLON", "Expected : after field name")
+      // Handle array types like [f64]
+      let fieldType: any
+      if (this.checkType("LBRACKET")) {
+        const typeName = this.parseArrayTypeAnnotation()
+        fieldType = this.parseType(typeName)
+      } else {
+        const typeName = this.consume("TYPE", "Expected type after :").value
+        fieldType = this.parseType(typeName)
+      }
+      fields.push({ name: fieldName, fieldType })
+      this.matchType("COMMA")
+    }
+
+    this.consume("RBRACE", "Expected } after SoA fields")
+
+    return {
+      type: "SoADeclaration",
       name,
       fields,
       position: {
@@ -465,6 +508,11 @@ if (!this.checkType("RPAREN")) {
     }
     
     const varType = this.parseType(typeName)
+    
+    // Handle AoS type - if varType is an AoS type object, use it for declaredType
+    if (varType && typeof varType === 'object' && varType.type === "AOSType") {
+      declaredType = varType
+    }
     
     // Handle both `=` and `:=` assignment operators
     if (this.matchType("ASSIGN")) {
@@ -884,54 +932,56 @@ private comparison(): ExpressionNode {
         position: token.position,
       }
 
-      while (this.matchType("LBRACKET")) {
-        const firstExpr = this.expression()
-        
-        if (this.matchType("COLON")) {
-          const endExpr = this.expression()
-          this.consume("RBRACKET", "Expected ] after slice expression")
+      // Parse chained postfix operations: [], (), .
+      let done = false
+      while (!done) {
+        if (this.matchType("LBRACKET")) {
+          const firstExpr = this.expression()
+          
+          if (this.matchType("COLON")) {
+            const endExpr = this.expression()
+            this.consume("RBRACKET", "Expected ] after slice expression")
+            object = {
+              type: "SliceExpression",
+              object,
+              start: firstExpr,
+              end: endExpr,
+              position: this.combinePositions(object, endExpr),
+            }
+          } else {
+            this.consume("RBRACKET", "Expected ] after index")
+            object = {
+              type: "IndexExpression",
+              object,
+              index: firstExpr,
+              position: this.combinePositions(object, firstExpr),
+            }
+          }
+        } else if (this.matchType("LPAREN")) {
+          const callArgs: ExpressionNode[] = []
+          if (!this.checkType("RPAREN")) {
+            do {
+              callArgs.push(this.expression())
+            } while (this.matchType("COMMA"))
+          }
+          this.consume("RPAREN", "Expected ) after arguments")
+
           object = {
-            type: "SliceExpression",
+            type: "CallExpression",
+            callee: object.type === "Identifier" ? object : { type: "Identifier", name: (object as any).name, position: token.position },
+            args: callArgs,
+            position: this.combinePositions(object, this.previous()),
+          }
+        } else if (this.matchType("DOT")) {
+          const property = this.consume("IDENTIFIER", "Expected property name").value
+          object = {
+            type: "MemberExpression",
             object,
-            start: firstExpr,
-            end: endExpr,
-            position: this.combinePositions(object, endExpr),
+            property,
+            position: this.combinePositions(object, this.previous()),
           }
         } else {
-          this.consume("RBRACKET", "Expected ] after index")
-          object = {
-            type: "IndexExpression",
-            object,
-            index: firstExpr,
-            position: this.combinePositions(object, firstExpr),
-          }
-        }
-      }
-
-      if (this.matchType("LPAREN")) {
-        const callArgs: ExpressionNode[] = []
-        if (!this.checkType("RPAREN")) {
-          do {
-            callArgs.push(this.expression())
-          } while (this.matchType("COMMA"))
-        }
-        this.consume("RPAREN", "Expected ) after arguments")
-
-        return {
-          type: "CallExpression",
-          callee: object.type === "Identifier" ? object : { type: "Identifier", name: (object as any).name, position: token.position },
-          args: callArgs,
-          position: this.combinePositions(object, this.previous()),
-        }
-      }
-
-      if (this.matchType("DOT")) {
-        const property = this.consume("IDENTIFIER", "Expected property name").value
-        return {
-          type: "MemberExpression",
-          object: object.type === "Identifier" ? object : { type: "Identifier", name: (object as any).name, position: token.position },
-          property,
-          position: this.combinePositions(object, this.previous()),
+          done = true
         }
       }
 
@@ -1033,7 +1083,15 @@ private comparison(): ExpressionNode {
     }
 
     // Simple array type: [type] or [type; size]
-    const innerType = this.consume("TYPE", "Expected type inside array brackets").value
+    // Accept TYPE (primitive) or IDENTIFIER (struct type name)
+    let innerType: string
+    if (this.checkType("TYPE")) {
+      innerType = this.consume("TYPE", "Expected type inside array brackets").value
+    } else if (this.checkType("IDENTIFIER")) {
+      innerType = this.consume("IDENTIFIER", "Expected type name inside array brackets").value
+    } else {
+      throw new Error("Expected type name inside array brackets")
+    }
 
     if (this.matchType("SEMICOLON")) {
       const sizeToken = this.consume("NUMBER", "Expected size after ; in array type")
@@ -1074,40 +1132,48 @@ private comparison(): ExpressionNode {
   }
 
   private parseType(typeName: string): any {
-    // Handle fixed-size array types like [f32; 3] or [i64; 10]
+    // Handle fixed-size array types like [f32; 3], [i64; 10], or [Point; 100]
     const fixedSizeMatch = typeName.match(/^\[(\w+);\s*(\d+)\]$/);
     if (fixedSizeMatch) {
       const innerType = fixedSizeMatch[1];
       const size = parseInt(fixedSizeMatch[2], 10);
-      let elementType: Type;
-      if (innerType.startsWith("i")) {
-        elementType = new IntegerType(innerType as any);
-      } else if (innerType.startsWith("u")) {
-        elementType = new UnsignedType(innerType as any);
-      } else if (innerType.startsWith("f")) {
-        elementType = new FloatType(innerType as any);
-      } else {
-        return new VoidType();
-      }
-      return new ArrayType(elementType, [size]);
-    }
-    
-    // Handle array types that start with [ like [u8], [i32], etc.
-    if (typeName.startsWith("[")) {
-      const match = typeName.match(/^\[(\w+)\]$/);
-      if (match) {
-        const innerType = match[1];
+      // Check if it's a primitive type
+      if (innerType.startsWith("i") || innerType.startsWith("u") || innerType.startsWith("f")) {
         let elementType: Type;
         if (innerType.startsWith("i")) {
           elementType = new IntegerType(innerType as any);
         } else if (innerType.startsWith("u")) {
           elementType = new UnsignedType(innerType as any);
-        } else if (innerType.startsWith("f")) {
-          elementType = new FloatType(innerType as any);
         } else {
-          return new VoidType();
+          elementType = new FloatType(innerType as any);
         }
-        return new ArrayType(elementType, []);
+        return new ArrayType(elementType, [size]);
+      } else {
+        // AoS type with struct: [Point; 100]
+        return { type: "AOSType", elementType: innerType, capacity: size }
+      }
+    }
+    
+    // Handle array types that start with [ like [u8], [i32], [Point], etc.
+    if (typeName.startsWith("[")) {
+      const match = typeName.match(/^\[(\w+)\]$/);
+      if (match) {
+        const innerType = match[1];
+        // Check if it's a primitive type
+        if (innerType.startsWith("i") || innerType.startsWith("u") || innerType.startsWith("f")) {
+          let elementType: Type;
+          if (innerType.startsWith("i")) {
+            elementType = new IntegerType(innerType as any);
+          } else if (innerType.startsWith("u")) {
+            elementType = new UnsignedType(innerType as any);
+          } else {
+            elementType = new FloatType(innerType as any);
+          }
+          return new ArrayType(elementType, []);
+        } else {
+          // AoS type with struct: [Point]
+          return { type: "AOSType", elementType: innerType, capacity: null }
+        }
       }
     }
     

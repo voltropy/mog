@@ -556,15 +556,16 @@ describe("parser SoA (Struct of Arrays)", () => {
 
   test("SoA field then index access", () => {
     const ast = parse("{ x := particles.x[0]; }")
-    const block = ast.statements[0] as any
-    const stmt = block.statements[0]
-    expect(stmt.expression.value.type).toBe("MemberExpression")
+    const stmt = ast.statements[0] as any
+    expect(stmt.expression.value.type).toBe("IndexExpression")
+    expect(stmt.expression.value.object.type).toBe("MemberExpression")
   })
 
   test("SoA field assignment", () => {
     const ast = parse("{ particles.x[0] := 5.0; }")
     const stmt = ast.statements[0] as any
     expect(stmt.type).toBe("ExpressionStatement")
-    expect(stmt.expression.target.type).toBe("MemberExpression")
+    expect(stmt.expression.target.type).toBe("IndexExpression")
+    expect(stmt.expression.target.object.type).toBe("MemberExpression")
   })
 })
