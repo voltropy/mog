@@ -707,16 +707,10 @@ analysis = analyze_sentiment(review)
 ### Planned Features
 
 - Generic types and polymorphic functions
-- Pattern matching
-- Async/await for concurrent operations
 - Module system and package management
-- Metaprogramming macros
-- Contract-based programming
-- Memory regions for performance-critical code
 
 ### Considerations
 
 - SIMD vectorization for numeric operations
 - GPU acceleration support
-- Distributed computing primitives
 - Hardware-specific optimizations

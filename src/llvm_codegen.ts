@@ -80,6 +80,7 @@ class LLVMIRGenerator {
 
     this.setupDeclarations(ir)
     this.generatePrintDeclarations(ir)
+    this.generateSocketDeclarations(ir)
 
     this.resetValueCounter(0)
     this.resetStringCounter()
@@ -962,6 +963,13 @@ class LLVMIRGenerator {
         return this.generateInputCall(ir, funcName)
       }
 
+      // Handle socket syscall wrappers
+      const socketFunctions = ["sys_socket", "sys_connect", "sys_send", "sys_recv", 
+                               "sys_close", "sys_fcntl", "sys_inet_addr", "sys_errno"]
+      if (socketFunctions.includes(funcName)) {
+        return this.generateSocketCall(ir, funcName, args)
+      }
+
       // Handle dot product function
       if (funcName === "dot") {
         return this.generateDotCall(ir, expr, args)
@@ -1109,6 +1117,62 @@ class LLVMIRGenerator {
         return reg
       default:
         return ""
+    }
+  }
+
+  private generateSocketCall(ir: string[], funcName: string, args: string[]): string {
+    // Helper to convert i64 to i32
+    const toI32 = (reg: string): string => {
+      const truncReg = `%${this.valueCounter++}`
+      ir.push(`  ${truncReg} = trunc i64 ${reg} to i32`)
+      return truncReg
+    }
+    
+    // Allocate resultReg AFTER all truncs to maintain sequential numbering
+    const allocateResult = (): string => `%${this.valueCounter++}`
+    
+    switch (funcName) {
+      case "sys_socket": {
+        const a0 = toI32(args[0])
+        const a1 = toI32(args[1])
+        const a2 = toI32(args[2])
+        const resultReg = allocateResult()
+        ir.push(`  ${resultReg} = call i64 @sys_socket(i32 ${a0}, i32 ${a1}, i32 ${a2})`)
+        return resultReg
+      }
+      case "sys_connect": {
+        const a1 = toI32(args[1])
+        const resultReg = allocateResult()
+        ir.push(`  ${resultReg} = call i64 @sys_connect(i64 ${args[0]}, i32 ${a1}, i16 ${args[2]})`)
+        return resultReg
+      }
+      case "sys_send":
+      case "sys_recv":
+      case "sys_close":
+      case "sys_inet_addr":
+      case "sys_errno": {
+        const resultReg = allocateResult()
+        switch (funcName) {
+          case "sys_send":
+            ir.push(`  ${resultReg} = call i64 @sys_send(i64 ${args[0]}, ptr ${args[1]}, i64 ${args[2]}, i32 0)`)
+            break
+          case "sys_recv":
+            ir.push(`  ${resultReg} = call i64 @sys_recv(i64 ${args[0]}, ptr ${args[1]}, i64 ${args[2]}, i32 0)`)
+            break
+          case "sys_close":
+            ir.push(`  ${resultReg} = call i64 @sys_close(i64 ${args[0]})`)
+            break
+          case "sys_inet_addr":
+            ir.push(`  ${resultReg} = call i64 @sys_inet_addr(ptr ${args[0]})`)
+            break
+          case "sys_errno":
+            ir.push(`  ${resultReg} = call i64 @sys_errno()`)
+            break
+        }
+        return resultReg
+      }
+      default:
+        return "0"
     }
   }
 
@@ -2322,6 +2386,27 @@ class LLVMIRGenerator {
     ir.push("declare i64 @input_u64()")
     ir.push("declare double @input_f64()")
     ir.push("declare ptr @input_string()")
+    ir.push("")
+  }
+
+  private generateSocketDeclarations(ir: string[]): void {
+    ir.push("")
+    ir.push("; Socket syscall declarations")
+    ir.push("declare i64 @sys_socket(i32, i32, i32)")
+    ir.push("declare i64 @sys_connect(i64, i32, i16)")
+    ir.push("declare i64 @sys_send(i64, ptr, i64, i32)")
+    ir.push("declare i64 @sys_recv(i64, ptr, i64, i32)")
+    ir.push("declare i64 @sys_close(i64)")
+    ir.push("declare i64 @sys_fcntl(i64, i32, i64)")
+    ir.push("declare i64 @sys_inet_addr(ptr)")
+    ir.push("declare i64 @sys_select(i64, ptr, ptr, ptr, ptr)")
+    ir.push("declare i64 @sys_errno()")
+    ir.push("")
+    ir.push("; Socket constants (external)")
+    ir.push("@AS_AF_INET = external global i32")
+    ir.push("@AS_SOCK_STREAM = external global i32")
+    ir.push("@AS_SOCK_DGRAM = external global i32")
+    ir.push("@AS_O_NONBLOCK = external global i32")
     ir.push("")
   }
 

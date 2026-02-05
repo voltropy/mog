@@ -341,6 +341,11 @@ function compatibleTypes(from: Type, to: Type): boolean {
     return compatibleTypes(from.elementType, to.elementType)
   }
 
+  // String literals ([u8]) can be used where ptr is expected
+  if (from instanceof ArrayType && from.isString && to instanceof PointerType) {
+    return true
+  }
+
   return false
 }
 

@@ -1142,6 +1142,105 @@ uint64_t input_u64(void) {
   return value;
 }
 
+/* --- POSIX Socket Support --- */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <errno.h>
+
+/* Socket constants exposed to AlgolScript */
+const int AS_AF_INET = AF_INET;
+const int AS_SOCK_STREAM = SOCK_STREAM;
+const int AS_SOCK_DGRAM = SOCK_DGRAM;
+const int AS_O_NONBLOCK = O_NONBLOCK;
+
+/* Low-level socket syscalls */
+int64_t sys_socket(int domain, int type, int protocol) {
+  return socket(domain, type, protocol);
+}
+
+int64_t sys_connect(int sockfd, uint32_t addr, uint16_t port) {
+  struct sockaddr_in sa;
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(port);
+  sa.sin_addr.s_addr = addr;
+  return connect(sockfd, (struct sockaddr*)&sa, sizeof(sa));
+}
+
+int64_t sys_send(int sockfd, const char* buf, size_t len, int flags) {
+  return send(sockfd, buf, len, flags);
+}
+
+int64_t sys_recv(int sockfd, char* buf, size_t len, int flags) {
+  return recv(sockfd, buf, len, flags);
+}
+
+int64_t sys_close(int fd) {
+  return close(fd);
+}
+
+int64_t sys_fcntl(int fd, int cmd, int arg) {
+  return fcntl(fd, cmd, arg);
+}
+
+/* inet_addr wrapper - converts string IP to uint32_t */
+uint32_t sys_inet_addr(const char* cp) {
+  return inet_addr(cp);
+}
+
+/* fd_set management for select() */
+typedef struct {
+  fd_set fds;
+  int max_fd;
+} fd_set_wrapper;
+
+void fd_zero(fd_set_wrapper* set) {
+  if (set) {
+    FD_ZERO(&set->fds);
+    set->max_fd = -1;
+  }
+}
+
+void fd_set_add(fd_set_wrapper* set, int fd) {
+  if (set && fd >= 0) {
+    FD_SET(fd, &set->fds);
+    if (fd > set->max_fd) set->max_fd = fd;
+  }
+}
+
+int fd_is_set(fd_set_wrapper* set, int fd) {
+  return set ? FD_ISSET(fd, &set->fds) : 0;
+}
+
+int64_t sys_select(fd_set_wrapper* readfds, fd_set_wrapper* writefds, 
+                   fd_set_wrapper* exceptfds, int64_t timeout_ms) {
+  struct timeval tv;
+  struct timeval* tv_ptr = NULL;
+  
+  if (timeout_ms >= 0) {
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    tv_ptr = &tv;
+  }
+  
+  int max_fd = -1;
+  if (readfds && readfds->max_fd > max_fd) max_fd = readfds->max_fd;
+  if (writefds && writefds->max_fd > max_fd) max_fd = writefds->max_fd;
+  if (exceptfds && exceptfds->max_fd > max_fd) max_fd = exceptfds->max_fd;
+  
+  fd_set* r = readfds ? &readfds->fds : NULL;
+  fd_set* w = writefds ? &writefds->fds : NULL;
+  fd_set* e = exceptfds ? &exceptfds->fds : NULL;
+  
+  return select(max_fd + 1, r, w, e, tv_ptr);
+}
+
+/* Get errno for error handling */
+int64_t sys_errno(void) {
+  return errno;
+}
+
 /* CLI Argument Access */
 
 uint64_t get_argc_value(void* cli_map) {

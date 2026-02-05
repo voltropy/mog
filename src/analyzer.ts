@@ -507,6 +507,7 @@ class SemanticAnalyzer {
       table_new: { params: [{ name: "capacity", type: i64Type }], returnType: ptrType },
       table_get: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }], returnType: i64Type },
       table_set: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }, { name: "value", type: i64Type }], returnType: voidType },
+      gc_alloc: { params: [{ name: "size", type: i64Type }], returnType: ptrType },
     }
 
     for (const [name, func] of Object.entries(tableFunctions)) {
@@ -530,6 +531,22 @@ class SemanticAnalyzer {
     }
 
     for (const [name, func] of Object.entries(gcBenchmarkFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
+
+    // Socket functions
+    const socketFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      sys_socket: { params: [{ name: "domain", type: i64Type }, { name: "type", type: i64Type }, { name: "protocol", type: i64Type }], returnType: i64Type },
+      sys_connect: { params: [{ name: "sockfd", type: i64Type }, { name: "addr", type: i64Type }, { name: "port", type: i64Type }], returnType: i64Type },
+      sys_send: { params: [{ name: "sockfd", type: i64Type }, { name: "buf", type: ptrType }, { name: "len", type: i64Type }], returnType: i64Type },
+      sys_recv: { params: [{ name: "sockfd", type: i64Type }, { name: "buf", type: ptrType }, { name: "len", type: i64Type }], returnType: i64Type },
+      sys_close: { params: [{ name: "fd", type: i64Type }], returnType: i64Type },
+      sys_fcntl: { params: [{ name: "fd", type: i64Type }, { name: "cmd", type: i64Type }, { name: "arg", type: i64Type }], returnType: i64Type },
+      sys_inet_addr: { params: [{ name: "cp", type: ptrType }], returnType: i64Type },
+      sys_errno: { params: [], returnType: i64Type },
+    }
+
+    for (const [name, func] of Object.entries(socketFunctions)) {
       this.symbolTable.declare(name, "function", func.returnType)
     }
   }
@@ -1175,7 +1192,7 @@ class SemanticAnalyzer {
   }
 
   private visitStringLiteral(node: StringLiteralNode): Type | null {
-    return new ArrayType(new UnsignedType("u8"), [])
+    return new ArrayType(new UnsignedType("u8"), [node.value.length])
   }
 
   private visitTemplateLiteral(node: TemplateLiteralNode): Type | null {
@@ -1633,7 +1650,7 @@ class SemanticAnalyzer {
     if (isMapType(objectType)) {
       const mapType = objectType as MapType
       // For maps, index can be string or integer
-      if (!isStringType(indexType) && !isIntegerType(indexType) && !isUnsignedType(indexType)) {
+      if (!(indexType instanceof ArrayType && indexType.isString) && !isIntegerType(indexType) && !isUnsignedType(indexType)) {
         this.emitError(`Map key must be string or integer type, got ${indexType.toString()}`, node.index.position)
       }
       return mapType.valueType
