@@ -1110,6 +1110,11 @@ void print_string(const char* str) {
   printf("%s", str ? str : "(null)");
 }
 
+void print_buffer(const char* buf, int64_t len) {
+  if (!buf || len <= 0) return;
+  fwrite(buf, 1, (size_t)len, stdout);
+}
+
 void println(void) {
   printf("\n");
 }
@@ -1160,7 +1165,7 @@ int64_t sys_socket(int domain, int type, int protocol) {
   return socket(domain, type, protocol);
 }
 
-int64_t sys_connect(int sockfd, uint32_t addr, uint16_t port) {
+int64_t sys_connect(int64_t sockfd, uint32_t addr, uint16_t port) {
   struct sockaddr_in sa;
   sa.sin_family = AF_INET;
   sa.sin_port = htons(port);

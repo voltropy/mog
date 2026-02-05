@@ -503,6 +503,15 @@ class SemanticAnalyzer {
 
     // Table/Runtime functions
     const ptrType = new PointerType()
+
+    // Buffer functions
+    const bufferFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      print_buffer: { params: [{ name: "buf", type: ptrType }, { name: "len", type: i64Type }], returnType: voidType },
+    }
+
+    for (const [name, func] of Object.entries(bufferFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
     const tableFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
       table_new: { params: [{ name: "capacity", type: i64Type }], returnType: ptrType },
       table_get: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }], returnType: i64Type },

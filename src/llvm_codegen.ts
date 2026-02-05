@@ -958,7 +958,7 @@ class LLVMIRGenerator {
       const funcName = expr.callee.name
 
       // Handle print functions
-      const printFunctions = ["print", "print_i64", "print_u64", "print_f64", "print_string",
+      const printFunctions = ["print", "print_i64", "print_u64", "print_f64", "print_string", "print_buffer",
                               "println", "println_i64", "println_u64", "println_f64", "println_string"]
       if (printFunctions.includes(funcName)) {
         return this.generatePrintCall(ir, funcName, args, expr)
@@ -1218,6 +1218,14 @@ class LLVMIRGenerator {
     // Handle println with no arguments (just newline)
     if (funcName === "println" && args.length === 0) {
       ir.push(`  call void @println()`)
+      return ""
+    }
+
+    // Handle print_buffer specially (takes ptr and i64)
+    if (funcName === "print_buffer") {
+      if (args.length >= 2) {
+        ir.push(`  call void @print_buffer(ptr ${args[0]}, i64 ${args[1]})`)
+      }
       return ""
     }
 
@@ -2400,6 +2408,7 @@ class LLVMIRGenerator {
     ir.push("declare void @print_u64(i64)")
     ir.push("declare void @print_f64(double)")
     ir.push("declare void @print_string(ptr)")
+    ir.push("declare void @print_buffer(ptr, i64)")
     ir.push("declare void @println()")
     ir.push("declare void @println_i64(i64)")
     ir.push("declare void @println_u64(i64)")
