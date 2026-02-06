@@ -394,9 +394,11 @@ describe("parser struct definitions", () => {
     expect(stmt.name).toBe("Point")
     expect(stmt.fields.length).toBe(2)
     expect(stmt.fields[0].name).toBe("x")
-    expect(stmt.fields[0].fieldType).toBe("f64")
+    expect(stmt.fields[0].fieldType.type).toBe("FloatType")
+    expect(stmt.fields[0].fieldType.kind).toBe("f64")
     expect(stmt.fields[1].name).toBe("y")
-    expect(stmt.fields[1].fieldType).toBe("f64")
+    expect(stmt.fields[1].fieldType.type).toBe("FloatType")
+    expect(stmt.fields[1].fieldType.kind).toBe("f64")
   })
 
   test("struct with multiple field types", () => {
@@ -410,8 +412,10 @@ describe("parser struct definitions", () => {
     expect(stmt.type).toBe("StructDeclaration")
     expect(stmt.name).toBe("Particle")
     expect(stmt.fields.length).toBe(4)
-    expect(stmt.fields[0].fieldType).toBe("f64")
-    expect(stmt.fields[3].fieldType).toBe("i32")
+    expect(stmt.fields[0].fieldType.type).toBe("FloatType")
+    expect(stmt.fields[0].fieldType.kind).toBe("f64")
+    expect(stmt.fields[3].fieldType.type).toBe("IntegerType")
+    expect(stmt.fields[3].fieldType.kind).toBe("i32")
   })
 
   test("struct definition with i64 field", () => {
@@ -421,7 +425,8 @@ describe("parser struct definitions", () => {
     }`)
     const stmt = ast.statements[0] as any
     expect(stmt.type).toBe("StructDeclaration")
-    expect(stmt.fields[0].fieldType).toBe("i64")
+    expect(stmt.fields[0].fieldType.type).toBe("IntegerType")
+    expect(stmt.fields[0].fieldType.kind).toBe("i64")
   })
 })
 

@@ -62,6 +62,8 @@ class LLVMIRGenerator {
   private stringConstants: string[] = []
   private stringCounter = 0
   private stringNameMap: Map<string, string> = new Map()
+  // Struct definitions: maps struct name -> ordered list of { name, type } fields
+  private structDefs: Map<string, { name: string; fieldType: any }[]> = new Map()
   private resetStringCounter(): void {
     this.stringCounter = 0
     this.stringNameMap.clear()
@@ -92,6 +94,23 @@ class LLVMIRGenerator {
     this.collectStringConstants(ast)
     // Reset counter for code generation pass
     this.stringCounter = 0
+
+    // Collect struct/SoA definitions from top-level statements
+    for (const stmt of ast.statements) {
+      if (stmt.type === "StructDeclaration") {
+        const fields = (stmt as any).fields?.map((f: any) => ({
+          name: f.name,
+          fieldType: f.fieldType
+        })) || []
+        this.structDefs.set((stmt as any).name, fields)
+      } else if (stmt.type === "SoADeclaration") {
+        const soaFields = (stmt as any).fields?.map((f: any) => ({
+          name: f.name,
+          fieldType: f.fieldType
+        })) || []
+        this.structDefs.set((stmt as any).name, soaFields)
+      }
+    }
 
     // Collect function declarations first to identify strings in functions
     const functionDeclarations = this.collectFunctionDeclarations(ast)
@@ -296,14 +315,18 @@ class LLVMIRGenerator {
       case "VariableDeclaration": {
         const llvmType = this.toLLVMType(statement.varType)
         const reg = `%${statement.name}`
-        const isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
+        const isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType" 
+          || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
+          || statement.varType?.type === "SOAType"
         const allocaType = isPointerLike ? "ptr" : llvmType
         ir.push(`  ${reg} = alloca ${allocaType}`)
         this.variableTypes.set(statement.name, statement.varType)
         if (statement.value) {
           const value = this.generateExpression(ir, statement.value)
-          const isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
-          const storeType = isPointerLike ? "ptr" : llvmType
+          const isPointerLike2 = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
+            || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
+            || statement.varType?.type === "SOAType"
+          const storeType = isPointerLike2 ? "ptr" : llvmType
           ir.push(`  store ${storeType} ${value}, ptr ${reg}`)
         }
         break
@@ -345,6 +368,24 @@ class LLVMIRGenerator {
         break
       case "FunctionDeclaration":
         break
+      case "StructDeclaration": {
+        // Register struct field definitions for codegen
+        const fields = (statement as any).fields?.map((f: any) => ({
+          name: f.name,
+          fieldType: f.fieldType
+        })) || []
+        this.structDefs.set((statement as any).name, fields)
+        break
+      }
+      case "SoADeclaration": {
+        // Register SoA definitions (similar to struct but fields are arrays)
+        const soaFields = (statement as any).fields?.map((f: any) => ({
+          name: f.name,
+          fieldType: f.fieldType
+        })) || []
+        this.structDefs.set((statement as any).name, soaFields)
+        break
+      }
       case "WhileLoop":
         this.generateWhileLoop(ir, statement)
         break
@@ -1309,6 +1350,18 @@ class LLVMIRGenerator {
         argType = "PointerType"
       }
     }
+    // MemberExpression on a struct - look up the field type
+    if (!argType && arg?.type === "MemberExpression" && arg?.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(arg.object.name)
+      const structName = varType?.name || varType?.structName
+      const structFields = structName ? this.structDefs.get(structName) : null
+      if (structFields) {
+        const fieldDef = structFields.find((f: any) => f.name === arg.property)
+        if (fieldDef?.fieldType?.type) {
+          argType = fieldDef.fieldType.type
+        }
+      }
+    }
     argType = argType || "IntegerType"
 
     // If generic print/println, determine specific version based on type
@@ -1442,14 +1495,45 @@ class LLVMIRGenerator {
         }
       }
     } else if (target && target.type === "MemberExpression") {
-      // Table member assignment: person.age := 31
+      // Check if target object is a struct - use GEP-based assignment
+      if (target.object?.type === "Identifier") {
+        const varType = this.variableTypes.get(target.object.name)
+        const structName = varType?.name || varType?.structName
+        const structFields = structName ? this.structDefs.get(structName) : null
+
+        if (structFields) {
+          const fieldIndex = structFields.findIndex((f: any) => f.name === target.property)
+          if (fieldIndex >= 0) {
+            const fieldDef = structFields[fieldIndex]
+            const isFloat = fieldDef.fieldType?.type === "FloatType"
+            const isPtr = fieldDef.fieldType?.type === "PointerType" || fieldDef.fieldType?.kind === "ptr"
+              || (typeof fieldDef.fieldType === "string" && fieldDef.fieldType === "ptr")
+            const isArray = fieldDef.fieldType?.type === "ArrayType"
+            // Load struct pointer
+            const structPtr = `%${this.valueCounter++}`
+            ir.push(`  ${structPtr} = load ptr, ptr %${target.object.name}`)
+            // GEP to field
+            const fieldPtr = `%${this.valueCounter++}`
+            ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${structPtr}, i64 ${fieldIndex * 8}`)
+            // Store with correct type
+            if (isFloat) {
+              ir.push(`  store double ${valueReg}, ptr ${fieldPtr}`)
+            } else if (isPtr || isArray) {
+              ir.push(`  store ptr ${valueReg}, ptr ${fieldPtr}`)
+            } else {
+              ir.push(`  store i64 ${valueReg}, ptr ${fieldPtr}`)
+            }
+            return valueReg
+          }
+        }
+      }
+
+      // Fallback: Map member assignment (person.age := 31)
       const obj = this.generateExpression(ir, target.object)
-      // Generate the key string constant
       const keyName = `@key_${target.property}_${this.stringCounter++}`
       const escaped = target.property.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
       const strDef = `${keyName} = private unnamed_addr constant [${target.property.length + 1} x i8] c"${escaped}\\00"`
       this.stringConstants.push(strDef)
-      // obj is already a ptr for tables
       ir.push(`  call void @map_set(ptr ${obj}, ptr ${keyName}, i64 ${target.property.length}, i64 ${valueReg})`)
     } else {
       const varType = this.variableTypes.get(name)
@@ -1597,36 +1681,97 @@ class LLVMIRGenerator {
   }
 
   private generateMapLiteral(ir: string[], expr: any): string {
-    const tableReg = `%${this.valueCounter++}`
-    const capacity = expr.columns.length > 0 ? expr.columns.length * 2 : 4
-    ir.push(`  ${tableReg} = call ptr @map_new(i64 ${capacity})`)
+    const entries = expr.entries || expr.columns || []
 
-    for (const col of expr.columns) {
-      const key = col.name
-      const value = col.values[0]
-      const keyStr = this.generateStringLiteral(ir, key)
-      const valueReg = this.generateExpression(ir, value)
-      if (valueReg) {
-        ir.push(`  call void @map_set(ptr ${tableReg}, ptr ${keyStr}, i64 ${key.length}, i64 ${valueReg})`)
+    // Check if this is a SoA literal (map where values are arrays)
+    if (entries.length > 0) {
+      const firstValue = entries[0].value
+      if (firstValue?.type === "ArrayLiteral") {
+        // Generate as struct of array pointers via gc_alloc
+        const numFields = entries.length
+        const structSize = numFields * 8
+        const structReg = `%${this.valueCounter++}`
+        ir.push(`  ${structReg} = call ptr @gc_alloc(i64 ${structSize})`)
+
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i]
+          const arrayReg = this.generateExpression(ir, entry.value)
+          const fieldPtr = `%${this.valueCounter++}`
+          ir.push(`  ${fieldPtr} = getelementptr i64, ptr ${structReg}, i32 ${i}`)
+          ir.push(`  store i64 ${arrayReg}, ptr ${fieldPtr}`)
+        }
+        return structReg
       }
+    }
+
+    // Regular map literal
+    const tableReg = `%${this.valueCounter++}`
+    const capacity = entries.length > 0 ? entries.length * 2 : 4
+    ir.push(`  ${tableReg} = call ptr @table_new(i64 ${capacity})`)
+
+    for (const entry of entries) {
+      const key = entry.key || entry.name
+      const value = entry.value || (entry.values && entry.values[0])
+      if (!value) continue
+      const valueReg = this.generateExpression(ir, value)
+      const keyName = `@map_key_${this.stringCounter++}`
+      const keyBytes = key.length + 1
+      this.stringConstants.push(`${keyName} = private constant [${keyBytes} x i8] c"${key}\\00"`)
+      ir.push(`  call void @table_set(ptr ${tableReg}, ptr ${keyName}, i64 ${key.length}, i64 ${valueReg})`)
     }
 
     return tableReg
   }
 
   private generateStructLiteral(ir: string[], expr: any): string {
-    // For now, structs are represented as maps for simplicity
-    // Create a map with field names as keys
-    const structReg = `%${this.valueCounter++}`
-    const capacity = expr.fields.length > 0 ? expr.fields.length * 2 : 4
-    ir.push(`  ${structReg} = call ptr @map_new(i64 ${capacity})`)
+    // Look up struct definition to get field order and types
+    const structName = expr.structName || ""
+    const structFields = this.structDefs.get(structName)
 
+    if (!structFields || structFields.length === 0) {
+      // Fallback: allocate based on literal fields, all i64
+      const numFields = expr.fields?.length || 0
+      const structReg = `%${this.valueCounter++}`
+      ir.push(`  ${structReg} = call ptr @gc_alloc(i64 ${numFields * 8})`)
+      for (let i = 0; i < numFields; i++) {
+        const field = expr.fields[i]
+        const valueReg = this.generateExpression(ir, field.value)
+        if (valueReg) {
+          const fieldPtr = `%${this.valueCounter++}`
+          ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${structReg}, i64 ${i * 8}`)
+          ir.push(`  store i64 ${valueReg}, ptr ${fieldPtr}`)
+        }
+      }
+      return structReg
+    }
+
+    // Allocate struct: each field is 8 bytes
+    const structReg = `%${this.valueCounter++}`
+    ir.push(`  ${structReg} = call ptr @gc_alloc(i64 ${structFields.length * 8})`)
+
+    // Store each field at its offset
     for (const field of expr.fields) {
-      const key = field.name
+      const fieldIndex = structFields.findIndex((f: any) => f.name === field.name)
+      if (fieldIndex < 0) continue
+
+      const fieldDef = structFields[fieldIndex]
       const valueReg = this.generateExpression(ir, field.value)
-      if (valueReg) {
-        const keyStr = this.generateStringLiteral(ir, key)
-        ir.push(`  call void @map_set(ptr ${structReg}, ptr ${keyStr}, i64 ${key.length}, i64 ${valueReg})`)
+      if (!valueReg) continue
+
+      const fieldPtr = `%${this.valueCounter++}`
+      ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${structReg}, i64 ${fieldIndex * 8}`)
+
+      // Determine store type based on field type
+      const isFloat = fieldDef.fieldType?.type === "FloatType"
+      const isPtr = fieldDef.fieldType?.type === "PointerType" || fieldDef.fieldType?.kind === "ptr"
+        || (typeof fieldDef.fieldType === "string" && fieldDef.fieldType === "ptr")
+      const isArray = fieldDef.fieldType?.type === "ArrayType"
+      if (isFloat) {
+        ir.push(`  store double ${valueReg}, ptr ${fieldPtr}`)
+      } else if (isPtr || isArray) {
+        ir.push(`  store ptr ${valueReg}, ptr ${fieldPtr}`)
+      } else {
+        ir.push(`  store i64 ${valueReg}, ptr ${fieldPtr}`)
       }
     }
 
@@ -1664,8 +1809,42 @@ class LLVMIRGenerator {
   }
 
   private generateMemberExpression(ir: string[], expr: any): string {
+    // Check if the object is a struct type - use GEP-based field access
+    if (expr.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.name)
+      const structName = varType?.name || varType?.structName
+      const structFields = structName ? this.structDefs.get(structName) : null
+
+      if (structFields) {
+        const fieldIndex = structFields.findIndex((f: any) => f.name === expr.property)
+        if (fieldIndex >= 0) {
+          const fieldDef = structFields[fieldIndex]
+          const isFloat = fieldDef.fieldType?.type === "FloatType"
+          const isPtr = fieldDef.fieldType?.type === "PointerType" || fieldDef.fieldType?.kind === "ptr"
+            || (typeof fieldDef.fieldType === "string" && fieldDef.fieldType === "ptr")
+          const isArray = fieldDef.fieldType?.type === "ArrayType"
+          // Load the struct pointer
+          const structPtr = `%${this.valueCounter++}`
+          ir.push(`  ${structPtr} = load ptr, ptr %${expr.object.name}`)
+          // GEP to field offset
+          const fieldPtr = `%${this.valueCounter++}`
+          ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${structPtr}, i64 ${fieldIndex * 8}`)
+          // Load field value with correct type
+          const reg = `%${this.valueCounter++}`
+          if (isFloat) {
+            ir.push(`  ${reg} = load double, ptr ${fieldPtr}`)
+          } else if (isPtr || isArray) {
+            ir.push(`  ${reg} = load ptr, ptr ${fieldPtr}`)
+          } else {
+            ir.push(`  ${reg} = load i64, ptr ${fieldPtr}`)
+          }
+          return reg
+        }
+      }
+    }
+
+    // Fallback: map-based member access
     const obj = this.generateExpression(ir, expr.object)
-    // Generate the key string constant
     const keyName = `@key_${expr.property}_${this.stringCounter++}`
     const escaped = expr.property.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
     const strDef = `${keyName} = private unnamed_addr constant [${expr.property.length + 1} x i8] c"${escaped}\\00"`

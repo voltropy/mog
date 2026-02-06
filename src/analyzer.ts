@@ -64,6 +64,7 @@ type StatementNode =
 
 interface SoADeclarationNode extends ASTNode {
   type: "SoADeclaration"
+  name: string
   fields: { name: string; fieldType: ArrayType }[]
 }
 
@@ -634,15 +635,25 @@ class SemanticAnalyzer {
   }
 
   private visitVariableDeclaration(node: VariableDeclarationNode): void {
-    const declaredType = node.varType
+    let declaredType = node.varType
     const valueType = node.value ? this.visitExpression(node.value) : null
+
+    // Resolve CustomType to actual type from symbol table (for struct/SoA types)
+    if (declaredType?.type === "CustomType") {
+      const resolved = this.symbolTable.lookup((declaredType as any).name)
+      if (resolved?.declaredType) {
+        declaredType = resolved.declaredType
+      }
+    }
 
     if (valueType) {
       if (declaredType) {
         // Allow literal coercion (float widening, array literal element coercion)
         const isLiteral = node.value?.type === "NumberLiteral" || node.value?.type === "ArrayLiteral"
+        // Allow SoA/Struct literal assignment (MapLiteral → SOAType/StructType)
+        const isSoAOrStructAssign = (declaredType.type === "SOAType" || declaredType.type === "StructType") && (valueType.type === "MapType" || node.value?.type === "MapLiteral" || node.value?.type === "StructLiteral")
         const typeCheck = isLiteral ? canCoerceWithWidening : compatibleTypes
-        if (!typeCheck(valueType, declaredType)) {
+        if (!isSoAOrStructAssign && !typeCheck(valueType, declaredType)) {
           this.emitError(
             `Type mismatch: cannot assign ${valueType.toString()} to ${declaredType.toString()}`,
             node.position,
@@ -920,6 +931,8 @@ class SemanticAnalyzer {
     const soaType = new SOAType(fields)
     // @ts-ignore - resultType is set dynamically
     node.resultType = soaType
+    // Register the SoA type name so it can be used in variable declarations
+    this.symbolTable.declare(node.name, "type", soaType)
   }
 
   private visitStructDefinition(node: StructDefinitionNode): void {
@@ -1047,17 +1060,19 @@ class SemanticAnalyzer {
         return null
       }
 
-      if (!structTypeDef.declaredType || !(structTypeDef.declaredType instanceof StructType)) {
+      if (!structTypeDef.declaredType || (!(structTypeDef.declaredType instanceof StructType) && !(structTypeDef.declaredType instanceof SOAType))) {
         this.emitError(`'${node.structName}' is not a struct type`, node.position)
         return null
       }
 
-      const expectedStruct = structTypeDef.declaredType as StructType
+      const expectedStruct = structTypeDef.declaredType
 
       // Validate field types match expected struct definition
       for (const field of node.fields) {
         const fieldType = this.visitExpression(field.value)
-        const expectedFieldType = expectedStruct.fields.get(field.name)
+        const expectedFieldType = expectedStruct instanceof StructType
+          ? expectedStruct.fields.get(field.name)
+          : (expectedStruct as SOAType).fields?.get(field.name)
 
         if (expectedFieldType) {
           if (fieldType && !compatibleTypes(fieldType, expectedFieldType)) {
@@ -1630,6 +1645,18 @@ class SemanticAnalyzer {
         return new ArrayType(arrayType.elementType, newDimensions)
       }
       return arrayType.elementType
+    }
+
+    // Allow member access on SOAType - returns the array field type
+    if (objectType.type === "SOAType") {
+      const soaType = objectType as SOAType
+      const fieldName = typeof node.property === "string" ? node.property : (node.property as any)?.name
+      const fieldType = soaType.fields.get(fieldName)
+      if (fieldType) {
+        return fieldType
+      }
+      this.emitError(`SoA type has no field '${fieldName}'`, node.position)
+      return null
     }
 
     // Allow member access on pointers (tables)

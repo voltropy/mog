@@ -197,7 +197,20 @@ class SOAType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType
+class CustomType {
+  name: string
+  type = "CustomType"
+
+  constructor(name: string) {
+    this.name = name
+  }
+
+  toString(): string {
+    return this.name
+  }
+}
+
+type Type = IntegerType | UnsignedType | FloatType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -285,9 +298,12 @@ function isSigned(type: IntegerType | UnsignedType): boolean {
 }
 
 function sameType(a: Type, b: Type): boolean {
+  if (a instanceof FloatType && b instanceof FloatType) {
+    return a.kind === b.kind
+  }
+  
   if (a instanceof IntegerType && b instanceof IntegerType) return a.kind === b.kind
   if (a instanceof UnsignedType && b instanceof UnsignedType) return a.kind === b.kind
-  if (a instanceof FloatType && b instanceof FloatType) return a.kind === b.kind
   if (a instanceof ArrayType && b instanceof ArrayType) {
     if (a.rank !== b.rank) return false
     if (!sameType(a.elementType, b.elementType)) return false
@@ -538,6 +554,7 @@ export {
   StructType,
   AOSType,
   SOAType,
+  CustomType,
   TypeVar,
   TypeInferenceContext,
   array,

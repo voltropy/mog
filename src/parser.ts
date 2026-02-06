@@ -1,7 +1,7 @@
 import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, ArrayType, MapType, PointerType, VoidType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, ArrayType, MapType, PointerType, VoidType, CustomType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
 // Decode escape sequences in string literals
@@ -196,7 +196,8 @@ if (!this.checkType("RPAREN")) {
       if (this.checkType("LBRACKET")) {
         fieldType = this.parseArrayTypeAnnotation()
       } else {
-        fieldType = this.consume("TYPE", "Expected type after :").value
+        const typeName = this.consume("TYPE", "Expected type after :").value
+        fieldType = this.parseType(typeName)
       }
       fields.push({ name: fieldName, fieldType })
       this.matchType("COMMA")
@@ -1232,7 +1233,8 @@ private comparison(): ExpressionNode {
     if (typeName === "ptr") {
       return new PointerType()
     }
-    return new VoidType()
+    // Handle custom struct types
+    return new CustomType(typeName)
   }
 
   private consume(type: string, message: string): Token {
