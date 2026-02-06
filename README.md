@@ -1,27 +1,17 @@
 # AlgolScript
 
-A programming language designed for the AI era. AlgolScript is built from the ground up to be **written and consumed by LLMs**, with native support for AI operations, n-dimensional arrays for machine learning, and a clean, predictable syntax that eliminates common programming pitfalls.
-
-## Philosophy
-
-AlgolScript is designed for a world where AI writes code:
-
-- **LLM-first**: Syntax and semantics optimized for LLM generation and understanding—minimizing ambiguity and maximizing predictability
-- **AI-native operations**: Built-in LLM calling and tensor operations for seamless AI integration
-- **PyTorch-ready**: Native n-dimensional arrays and auto-differentiation support (future) for ML workloads
-- **General-purpose power**: Compiled to native code via LLVM with strong static typing and Lua-like flexible tables
-- **No foot-guns**: No implicit type coercion, no surprising operator precedence—what you see is what you get
+A compiled programming language with an LLVM backend, designed for clean syntax and predictable behavior. AlgolScript compiles to native executables with strong static typing, structs, n-dimensional arrays, and direct POSIX access.
 
 ## Features
 
-- **LLM-optimized syntax** - Predictable, unambiguous grammar designed for AI code generation
-- **Native nd-arrays** - N-dimensional arrays for machine learning and scientific computing
-- **Strong static typing** - Explicit types with no implicit coercion surprises
-- **Lua-like tables** - Flexible key-value stores that can represent arrays, objects, or hash maps
-- **AI integration** - Built-in LLM function calling as a native language feature
-- **Compiled performance** - LLVM backend produces optimized native executables
-- **Automatic memory management** - Garbage collection eliminates memory management complexity
-- **Comprehensive test suite** - 458 tests ensuring reliability
+- **Compiled to native code** - LLVM backend produces optimized executables
+- **Strong static typing** - Explicit types with no implicit coercion (`i8`-`i64`, `u8`-`u64`, `f32`/`f64`, `ptr`, `string`)
+- **Structs with named fields** - Heap-allocated structs with field access and assignment
+- **N-dimensional arrays** - Fixed-size and dynamic arrays with element-wise operations
+- **Maps** - Lua-like key-value stores with dot and bracket access
+- **POSIX bindings** - Direct access to filesystem operations and BSD sockets
+- **Automatic memory management** - Mark-and-sweep garbage collector with large object support
+- **467 tests** passing across 10 test files
 
 ## Installation
 
@@ -214,172 +204,91 @@ fives: [f64; 3] = [5.0; 3];    // [5.0, 5.0, 5.0]
 // tensor: f64[3][224][224] = ...;  // For image processing
 ```
 
-### Tables (Lua-like)
+### Maps
 
-Flexible key-value stores that can represent arrays, objects, or hash maps:
+Key-value stores with string keys, created using `table_new` and accessed with bracket notation:
 
-Table literals with member access:
 ```algol
-person = {name: "Alice", age: 30};
-println_i64(person.age);  // Access member
-```
-
-Using runtime functions:
-```algol
-// Create table with initial capacity
+// Create a map
 tbl: ptr = table_new(4);
 
-// Set values using function call
-table_set(tbl, "key", 3, 42);
-
 // Set values using bracket notation
-tbl["key"] := 42;           // String key
-tbl[123] := 100;            // Integer key
+tbl["host"] := 42;           // String key
+tbl["port"] := 8080;         // String key
+
+// Set values using function call (key, key_length, value)
+table_set(tbl, "key", 3, 42);
 
 // Get values
 val: i64 = table_get(tbl, "key", 3);
 ```
 
-### Map (Key-Value Store)
-
-Maps are associative arrays with dynamic keys, similar to JavaScript objects or Python dictionaries. They are the preferred modern alternative to the legacy `table` type.
-
-Map literals use the same syntax as tables but are type-inferred as Maps:
+Map literals with member access:
 ```algol
-// Map literal with string keys
-config := {host: "localhost", port: 8080};
-
-// Access patterns
-println(config.host);      // dot notation
-println(config["port"]);   // bracket notation
-
-// Dynamic keys
-key := "host";
-println(config[key]);      // runtime key lookup
-
-// Nested maps
-nested := {server: {host: "0.0.0.0", port: 3000}, debug: true};
-println(nested.server.host);
+person = {name: "Alice", age: 30};
+print(person.age);
+println();
 ```
 
-### Struct Types
+### Structs
 
-Structs group related data with named, typed fields. They provide better type safety and performance than Maps for fixed-schema data.
+Structs group related data with named, typed fields. Fields are separated by commas. Structs are heap-allocated and accessed via pointer.
 
-Defining a struct:
 ```algol
-struct Point {
-    x: f64,
-    y: f64
-}
+struct Point { x: f64, y: f64 }
 
-struct Rectangle {
-    top_left: Point,
-    bottom_right: Point
-}
-```
-
-Creating and using structs:
-```algol
-// Struct literal (type inferred from annotation)
-p: Point := {x: 1.0, y: 2.0};
-
-// Nested structs
-rect: Rectangle := {
-    top_left: {x: 0.0, y: 0.0},
-    bottom_right: {x: 100.0, y: 100.0}
-};
+// Create with explicit type prefix
+p: Point = Point { x: 1.0, y: 2.0 };
 
 // Field access
-println(rect.top_left.x);
+print(p.x);
+println();
 
 // Field assignment
 p.x := 5.0;
 ```
 
-### AoS (Array of Structs)
-
-AoS stores an array of struct instances in contiguous memory. This layout is optimal when you frequently access all fields of a single element together (row-major access).
-
+Structs work as function parameters and return types:
 ```algol
-// Define a struct
-struct Particle {
-    x: f64,
-    y: f64,
-    vx: f64,
-    vy: f64
+struct Point { x: f64, y: f64 }
+
+fn create_point(x: f64, y: f64) -> Point {
+  return Point { x: x, y: y };
 }
 
-// AoS type: [StructName] for dynamic, [StructName; N] for fixed capacity
-particles: [Particle] := [
-    {x: 0.0, y: 0.0, vx: 1.0, vy: 0.0},
-    {x: 1.0, y: 1.0, vx: 0.0, vy: 1.0}
-];
+fn move_point(p: Point, dx: f64, dy: f64) -> Point {
+  p.x := p.x + dx;
+  p.y := p.y + dy;
+  return p;
+}
 
-// Access: index then field (aos[i].field)
-first_x := particles[0].x;
-particles[0].x := 5.0;
-
-// Built-in functions
-push(particles, {x: 2.0, y: 2.0, vx: 0.0, vy: 0.0});
-count := len(particles);
-capacity := cap(particles);
-reserve(particles, 100);  // Pre-allocate space
+fn main() -> i64 {
+  p: Point = create_point(1.0, 2.0);
+  p := move_point(p, 5.0, 10.0);
+  print(p.x);   // 6.0
+  println();
+  return 0;
+}
 ```
 
 ### SoA (Struct of Arrays)
 
-SoA stores each field as a separate column array. This layout enables SIMD vectorization and is optimal for operations on a single field across many elements (column-major access).
+SoA declarations store each field as a separate array. Access pattern is `soa.field[i]`:
 
 ```algol
-// SoA struct definition - each field is an array type
-struct Particles {
-    x: [f64],
-    y: [f64],
-    vx: [f64],
-    vy: [f64]
+soa Particles {
+  x: [f64],
+  y: [f64]
 }
 
-// SoA literal - all field arrays must have the same length
-particles: Particles := {
-    x: [0.0, 1.0, 2.0],
-    y: [0.0, 1.0, 2.0],
-    vx: [1.0, 0.0, 0.5],
-    vy: [0.0, 1.0, 0.5]
+particles: Particles = Particles {
+  x: [1.0, 2.0, 3.0],
+  y: [4.0, 5.0, 6.0]
 };
 
-// Access: field then index (soa.field[i])
-first_x := particles.x[0];
-particles.x[0] := 5.0;
-
-// Column operations are vectorization-friendly
-for i := 0 to len(particles) {
-    particles.x[i] := particles.x[i] + particles.vx[i];
-    particles.y[i] := particles.y[i] + particles.vy[i];
-}
-
-// Built-in functions
-push(particles, {x: 3.0, y: 3.0, vx: 0.0, vy: 0.0});
-count := len(particles);
-```
-
-### Choosing Between AoS and SoA
-
-| Layout | Best For | Memory Access Pattern | Example Use Case |
-|--------|----------|----------------------|------------------|
-| AoS | Processing whole objects | Row-major | Physics simulation (update all properties per particle) |
-| SoA | Vectorized column operations | Column-major | ML training (compute gradients on one feature across all samples) |
-
-```algol
-// AoS: Good when accessing all fields together
-for i := 0 to len(aos_particles) {
-    update_all_fields(aos_particles[i]);
-}
-
-// SoA: Good for SIMD/vectorized operations
-for i := 0 to len(soa_particles) {
-    soa_particles.x[i] := soa_particles.x[i] * 2.0;  // Sequential memory access
-}
+// Access: field then index
+first_x: f64 = particles.x[0];
+particles.x[0] := 10.0;
 ```
 
 ### Strings
@@ -532,31 +441,55 @@ unlink("temp_file.txt");
 rmdir("temp_dir");
 ```
 
+### POSIX Sockets
+
+AlgolScript provides BSD socket wrappers for network programming:
+
+```algol
+fn main() -> i64 {
+  // Create a TCP socket
+  sockfd: i64 = sys_socket(2, 1, 0);  // AF_INET, SOCK_STREAM
+
+  // Resolve IP address
+  ip_addr: i64 = sys_inet_addr("93.184.216.34");
+
+  // Connect to remote host on port 80
+  result: i64 = sys_connect(sockfd, ip_addr, 80);
+  if (result < 0) {
+    sys_close(sockfd);
+    return 1;
+  }
+
+  // Send HTTP request
+  request: ptr = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n";
+  sys_send(sockfd, request, 40);
+
+  // Receive response
+  buf: ptr = gc_alloc(4096);
+  bytes: i64 = sys_recv(sockfd, buf, 4096);
+
+  // Print and clean up
+  print_string(buf);
+  sys_close(sockfd);
+  return 0;
+}
+```
+
+Available socket functions: `sys_socket`, `sys_connect`, `sys_send`, `sys_recv`, `sys_close`, `sys_fcntl`, `sys_inet_addr`, `sys_errno`.
+
 ## Examples
 
-The repository includes several example programs:
+The repository includes HTTP client examples demonstrating socket programming:
 
-- `nontrivial.algol` - Scientific calculator demonstrating floats, recursion, nested loops
-- `basic_features.algol` - Demonstrates variables, arithmetic, if/else, while, functions
-- `combined_features.algol` - All features combined with complex operations
-- `nested_operations.algol` - Nested loops, functions, conditionals
-- `fibonacci_tco.algol` - Tail-call optimized fibonacci
-- `fibonacci_exit.algol` - Fibonacci with exit code
-- `simple_loop.algol` - Minimal loop example
-- `while_loop.algol` - While loop demonstration
-- `counter_loop.algol` - Simple counter loop
-- `countdown.algol` - Countdown loop example
-- `factorial_recursive.algol` - Recursive factorial
-- `add.algol` / `add_simple.algol` - Simple addition examples
-- `exit42.algol` / `exit127.algol` - Exit code examples
-- `success.algol` - Minimal success program
-- `main_example.algol` - main() function example
+- `http_client.algol` - Full HTTP client with connection, request, and response handling
+- `minimal_http.algol` - Minimal HTTP GET request
+- `clean_http.algol` - Clean HTTP client with error handling
 
 Try compiling one:
 
 ```bash
-bun run src/index.ts basic_features.algol
-./basic_features
+bun run src/index.ts http_client.algol
+./http_client
 ```
 
 ## Testing
