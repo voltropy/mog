@@ -127,7 +127,13 @@ if (!this.checkType("RPAREN")) {
         do {
           const paramName = this.consume("IDENTIFIER", "Expected parameter name").value
           this.consume("COLON", "Expected : after parameter name")
-          let paramToken = this.consume("TYPE", "Expected parameter type")
+          // Accept both TYPE and IDENTIFIER tokens as parameter types (for custom struct types)
+          let paramToken: any
+          if (this.checkType("TYPE")) {
+            paramToken = this.consume("TYPE", "Expected parameter type")
+          } else {
+            paramToken = this.consume("IDENTIFIER", "Expected parameter type")
+          }
           let typeName = paramToken.value
           while (this.matchType("LBRACKET")) {
             typeName += "["
@@ -141,7 +147,13 @@ if (!this.checkType("RPAREN")) {
       this.consume("RPAREN", "Expected ) after parameters")
 
       this.consume("ARROW", "Expected -> after parameter list")
-      let returnToken = this.consume("TYPE", "Expected return type")
+      // Accept both TYPE and IDENTIFIER tokens as return types (for custom struct types)
+      let returnToken: any
+      if (this.checkType("TYPE")) {
+        returnToken = this.consume("TYPE", "Expected return type")
+      } else {
+        returnToken = this.consume("IDENTIFIER", "Expected return type")
+      }
       let returnTypeName = returnToken.value
       while (this.matchType("LBRACKET")) {
         returnTypeName += "["

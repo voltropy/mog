@@ -362,6 +362,17 @@ function compatibleTypes(from: Type, to: Type): boolean {
     return true
   }
 
+  // CustomType compatibility: CustomType("Point") is compatible with StructType("Point")
+  if (from instanceof CustomType && to instanceof StructType) {
+    return from.name === to.name
+  }
+  if (from instanceof StructType && to instanceof CustomType) {
+    return from.name === to.name
+  }
+  if (from instanceof CustomType && to instanceof CustomType) {
+    return from.name === to.name
+  }
+
   return false
 }
 

@@ -447,7 +447,9 @@ class LLVMIRGenerator {
         const valReg = `%${this.valueCounter++}`
 
         const varType = this.variableTypes.get(name)
-        const isPointerLike = varType?.type === "ArrayType" || varType?.type === "PointerType"
+        const isPointerLike = varType?.type === "ArrayType" || varType?.type === "PointerType" || 
+                              varType?.type === "StructType" || varType?.type === "CustomType" || 
+                              varType?.type === "SOAType"
 
         // Determine LLVM type for loading
         let llvmLoadType = "i64"
@@ -1476,16 +1478,27 @@ class LLVMIRGenerator {
           }
 
           if (elementType?.type === "FloatType") {
+            const isValueFloat = this.isFloatOperand(value) || valueReg.startsWith("0x")
             if (elementType.kind === "f32") {
-              // Convert i64 value to float
-              const floatReg = `%${this.valueCounter++}`
-              ir.push(`  ${floatReg} = uitofp i64 ${valueReg} to float`)
-              ir.push(`  call void @array_set_f32(ptr ${arrayPtr}, i64 ${index}, float ${floatReg})`)
+              if (isValueFloat) {
+                // Value is already a float - use directly
+                ir.push(`  call void @array_set_f32(ptr ${arrayPtr}, i64 ${index}, float ${valueReg})`)
+              } else {
+                // Integer value needs conversion
+                const floatReg = `%${this.valueCounter++}`
+                ir.push(`  ${floatReg} = sitofp i64 ${valueReg} to float`)
+                ir.push(`  call void @array_set_f32(ptr ${arrayPtr}, i64 ${index}, float ${floatReg})`)
+              }
             } else if (elementType.kind === "f64") {
-              // Convert i64 value to double
-              const doubleReg = `%${this.valueCounter++}`
-              ir.push(`  ${doubleReg} = uitofp i64 ${valueReg} to double`)
-              ir.push(`  call void @array_set_f64(ptr ${arrayPtr}, i64 ${index}, double ${doubleReg})`)
+              if (isValueFloat) {
+                // Value is already a double - use directly
+                ir.push(`  call void @array_set_f64(ptr ${arrayPtr}, i64 ${index}, double ${valueReg})`)
+              } else {
+                // Integer value needs conversion
+                const doubleReg = `%${this.valueCounter++}`
+                ir.push(`  ${doubleReg} = sitofp i64 ${valueReg} to double`)
+                ir.push(`  call void @array_set_f64(ptr ${arrayPtr}, i64 ${index}, double ${doubleReg})`)
+              }
             } else {
               ir.push(`  call void @array_set(ptr ${arrayPtr}, i64 ${index}, i64 ${valueReg})`)
             }
@@ -1510,8 +1523,11 @@ class LLVMIRGenerator {
               || (typeof fieldDef.fieldType === "string" && fieldDef.fieldType === "ptr")
             const isArray = fieldDef.fieldType?.type === "ArrayType"
             // Load struct pointer
+            // For function parameters, the param is stored in %name_local (see generateFunctionDeclaration)
+            const isParam = this.currentFunction && this.currentFunction.params.find((p) => p.name === target.object.name)
+            const structAssignSrc = isParam ? `%${target.object.name}_local` : `%${target.object.name}`
             const structPtr = `%${this.valueCounter++}`
-            ir.push(`  ${structPtr} = load ptr, ptr %${target.object.name}`)
+            ir.push(`  ${structPtr} = load ptr, ptr ${structAssignSrc}`)
             // GEP to field
             const fieldPtr = `%${this.valueCounter++}`
             ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${structPtr}, i64 ${fieldIndex * 8}`)
@@ -1824,8 +1840,12 @@ class LLVMIRGenerator {
             || (typeof fieldDef.fieldType === "string" && fieldDef.fieldType === "ptr")
           const isArray = fieldDef.fieldType?.type === "ArrayType"
           // Load the struct pointer
+          // For function parameters, the param is stored in %name_local (see generateFunctionDeclaration)
+          // For local variables, the alloca is %name
+          const isParam = this.currentFunction && this.currentFunction.params.find((p) => p.name === expr.object.name)
+          const structLoadSrc = isParam ? `%${expr.object.name}_local` : `%${expr.object.name}`
           const structPtr = `%${this.valueCounter++}`
-          ir.push(`  ${structPtr} = load ptr, ptr %${expr.object.name}`)
+          ir.push(`  ${structPtr} = load ptr, ptr ${structLoadSrc}`)
           // GEP to field offset
           const fieldPtr = `%${this.valueCounter++}`
           ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${structPtr}, i64 ${fieldIndex * 8}`)
@@ -1983,6 +2003,18 @@ class LLVMIRGenerator {
     // If it's an index expression, recursively get element type
     if (expr.type === "IndexExpression") {
       return this.getArrayElementType(expr.object)
+    }
+
+    // Check if it's a MemberExpression on a SoA variable (returns array field)
+    if (expr.type === "MemberExpression" && expr.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.name)
+      if (varType?.type === "SOAType") {
+        const fieldName = expr.property?.name || expr.property
+        const field = varType.fields?.get(fieldName)
+        if (field?.type === "ArrayType") {
+          return field.elementType
+        }
+      }
     }
 
     // Check if the expression itself has a resultType (from analyzer)
@@ -2753,6 +2785,9 @@ class LLVMIRGenerator {
       case "SOAType":
         // SoA is heap-allocated, represented as pointer
         return "ptr"
+      case "CustomType":
+        // Custom types (structs) are heap-allocated, represented as pointers
+        return "ptr"
       case "PointerType":
         return "ptr"
       case "VoidType":
@@ -2798,6 +2833,19 @@ private getIntBits(type: LLVMType): number {
     if (expr.type === "Identifier" && expr.name) {
       const varType = this.variableTypes.get(expr.name)
       return varType?.type === "FloatType"
+    }
+
+    // Check if it's a MemberExpression on a struct with float field
+    if (expr.type === "MemberExpression" && expr.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.name)
+      if (varType?.type === "StructType" || varType?.type === "SOAType" || varType?.type === "CustomType") {
+        const fieldName = expr.property?.name || expr.property
+        const structInfo = this.structDefs.get(expr.object.name) || this.structDefs.get(varType.name)
+        if (structInfo) {
+          const field = structInfo.find((f: any) => f.name === fieldName)
+          if (field?.fieldType?.type === "FloatType") return true
+        }
+      }
     }
 
     // For binary expressions, check left operand recursively
@@ -2863,6 +2911,21 @@ private getIntBits(type: LLVMType): number {
             case "float": return "float"
             case "double": return "double"
             case "fp128": return "fp128"
+          }
+        }
+      }
+    }
+
+    // For MemberExpression on structs, check the field type
+    if (expr.type === "MemberExpression" && expr.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.name)
+      if (varType?.type === "StructType" || varType?.type === "SOAType" || varType?.type === "CustomType") {
+        const fieldName = expr.property?.name || expr.property
+        const structInfo = this.structDefs.get(expr.object.name) || this.structDefs.get(varType.name)
+        if (structInfo) {
+          const field = structInfo.find((f: any) => f.name === fieldName)
+          if (field?.fieldType?.type === "FloatType") {
+            return floatKindToLLVM(field.fieldType.kind)
           }
         }
       }

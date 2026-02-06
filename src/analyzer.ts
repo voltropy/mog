@@ -880,7 +880,15 @@ class SemanticAnalyzer {
   }
 
   private visitFunctionDeclaration(node: FunctionDeclarationNode): void {
-    this.symbolTable.declare(node.name, "function", node.returnType)
+    // Resolve CustomType return type to actual type
+    let returnType = node.returnType
+    if (returnType?.type === "CustomType") {
+      const resolved = this.symbolTable.lookup((returnType as any).name)
+      if (resolved?.declaredType) {
+        returnType = resolved.declaredType
+      }
+    }
+    this.symbolTable.declare(node.name, "function", returnType)
 
     const prevFunction = this.currentFunction
     this.currentFunction = node.name
@@ -888,8 +896,16 @@ class SemanticAnalyzer {
     this.symbolTable.pushScope()
 
     for (const param of node.params) {
-      this.symbolTable.declare(param.name, "parameter", param.paramType)
-      this.symbolTable.setCurrentType(param.name, param.paramType)
+      let paramType = param.paramType
+      // Resolve CustomType to actual type from symbol table (for struct/SoA types)
+      if (paramType?.type === "CustomType") {
+        const resolved = this.symbolTable.lookup((paramType as any).name)
+        if (resolved?.declaredType) {
+          paramType = resolved.declaredType
+        }
+      }
+      this.symbolTable.declare(param.name, "parameter", paramType)
+      this.symbolTable.setCurrentType(param.name, paramType)
     }
 
     this.visitBlock(node.body)
@@ -1645,6 +1661,18 @@ class SemanticAnalyzer {
         return new ArrayType(arrayType.elementType, newDimensions)
       }
       return arrayType.elementType
+    }
+
+    // Allow member access on StructType - returns the field type
+    if (objectType.type === "StructType") {
+      const structType = objectType as StructType
+      const fieldName = typeof node.property === "string" ? node.property : (node.property as any)?.name
+      const fieldType = structType.fields.get(fieldName)
+      if (fieldType) {
+        return fieldType
+      }
+      this.emitError(`Struct '${structType.name}' has no field '${fieldName}'`, node.position)
+      return null
     }
 
     // Allow member access on SOAType - returns the array field type

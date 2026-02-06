@@ -101,7 +101,7 @@ fn main() -> i64 {
     expect(output).toContain("31")
   })
 
-  test.skip("AoS as function parameter and return", async () => {
+  test("AoS as function parameter and return", async () => {
     const source = `
 struct Point { x: f64, y: f64 }
 
