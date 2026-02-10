@@ -2,48 +2,76 @@
 
 ## Overview
 
-AlgolScript is a high-performance, memory-managed programming language designed for LLM-native operations and numerical computing. It features a rich type system with fixed-width integer and floating-point types, native vector/matrix syntax, and built-in LLM operation capabilities.
+AlgolScript is a small, statically-typed, embeddable language for ML workflows and LLM agent scripting. It compiles to native code via LLVM. Think of it as a statically-typed Lua with native tensor support and async I/O.
+
+**Target use cases:**
+- LLM agent tool-use scripts
+- ML training and inference workflows
+- Plugin/extension scripting for host applications
+- Short automation scripts
+
+**Non-goals:**
+- Systems programming (no raw pointers, no manual memory management)
+- Standalone applications (always embedded in a host)
+- Replacing general-purpose languages
 
 ## Design Philosophy
 
-- **Simplicity**: Clean, predictable syntax without operator precedence complexity
-- **Performance**: Native support for vectorized operations and efficient memory management
-- **LLM-Native**: First-class support for large language model operations
-- **Type Safety**: Strong static typing with comprehensive type system
-- **Memory Safety**: Automatic garbage collection ensures memory safety
+1. **Small surface area.** The entire language should fit in an LLM's context window. Every feature must justify its existence. When in doubt, leave it out.
+
+2. **Predictable semantics.** No implicit coercion surprises, no operator precedence puzzles, no hidden control flow. Code reads top-to-bottom, left-to-right.
+
+3. **Familiar syntax.** Curly braces, `fn`, `->`, `:=`. Blend of Rust/Go/TypeScript that LLMs already generate fluently. No novel syntax without strong justification.
+
+4. **Safe by default.** Garbage collected, bounds-checked, no null, no raw pointers. The language cannot crash the host or escape its sandbox.
+
+5. **Host provides I/O.** The language has no built-in file, network, or system access. All side effects go through capabilities explicitly granted by the embedding host.
+
+6. **ML as a first-class concern.** Tensor types with hardware-relevant dtypes (f16, bf16, f32, f64), shape checking, and operations that map to accelerator hardware.
 
 ## Syntax
 
 ### General Structure
 
-AlgolScript programs are composed of blocks, statements, and expressions with clear delimitation.
+Programs are sequences of top-level declarations (functions, structs, constants) and a `main` entry point.
 
 ```algol
-// Block structure
-{
-  statement1
-  statement2
-  result
+struct Point { x: float, y: float }
+
+fn distance(a: Point, b: Point) -> float {
+  dx := a.x - b.x;
+  dy := a.y - b.y;
+  return sqrt((dx * dx) + (dy * dy));
+}
+
+fn main() {
+  p1 := Point { x: 1.0, y: 2.0 };
+  p2 := Point { x: 4.0, y: 6.0 };
+  d := distance(p1, p2);
+  print(d);
 }
 ```
 
 ### Statements
 
 ```algol
-// Variable declaration
-name: type = expression
+// Variable declaration with type inference
+x := 42;
+name := "hello";
 
-// Assignment
-name = expression
+// Variable declaration with explicit type
+x: int = 42;
+ratio: float = 3.14;
 
-// Return statement
-return expression  // or just expression as last in block
+// Assignment (walrus operator for initial binding, = for reassignment)
+x := 42;       // initial binding
+x = x + 1;    // reassignment
 
-// Conditional (when)
-condition ? (true_block) : (false_block)
+// Return
+return expression;
 
 // Expression statement
-expression
+some_function();
 ```
 
 ### Comments
@@ -51,403 +79,206 @@ expression
 ```algol
 // Single line comment
 
-/*
-  Multi-line comment
-*/
+/* Multi-line comment */
 ```
 
 ## Type System
 
-### Primitive Types
+### Scalar Types
 
-#### Signed Integers
+```
+int       64-bit signed integer (default integer type)
+float     64-bit floating point (default float type)
+bool      true or false
+string    UTF-8 string (immutable, GC-managed)
+```
 
-- `i8` - 8-bit signed integer (-128 to 127)
-- `i16` - 16-bit signed integer (-32,768 to 32,767)
-- `i32` - 32-bit signed integer (-2,147,483,648 to 2,147,483,647)
-- `i64` - 64-bit signed integer
-- `i128` - 128-bit signed integer
-- `i256` - 256-bit signed integer
+`int` and `float` are the default types for literals. You never need to spell out a width for ordinary code.
 
-#### Unsigned Integers
+### Numeric Precision Types
 
-- `u8` - 8-bit unsigned integer (0 to 255)
-- `u16` - 16-bit unsigned integer (0 to 65,535)
-- `u32` - 32-bit unsigned integer (0 to 4,294,967,295)
-- `u64` - 64-bit unsigned integer
-- `u128` - 128-bit unsigned integer
-- `u256` - 256-bit unsigned integer
+Used when precision matters — primarily in tensor element types, ML configurations, and interop with hardware:
 
-#### Floating Point
+```
+// Integers (for tensor dtypes and bitwise operations)
+i8  i16  i32  i64
 
-- `f8` - 8-bit floating point (minimal precision, optimized for ML inference)
-- `f16` - 16-bit floating point (half precision)
-- `f32` - 32-bit floating point (single precision)
-- `f64` - 64-bit floating point (double precision)
-- `f128` - 128-bit floating point (quadruple precision)
-- `f256` - 256-bit floating point (octuple precision, extended)
+// Unsigned integers (for tensor dtypes, indexing)
+u8  u16  u32  u64
+
+// Floating point (for tensor dtypes and ML precision control)
+f16  bf16  f32  f64
+```
+
+These exist primarily as **tensor element types**. In scalar code, you almost always use `int` and `float`:
+
+```algol
+// Scalar code: use int and float
+count := 42;            // int
+ratio := 3.14;          // float
+
+// Tensor code: precision types matter
+weights := tensor<f16>([768, 768]);      // half-precision weights
+indices := tensor<i32>([1000]);          // integer indices
+image := tensor<u8>([3, 224, 224]);      // byte image data
+```
+
+Widening conversions are implicit (i32 -> int, f32 -> float). Narrowing requires explicit `as` cast.
 
 ### Composite Types
 
 #### Arrays
 
-```algol
-// Declaration
-values: [type; size] = [v1, v2, v3, ...]
+Dynamically-sized, homogeneous, GC-managed:
 
-// Example
-numbers: [i32; 5] = [1, 2, 3, 4, 5]
-floats: [f32; 3] = [1.5, 2.7, 3.14]
+```algol
+numbers := [1, 2, 3, 4, 5];             // [int]
+names := ["alice", "bob", "charlie"];    // [string]
+
+// Type annotation
+scores: [float] = [95.5, 88.0, 92.3];
+
+// Operations
+numbers.push(6);
+last := numbers.pop();
+length := numbers.len;
+slice := numbers[1:3];       // [2, 3]
+```
+
+#### Maps
+
+Key-value dictionaries. Keys must be `int`, `float`, `string`, or `bool`:
+
+```algol
+ages := {"alice": 30, "bob": 25};       // {string: int}
+config := {1: "one", 2: "two"};         // {int: string}
 
 // Access
-numbers[0]  // First element
-numbers[4]  // Last element (0-indexed)
-```
+age := ages["alice"];
 
-#### Tables
+// Mutation
+ages["charlie"] = 28;
 
-```algol
-// Declaration - heterogeneous row storage
-data: table = {
-  col1: type1,
-  col2: type2,
-  col3: type3,
-  rows: [
-    [v1, v2, v3],
-    [v4, v5, v6],
-  ]
+// Check existence
+if ages.has("alice") {
+  print(ages["alice"]);
 }
 
-// Alternatively, columnar syntax
-data: table = {
-  name: [string],
-  age: [i32],
-  score: [f32],
-  data: [
-    ["Alice", "Bob", "Charlie"],
-    [25, 30, 28],
-    [95.5, 88.0, 92.3]
-  ]
-}
-
-// Access
-data.name[0]  // "Alice"
-data.age[1]   // 30
-```
-
-#### Strings
-
-Strings are represented as arrays of `u8` (UTF-8 encoded):
-
-```algol
-greeting: [u8] = [72, 101, 108, 108, 111]  // "Hello"
-
-// String literals (syntactic sugar)
-greeting: [u8] = "Hello"
-
-// String operations
-length: i32 = string_len(greeting)  // 5
-substring: [u8] = string_slice(greeting, 0, 5)  // "Hello"
-```
-
-### Type Annotations
-
-```algol
-// Explicit type
-x: i32 = 42
-
-// Type inference (compiler infers from expression)
-x = 42  // Infers i32
-
-// Function return type
-fn add(a: i32, b: i32) -> i32 {
-  a + b
+// Iteration
+for key, value in ages {
+  print(key, value);
 }
 ```
 
-## Semantics
+#### Structs
 
-### Memory Management
-
-AlgolScript uses automatic garbage collection for memory safety:
+Named product types with named fields. No methods, no inheritance:
 
 ```algol
-// Memory is automatically allocated
-data = allocate_large_array()
+struct Point { x: float, y: float }
 
-// Memory is automatically freed when no longer referenced
-// Reference counting + cycle detection
-{
-  let temp = data
-}  // temp goes out of scope, reference decreased
-```
-
-**GC Features:**
-
-- Generational garbage collection
-- Reference counting for immediate cleanup
-- Cycle detection for reference cycles
-- Configurable collection triggers
-
-### Block Scoping
-
-Variables have block-lexical scope:
-
-```algol
-{
-  let x: i32 = 10
-  {
-    let y: i32 = 20
-    // x and y are visible here
-    x + y  // 30
-  }
-  // Only x is visible here, y is out of scope
-  x  // 10
-  // y  // Error: undefined
-}
-```
-
-### Lexical Scoping
-
-Functions capture variables from their enclosing scope (closures):
-
-```algol
-multiplier: i32 = 5
-
-fn scale(value: i32) -> i32 {
-  value * multiplier  // Captures multiplier from outer scope
+struct Model {
+  name: string,
+  layers: int,
+  weights: tensor<f32>,
 }
 
-scale(10)  // Returns 50
-multiplier = 10
-scale(10)  // Returns 100 (uses current value)
+// Construction
+p := Point { x: 1.0, y: 2.0 };
+
+// Field access
+print(p.x);
+
+// Field mutation
+p.x = 3.0;
 ```
 
-### First-Class Functions
+#### Tensors
 
-Functions are first-class values:
+N-dimensional arrays with a fixed element dtype. The core ML primitive:
 
 ```algol
-// Function as value
-adder = fn(a: i32, b: i32) -> i32 {
-  a + b
-}
+// Create from literal
+t := tensor([1.0, 2.0, 3.0]);                    // tensor<float>, shape [3]
 
-// Higher-order function
-fn apply(f: fn(i32, i32) -> i32, x: i32, y: i32) -> i32 {
-  f(x, y)
-}
+// Create with explicit dtype
+t := tensor<f16>([1.0, 2.0, 3.0]);               // tensor<f16>, shape [3]
 
-apply(adder, 3, 4)  // 7
+// Create with shape
+zeros := tensor<f32>.zeros([3, 224, 224]);        // shape [3, 224, 224]
+ones := tensor<f32>.ones([768]);                   // shape [768]
+rand := tensor<f32>.randn([128, 64]);             // random normal
+
+// Shape and dtype
+print(t.shape);     // [3]
+print(t.dtype);     // f16
+
+// Indexing
+val := t[0];                                       // scalar
+row := matrix[0, :];                               // slice row
+block := volume[:, 0:10, :];                       // slice block
+
+// Reshape (view, no copy)
+reshaped := t.reshape([1, 3]);
+
+// Elementwise operations
+c := a + b;          // add
+c := a * b;          // multiply
+c := a / b;          // divide
+c := a ** 2.0;       // power
+
+// Reduction
+sum := t.sum();
+mean := t.mean();
+max_val := t.max();
+
+// Linear algebra
+product := matmul(a, b);                           // matrix multiply
+d := dot(v1, v2);                                  // dot product
+n := norm(v);                                      // L2 norm
+
+// ML operations
+y := relu(x);
+y := softmax(x, dim: -1);
+y := layer_norm(x, normalized_shape: [768]);
+y := conv2d(input, weight, bias, stride: 1, padding: 0);
+loss := cross_entropy(logits, targets);
+
+// Autograd
+loss.backward();
+grad := weights.grad;
 ```
 
-## Expressions
+See [Tensor Operations](#tensor-operations) for the complete list.
 
-### Operator Syntax
+### Optional Type
 
-AlgolScript does not enforce operator precedence. Parentheses are required when mixing operators of different precedence:
-
-```algol
-// Simple expression
-a + b
-
-// Associative chains (same operator) - no parentheses needed
-a + b + c + d        // OK: left-associative chain
-a * b * c            // OK: left-associative chain
-a && b && c          // OK: logical AND chain
-
-// Mixed precedence - parentheses required
-(a + b) * c          // Required: + with *
-a + (b * c)          // Required: * with +
-(a || b) && c        // Required: || with &&
-
-// Comparison
-a == b
-a != b
-a < b
-a > b
-a <= b
-a >= b
-
-// Logical
-a && b  // AND
-a || b  // OR
-!a      // NOT
-```
-
-### Vector Operations
-
-Native syntax for vector and matrix operations:
+No null. Use `?T` for values that might not exist:
 
 ```algol
-// Vector declaration
-v1: [f32; 3] = [1.0, 2.0, 3.0]
-v2: [f32; 3] = [4.0, 5.0, 6.0]
-
-// Element-wise operations
-sum: [f32; 3] = v1 + v2  // [5.0, 7.0, 9.0]
-diff: [f32; 3] = v1 - v2  // [-3.0, -3.0, -3.0]
-product: [f32; 3] = v1 * v2  // [4.0, 10.0, 18.0]
-quot: [f32; 3] = v1 / v2  // [0.25, 0.4, 0.5]
-
-// Scalar operations
-scaled: [f32; 3] = v1 * 2.0  // [2.0, 4.0, 6.0]
-
-// Dot product
-dot: f32 = dot(v1, v2)  // 32.0
-
-// Matrix operations
-m1: [[f32; 2]; 2] = [[1.0, 2.0], [3.0, 4.0]]
-m2: [[f32; 2]; 2] = [[5.0, 6.0], [7.0, 8.0]]
-
-// Matrix multiplication
-product: [[f32; 2]; 2] = matmul(m1, m2)
-
-// Matrix-vector multiplication
-result: [f32; 2] = matmul(m1, [1.0, 2.0])
-```
-
-### Map Operation
-
-Apply operations over collections:
-
-```algol
-// Map over array
-numbers: [i32; 5] = [1, 2, 3, 4, 5]
-doubled: [i32; 5] = numbers.map(fn(x) -> i32 { x * 2 })
-
-// Map with type annotation
-doubled: [i32; 5] = numbers.map(fn(x: i32) -> i32 { x * 2 })
-
-// Map over table column
-ages: [i32; 3] = [25, 30, 28]
-adult_ages: [i32; 3] = ages.map(fn(age: i32) -> i32 {
-  age * 2
-})
-
-// Nested map
-matrix: [[i32; 3]; 2] = [[1, 2, 3], [4, 5, 6]]
-transposed: [i32] = matrix.map(fn(row: [i32; 3]) -> i32 {
-  row.map(fn(x: i32) -> i32 { x * 2 })
-})
-```
-
-## LLM Operation API
-
-### Syntax
-
-```algol
-llm(
-  prompt: expression,
-  model_size: expression,
-  reasoning_effort: expression,
-  context: array_expression
-): type
-```
-
-### Parameters
-
-#### `prompt`
-
-- **Type**: `[u8]` (string)
-- **Description**: The prompt text to send to the LLM
-
-#### `model_size`
-
-- **Type**: `string` (enum)
-- **Description**: Size/complexity of the model to use
-- **Values**: `"tiny" | "small" | "medium" | "large" | "xlarge"`
-
-#### `reasoning_effort`
-
-- **Type**: `f32`
-- **Description**: Computational effort for reasoning (0.0 to 1.0)
-- **Description**: Higher values produce more thorough reasoning
-
-#### `context`
-
-- **Type**: `[any]`
-- **Description**: Array of context items to include in the request
-- **Purpose**: Provides additional data, examples, or references for the LLM
-
-#### Return Type
-
-- **Type**: Specified as type parameter
-- **Description**: The expected return type from the LLM
-
-### Examples
-
-```algol
-// Basic text completion
-response: [u8] = llm(
-  prompt: "Complete this sentence: The future of AI is",
-  model_size: "medium",
-  reasoning_effort: 0.5,
-  context: []
-)
-
-// Structured output
-analysis: table = llm(
-  prompt: "Analyze the sentiment of the following text and return a table with columns: sentiment, confidence, keywords",
-  model_size: "large",
-  reasoning_effort: 0.8,
-  context: [
-    "This product is absolutely amazing and I love it!",
-    "Terrible experience, would not recommend."
-  ]
-)
-
-// With context examples
-classification: [u8] = llm(
-  prompt: "Classify the following email as: spam, important, or update",
-  model_size: "small",
-  reasoning_effort: 0.3,
-  context: [
-    "Example 1: 'Buy now and save 90%' → spam",
-    "Example 2: 'Meeting scheduled for tomorrow' → important",
-    "Example 3: 'Your account has been updated' → update"
-  ]
-)
-
-// Numerical output
-score: f32 = llm(
-  prompt: "Rate the complexity of this algorithm from 0.0 to 1.0:",
-  model_size: "medium",
-  reasoning_effort: 0.5,
-  context: ["Binary search algorithm"]
-)
-
-// Array output
-suggestions: [u8] = llm(
-  prompt: "Suggest 3 improvements for this code",
-  model_size: "large",
-  reasoning_effort: 0.9,
-  context: [
-    """
-    function foo(x) {
-      let y = x
-      for i in range(10) {
-        y = y + i
-      }
-      return y
+fn find(items: [string], target: string) -> ?int {
+  for i, item in items {
+    if item == target {
+      return i;
     }
-    """
-  ]
-)
+  }
+  return none;
+}
+
+result := find(names, "alice");
+if result is some(idx) {
+  print("found at", idx);
+} else {
+  print("not found");
+}
 ```
 
-### Type Checking for LLM Returns
-
-The compiler validates that the structure matches the expected type:
+### Type Aliases
 
 ```algol
-// Type-safe LLM calls
-result: i32 = llm(...)  // Compiler expects i32 output
-results: [i32; 5] = llm(...)  // Compiler expects array of 5 integers
-data: table = llm(...)  // Compiler expects table structure
-
-// Mismatched types will error at compile time
-wrong: i32 = llm(...)  // Error if LLM returns non-i32
+type Batch = tensor<f32>;
+type Config = {string: string};
+type Callback = fn(int) -> bool;
 ```
 
 ## Functions
@@ -455,262 +286,677 @@ wrong: i32 = llm(...)  // Error if LLM returns non-i32
 ### Definition
 
 ```algol
-fn function_name(param1: type1, param2: type2) -> return_type {
-  // Function body
-  result_value  // Implicit return of last expression
+fn add(a: int, b: int) -> int {
+  return a + b;
+}
+
+// Single-expression body
+fn double(x: int) -> int { x * 2 }
+
+// No return value
+fn greet(name: string) {
+  print("hello " + name);
 }
 ```
 
-### Examples
+### Closures
+
+Functions are first-class values. Closures capture their environment:
 
 ```algol
-// Simple function
-fn add(a: i32, b: i32) -> i32 {
-  a + b
+fn make_adder(n: int) -> fn(int) -> int {
+  return fn(x: int) -> int { x + n };
 }
 
-// Multi-statement function
-fn factorial(n: i32) -> i32 {
-  let result: i32 = 1
-  let i: i32 = 1
-  {
-    result = result * i
-    i = i + 1
-    condition: i <= n ? ({ continue }) : ({ break })
-  }
-  result
-}
+add5 := make_adder(5);
+print(add5(10));    // 15
 
-// Recursive function
-fn fibonacci(n: i32) -> i32 {
-  condition: n <= 1 ? ({ n }) : ({
-    fibonacci(n - 1) + fibonacci(n - 2)
-  })
-}
+// Inline closures
+numbers := [3, 1, 4, 1, 5];
+sorted := numbers.sort(fn(a: int, b: int) -> bool { a < b });
+doubled := numbers.map(fn(x: int) -> int { x * 2 });
 ```
 
-### Higher-Order Functions
+### Named Arguments
+
+For functions with many parameters (common in ML APIs):
 
 ```algol
-fn map_array(arr: [i32; n], f: fn(i32) -> i32): [i32; n] {
-  let result: [i32; n] = allocate_array(n)
-  let i: i32 = 0
-  {
-    result[i] = f(arr[i])
-    i = i + 1
-    condition: i < n ? ({ continue }) : ({ break })
-  }
-  result
+fn train(
+  model: Model,
+  data: tensor<f32>,
+  epochs: int = 10,
+  lr: float = 0.001,
+  batch_size: int = 32,
+) -> Model {
+  // ...
 }
 
-// Usage
-numbers: [i32; 5] = [1, 2, 3, 4, 5]
-doubled: [i32; 5] = map_array(numbers, fn(x) -> i32 { x * 2 })
+// Call with named args
+trained := train(model, data, epochs: 50, lr: 0.0001);
 ```
 
 ## Control Flow
 
-### Conditional Expression
+### If/Else
 
 ```algol
-result = condition ? (true_value) : (false_value)
-
-// Nested conditionals
-result = condition1 ? (
-  condition2 ? (value_a) : (value_b)
-) : (
-  condition3 ? (value_c) : (value_d)
-)
-```
-
-### Loop Pattern
-
-```algol
-// While-style loop using blocks
-{
-  // Initialization
-  let i: i32 = 0
-
-  // Loop body
-  i = i + 1
-
-  // Condition check
-  condition: i < 10 ? ({ continue }) : ({ break })
+if x > 0 {
+  print("positive");
+} else if x < 0 {
+  print("negative");
+} else {
+  print("zero");
 }
 
-// For-style loop
-{
-  let i: i32 = 0
-  {
-    // Loop body
-    process(array[i])
+// If as expression
+sign := if x > 0 { 1 } else if x < 0 { -1 } else { 0 };
+```
 
-    // Increment and condition
-    i = i + 1
-    condition: i < array_len(array) ? ({ continue }) : ({ break })
-  }
+### While Loop
+
+```algol
+i := 0;
+while i < 10 {
+  print(i);
+  i = i + 1;
+}
+```
+
+### For Loop
+
+Iterates over arrays, maps, ranges, and tensors:
+
+```algol
+// Range
+for i in 0..10 {
+  print(i);
+}
+
+// Array
+for item in items {
+  print(item);
+}
+
+// Array with index
+for i, item in items {
+  print(i, item);
+}
+
+// Map
+for key, value in config {
+  print(key, value);
+}
+```
+
+### Break and Continue
+
+```algol
+for i in 0..100 {
+  if i % 2 == 0 { continue; }
+  if i > 50 { break; }
+  print(i);
 }
 ```
 
 ## Error Handling
 
+Errors are values, not exceptions. Functions that can fail return `Result<T>`:
+
 ```algol
-// Result type pattern
-type Result<T> = {
-  ok: bool,
-  value: T,
-  error: [u8]
+// Result is a built-in sum type:
+//   ok(value: T)
+//   err(message: string)
+
+fn parse_int(s: string) -> Result<int> {
+  // ... parsing logic ...
+  if valid {
+    return ok(value);
+  }
+  return err("invalid integer: " + s);
 }
 
-fn divide(a: f32, b: f32) -> Result<f32> {
-  condition: b == 0.0 ? ({
-    { ok: false, value: 0.0, error: "Division by zero" }
-  }) : ({
-    { ok: true, value: a / b, error: "" }
-  })
+// Handle with match
+result := parse_int("42");
+match result {
+  ok(n) => print("parsed:", n),
+  err(msg) => print("error:", msg),
 }
 
-result = divide(10.0, 2.0)
-condition: result.ok ? ({
-  result.value  // 5.0
-}) : ({
-  handle_error(result.error)
-})
+// Propagate with ?
+fn load_config(path: string) -> Result<Config> {
+  content := fs.read(path)?;          // returns early on error
+  config := parse_json(content)?;
+  return ok(config);
+}
+
+// try/catch for convenience
+try {
+  data := fs.read("data.csv")?;
+  model := load_model("weights.bin")?;
+  result := model.predict(data)?;
+  print(result);
+} catch(e) {
+  print("failed:", e);
+}
 ```
 
-## Standard Library (Overview)
+## Async/Await
 
-### String Operations
-
-- `string_len(s: [u8]): i32`
-- `string_slice(s: [u8], start: i32, end: i32): [u8]`
-- `string_concat(s1: [u8], s2: [u8]): [u8]`
-- `string_compare(s1: [u8], s2: [u8]): i32`
-
-### Array Operations
-
-- `array_len(arr: [T; n]): i32`
-- `array_push(arr: [T], value: T): i32`
-- `array_pop(arr: [T]): T`
-- `array_slice(arr: [T], start: i32, end: i32): [T]`
-
-### Math Operations
-
-- `abs(x: f32): f32`
-- `sqrt(x: f32): f32`
-- `pow(x: f32, n: f32): f32`
-- `sin(x: f32): f32`
-- `cos(x: f32): f32`
-- `tan(x: f32): f32`
-
-### Vector Operations
-
-- `dot(a: [f32; n], b: [f32; n]): f32`
-- `norm(a: [f32; n]): f32`
-- `normalize(a: [f32; n]): [f32; n]`
-- `matmul(a: [[f32; m]; n], b: [[f32; p]; m]): [[f32; p]; n]`
-
-## Type Conversion
+Agent scripts need to wait on external operations (API calls, model inference, file I/O). AlgolScript uses async/await with structured concurrency:
 
 ```algol
-// Explicit type conversion
-fn to_i32(x: f32) -> i32 {
-  // Converts f32 to i32 (truncates)
+// Async function
+async fn fetch_data(url: string) -> Result<string> {
+  response := await http.get(url)?;
+  return ok(response.body);
 }
 
-fn to_f32(x: i32) -> f32 {
-  // Converts i32 to f32
+// Sequential async
+async fn pipeline() -> Result<string> {
+  raw := await fetch_data("https://api.example.com/data")?;
+  processed := await transform(raw)?;
+  return ok(processed);
 }
 
-fn to_u8(x: i32) -> u8 {
-  // Converts i32 to u8 (checked conversion, error on overflow)
+// Concurrent async (structured)
+async fn parallel_fetch() -> Result<[string]> {
+  // all() runs tasks concurrently and waits for all to complete
+  results := await all([
+    fetch_data("https://api.example.com/a"),
+    fetch_data("https://api.example.com/b"),
+    fetch_data("https://api.example.com/c"),
+  ])?;
+  return ok(results);
 }
 
-// Example
-x: f32 = 3.14
-y: i32 = to_i32(x)  // 3
+// Race (first to complete wins)
+async fn fastest() -> Result<string> {
+  result := await race([
+    fetch_from_primary(),
+    fetch_from_backup(),
+  ])?;
+  return ok(result);
+}
+```
+
+The host runtime manages the event loop. AlgolScript code never creates threads or manages concurrency primitives directly.
+
+## Host Capabilities
+
+AlgolScript has **no built-in I/O**. All side effects go through capability objects provided by the host at initialization. This makes sandboxing trivial — if you don't grant a capability, the script can't use it.
+
+### Standard Capabilities
+
+These are conventional names the host may provide. None are guaranteed — a host can provide all, some, or none:
+
+```algol
+// File system (if granted by host)
+content := await fs.read("data.csv")?;
+await fs.write("output.txt", result)?;
+files := await fs.list("./models/")?;
+
+// HTTP (if granted by host)
+response := await http.get("https://api.example.com/data")?;
+response := await http.post(url, body: json_data, headers: headers)?;
+
+// Model inference (if granted by host)
+result := await model.predict(input_tensor)?;
+embeddings := await model.embed(texts)?;
+
+// Logging (if granted by host)
+log.info("training epoch", epoch);
+log.error("failed to load", path);
+
+// Environment (if granted by host)
+api_key := env.get("API_KEY")?;
+
+// Database (if granted by host)
+rows := await db.query("SELECT * FROM users WHERE age > ?", [18])?;
+```
+
+### Capability Declaration
+
+Scripts declare what capabilities they require. The host checks this before execution:
+
+```algol
+// At top of script — declares required capabilities
+requires fs, http, model;
+
+// Optional capabilities (script works without them)
+optional log, env;
+```
+
+If a script tries to use an undeclared capability, the compiler rejects it. If it declares a capability the host doesn't provide, the host rejects the script before running it.
+
+## Tensor Operations
+
+### Creation
+
+```algol
+tensor<dtype>.zeros(shape)          // all zeros
+tensor<dtype>.ones(shape)           // all ones
+tensor<dtype>.full(shape, value)    // filled with value
+tensor<dtype>.randn(shape)          // random normal
+tensor<dtype>.rand(shape)           // random uniform [0, 1)
+tensor<dtype>.arange(start, end, step)  // range
+tensor<dtype>.eye(n)                // identity matrix
+tensor([1.0, 2.0, 3.0])            // from literal (infers dtype)
+tensor<f16>([1.0, 2.0, 3.0])       // from literal with explicit dtype
+```
+
+### Shape Operations
+
+```algol
+t.shape                   // [int] - dimensions
+t.dtype                   // dtype enum
+t.reshape(new_shape)      // view with new shape
+t.transpose()             // transpose last two dims
+t.transpose(dim0, dim1)   // transpose specific dims
+t.squeeze(dim)            // remove size-1 dimension
+t.unsqueeze(dim)          // add size-1 dimension
+t.expand(shape)           // broadcast to shape
+t.contiguous()            // ensure contiguous memory
+t.flatten()               // flatten to 1D
+t.view(shape)             // alias for reshape
+```
+
+### Elementwise Operations
+
+```algol
+a + b       a - b       a * b       a / b       // arithmetic
+a ** b                                           // power
+a == b      a != b      a < b       a > b       // comparison (returns bool tensor)
+a & b       a | b       ~a                       // bitwise (integer tensors)
+abs(a)      neg(a)      sign(a)                  // unary
+exp(a)      log(a)      log2(a)     log10(a)     // exponential
+sqrt(a)     rsqrt(a)                              // roots
+sin(a)      cos(a)      tan(a)                   // trigonometric
+floor(a)    ceil(a)     round(a)                 // rounding
+clamp(a, min, max)                               // clamping
+```
+
+### Reduction Operations
+
+```algol
+t.sum()               t.sum(dim)             // sum
+t.mean()              t.mean(dim)            // mean
+t.max()               t.max(dim)             // max
+t.min()               t.min(dim)             // min
+t.argmax(dim)         t.argmin(dim)          // arg max/min
+t.prod()              t.prod(dim)            // product
+t.any()               t.all()                // logical
+```
+
+### Linear Algebra
+
+```algol
+matmul(a, b)                    // matrix multiplication
+dot(a, b)                       // dot product
+norm(a)                         // L2 norm
+norm(a, p)                      // Lp norm
+cross(a, b)                     // cross product
+```
+
+### ML Operations
+
+```algol
+// Activations
+relu(x)
+gelu(x)
+silu(x)                         // SiLU / swish
+sigmoid(x)
+tanh(x)
+softmax(x, dim: -1)
+
+// Normalization
+layer_norm(x, normalized_shape, weight, bias)
+batch_norm(x, running_mean, running_var, weight, bias)
+group_norm(x, num_groups, weight, bias)
+
+// Convolution
+conv1d(input, weight, bias, stride, padding)
+conv2d(input, weight, bias, stride, padding)
+
+// Pooling
+max_pool2d(input, kernel_size, stride, padding)
+avg_pool2d(input, kernel_size, stride, padding)
+
+// Loss
+cross_entropy(logits, targets)
+mse_loss(prediction, target)
+binary_cross_entropy(prediction, target)
+
+// Attention
+scaled_dot_product_attention(query, key, value, mask)
+
+// Dropout (training only)
+dropout(x, p: 0.1, training: true)
+
+// Embedding
+embedding(indices, weight)
+```
+
+### Autograd
+
+```algol
+// Enable gradient tracking
+x := tensor<f32>.randn([10, 10]).requires_grad();
+y := matmul(x, x) + x;
+loss := y.sum();
+
+// Backpropagation
+loss.backward();
+
+// Access gradients
+grad := x.grad;
+
+// Gradient context
+with no_grad() {
+  // Operations here don't track gradients
+  inference_result := model_forward(input);
+}
+```
+
+### Dtype Conversion
+
+```algol
+t_f16 := t.to(f16);              // convert to half precision
+t_f32 := t.to(f32);              // convert to single precision
+t_int := t.to(i32);              // convert to integer
+```
+
+## String Operations
+
+```algol
+// String interpolation
+name := "world";
+greeting := "hello {name}";         // "hello world"
+result := "sum = {a + b}";          // expression interpolation
+
+// Methods
+s.len                               // length
+s.upper()                           // uppercase
+s.lower()                           // lowercase
+s.trim()                            // strip whitespace
+s.split(delimiter)                  // -> [string]
+s.contains(substring)               // -> bool
+s.starts_with(prefix)               // -> bool
+s.ends_with(suffix)                 // -> bool
+s.replace(old, new)                 // -> string
+s[start:end]                        // slice
+
+// Conversion
+str(42)                              // "42"
+str(3.14)                            // "3.14"
+int("42")                            // parse to int (returns Result)
+float("3.14")                        // parse to float (returns Result)
+```
+
+## Math Operations
+
+Available as builtins (no import needed):
+
+```algol
+abs(x)       // absolute value
+sqrt(x)      // square root
+pow(x, n)    // power
+sin(x)       cos(x)       tan(x)       // trig
+asin(x)      acos(x)      atan2(y, x)  // inverse trig
+exp(x)       log(x)       log2(x)      // exponential/logarithmic
+floor(x)     ceil(x)      round(x)     // rounding
+min(a, b)    max(a, b)                  // comparison
+PI           E                          // constants
 ```
 
 ## Example Programs
 
-### Simple Calculator
+### Simple Script
 
 ```algol
-fn calculate(a: i32, b: i32, op: [u8]) -> i32 {
-  condition: op == "+" ? ({ a + b })
-    : op == "-" ? ({ a - b })
-    : op == "*" ? ({ a * b })
-    : ({ a / b })
+fn fibonacci(n: int) -> int {
+  if n <= 1 { return n; }
+  a := 0;
+  b := 1;
+  for i in 2..n+1 {
+    temp := a + b;
+    a = b;
+    b = temp;
+  }
+  return b;
 }
 
-result = calculate(10, 5, "+")  // 15
+fn main() {
+  for i in 0..10 {
+    print(fibonacci(i));
+  }
+}
 ```
 
-### Vector Processing
+### Agent Tool Script
 
 ```algol
-fn process_vectors(v1: [f32; 3], v2: [f32; 3]) -> f32 {
-  let sum: [f32; 3] = v1 + v2
-  let diff: [f32; 3] = v1 - v2
-  let similarity: f32 = dot(v1, v2) / (norm(v1) * norm(v2))
-  similarity
+requires http, model, log;
+
+struct SearchResult {
+  title: string,
+  url: string,
+  relevance: float,
 }
 
-a: [f32; 3] = [1.0, 2.0, 3.0]
-b: [f32; 3] = [2.0, 3.0, 4.0]
-sim: f32 = process_vectors(a, b)
+async fn search_and_summarize(query: string) -> Result<string> {
+  log.info("searching for: {query}");
+
+  response := await http.get(
+    "https://api.search.com/v1/search",
+    params: {"q": query, "limit": "5"},
+  )?;
+
+  results: [SearchResult] = parse_json(response.body)?;
+
+  // Filter by relevance
+  relevant := results.filter(fn(r: SearchResult) -> bool {
+    r.relevance > 0.7
+  });
+
+  // Summarize with model
+  context := relevant.map(fn(r: SearchResult) -> string {
+    "{r.title}: {r.url}"
+  });
+
+  summary := await model.predict(
+    prompt: "Summarize these search results for: {query}",
+    context: context,
+  )?;
+
+  return ok(summary);
+}
+
+async fn main() -> Result<()> {
+  summary := await search_and_summarize("AlgolScript language")?;
+  print(summary);
+  return ok(());
+}
 ```
 
-### LLM-Powered Analysis
+### ML Training Loop
 
 ```algol
-fn analyze_sentiment(text: [u8]) -> table {
-  let result: table = llm(
-    prompt: "Analyze sentiment and extract key information:",
-    model_size: "medium",
-    reasoning_effort: 0.7,
-    context: [
-      text,
-      """
-      Return a table with columns:
-      - sentiment: [u8] (positive/negative/neutral)
-      - confidence: f32 (0.0 to 1.0)
-      - topics: [u8] (comma-separated)
-      """
-    ]
-  )
-  result
+requires model, log;
+
+struct TrainConfig {
+  epochs: int,
+  lr: float,
+  batch_size: int,
 }
 
-review: [u8] = "This product exceeded my expectations!"
-analysis = analyze_sentiment(review)
+fn create_linear(in_features: int, out_features: int) -> tensor<f32> {
+  return tensor<f32>.randn([in_features, out_features]) * 0.01;
+}
+
+async fn train(config: TrainConfig) -> Result<tensor<f32>> {
+  weights := create_linear(784, 10).requires_grad();
+  bias := tensor<f32>.zeros([10]).requires_grad();
+
+  for epoch in 0..config.epochs {
+    // Get batch from host
+    batch := await model.next_batch(config.batch_size)?;
+    images := batch.images;     // tensor<f32> [batch, 784]
+    labels := batch.labels;     // tensor<i32> [batch]
+
+    // Forward pass
+    logits := matmul(images, weights) + bias;
+    loss := cross_entropy(logits, labels);
+
+    // Backward pass
+    loss.backward();
+
+    // SGD update
+    with no_grad() {
+      weights = weights - config.lr * weights.grad;
+      bias = bias - config.lr * bias.grad;
+    }
+
+    if epoch % 10 == 0 {
+      log.info("epoch {epoch}: loss = {loss.item()}");
+    }
+  }
+
+  return ok(weights);
+}
+
+async fn main() -> Result<()> {
+  config := TrainConfig {
+    epochs: 100,
+    lr: 0.01,
+    batch_size: 32,
+  };
+  weights := await train(config)?;
+  log.info("training complete");
+  return ok(());
+}
+```
+
+### Plugin Example
+
+```algol
+// A plugin that the host loads and calls into
+// Only needs logging — no file or network access
+
+optional log;
+
+struct PluginInput {
+  text: string,
+  max_length: int,
+}
+
+struct PluginOutput {
+  summary: string,
+  word_count: int,
+  truncated: bool,
+}
+
+fn process(input: PluginInput) -> PluginOutput {
+  words := input.text.split(" ");
+
+  truncated := false;
+  summary_words := words;
+  if words.len > input.max_length {
+    summary_words = words[0:input.max_length];
+    truncated = true;
+  }
+
+  summary := summary_words.join(" ");
+  if truncated {
+    summary = summary + "...";
+  }
+
+  return PluginOutput {
+    summary: summary,
+    word_count: words.len,
+    truncated: truncated,
+  };
+}
 ```
 
 ## Compilation and Execution
 
 ### Compilation Phases
 
-1. **Parsing**: Tokenization and AST construction
-2. **Type Checking**: Static type validation
-3. **Optimization**: Intermediate representation optimization
-4. **Code Generation**: Target code generation (binary, WASM, etc.)
+1. **Lexing** — tokenization
+2. **Parsing** — AST construction
+3. **Analysis** — type checking, capability checking, scope resolution
+4. **LLVM IR Generation** — typed intermediate representation
+5. **Optimization** — LLVM optimization passes
+6. **Code Generation** — native binary or shared library
 
-### Execution Model
+### Embedding Model
 
-- JIT (Just-In-Time) compilation optional
-- Native binary compilation available
-- WebAssembly target support
-- Debug mode with runtime checks
+The host application:
+1. Compiles AlgolScript source to a module
+2. Validates capability requirements against granted capabilities
+3. Provides capability objects (fs, http, model, etc.) at initialization
+4. Calls exported functions (like `main` or `process`)
+5. Manages the event loop for async operations
+6. Controls resource limits (memory, CPU time, tensor sizes)
 
-## Future Extensions
+```
+Host Application
+├── AlgolScript Runtime
+│   ├── GC (mark-and-sweep)
+│   ├── Tensor Engine (dispatches to host ML backend)
+│   └── Async Executor (host-managed event loop)
+├── Capability Providers
+│   ├── fs: FileSystemCapability
+│   ├── http: HttpCapability
+│   ├── model: ModelCapability
+│   └── log: LogCapability
+└── Resource Limits
+    ├── max_memory: 512MB
+    ├── max_cpu_time: 30s
+    └── max_tensor_size: 1GB
+```
 
-### Planned Features
+## What This Language Is NOT
 
-- Generic types and polymorphic functions
-- Module system and package management
+To keep the surface area small, the following are explicitly **out of scope**:
 
-### Considerations
+- **Raw pointers and manual memory management.** The GC handles it.
+- **POSIX syscalls and direct OS access.** The host provides capabilities.
+- **Threads and locks.** Use async/await. The host manages concurrency.
+- **Inheritance and OOP.** Use structs and functions.
+- **Macros.** Keep the language simple and readable.
+- **Generics** (beyond tensors). Tensor dtype parameterization is the one generic-like feature. Everything else uses concrete types.
+- **Exceptions with stack unwinding.** Use Result types.
+- **Operator overloading** (beyond tensor ops). Tensors get arithmetic operators. User types don't.
 
-- SIMD vectorization for numeric operations
-- GPU acceleration support
-- Hardware-specific optimizations
+## Changes from Previous Spec
+
+### Removed
+- Raw pointer type (`ptr`) and `gc_alloc`
+- All POSIX syscall wrappers (`sys_socket`, `sys_connect`, `sys_send`, etc.)
+- SoA as user-facing type (compiler may optimize AoS to SoA internally)
+- `table` type (replaced by `map` and `struct`)
+- Ternary conditional syntax (`condition ? (a) : (b)`) — use `if` expression
+- Custom loop patterns with `continue`/`break` in conditional blocks — use `while` and `for`
+- i128/i256/u128/u256/f8/f128/f256 types (no hardware support)
+
+### Added
+- `string` as first-class type (not `[u8]`)
+- `tensor<dtype>` with shape checking and autograd
+- `?T` optional type with `none`
+- `Result<T>` error handling with `?` propagation
+- `async`/`await` with structured concurrency
+- `requires`/`optional` capability declarations
+- Closures as first-class values
+- `for..in` loops with ranges and iterables
+- Named function arguments with defaults
+- `match` expressions for Result types
+- `with` blocks (for `no_grad()` and similar scoped contexts)
+
+### Changed
+- Default integer is `int` (64-bit), not `i64`. `i64` still works but is for tensor dtypes.
+- Default float is `float` (64-bit), not `f64`. `f64` still works but is for tensor dtypes.
+- `:=` for initial binding, `=` for reassignment (was `:=` for both)
+- Semicolons are required (were optional in some contexts)
+- `print()` is a builtin, not a syscall wrapper
