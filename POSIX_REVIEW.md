@@ -2,7 +2,7 @@
 
 ## Summary
 
-This document summarizes the current state of POSIX filesystem operations in the AlgolScript compiler.
+This document summarizes the current state of POSIX filesystem operations in the Mog compiler.
 
 ## Changes Made
 
@@ -52,12 +52,12 @@ Added LLVM declarations for:
 ### Working Tests (Exit Code 0)
 | Test | Functions Tested |
 |------|-----------------|
-| test_posix_cwd.algol | mkdir, chdir, rmdir |
-| test_posix_dup.algol | open, dup, dup2, close, unlink |
-| test_posix_mkdir.algol | mkdir, rmdir |
-| test_posix_permissions.algol | open, chmod, fchmod, chown, fchown, close, unlink |
-| test_posix_rename.algol | open, write, close, rename, access, unlink |
-| test_posix_special.algol | creat, mkfifo, mknod, unlink |
+| test_posix_cwd.mog | mkdir, chdir, rmdir |
+| test_posix_dup.mog | open, dup, dup2, close, unlink |
+| test_posix_mkdir.mog | mkdir, rmdir |
+| test_posix_permissions.mog | open, chmod, fchmod, chown, fchown, close, unlink |
+| test_posix_rename.mog | open, write, close, rename, access, unlink |
+| test_posix_special.mog | creat, mkfifo, mknod, unlink |
 
 ### Known Issues
 
@@ -69,7 +69,7 @@ Added LLVM declarations for:
 **Workaround**: Use `creat()` instead of `open()` when creating files.
 
 **Example**:
-```algol
+```mog
 # This fails on macOS:
 fd: i64 = open("file.txt", O_CREAT | O_WRONLY, 0644);
 
@@ -80,15 +80,15 @@ fd: i64 = creat("file.txt", 0644);
 #### 2. Test File Issues
 Some test files have incorrect usage patterns:
 
-**test_posix_read.algol**, **test_posix_comprehensive.algol**: Use `cast<i64>(buffer)` which produces `i64` but functions expect `ptr`.
+**test_posix_read.mog**, **test_posix_comprehensive.mog**: Use `cast<i64>(buffer)` which produces `i64` but functions expect `ptr`.
 
 **Fix**: Pass arrays directly without cast:
-```algol
+```mog
 buf: i64[] = [0, 0, 0, 0, 0];
 bytes: i64 = read(fd, buf, 5);  # Pass buf directly, not cast<i64>(buf)
 ```
 
-**test_posix_directory_read.algol**: Uses `rewinddir(dir)` where `dir` is `i64` but function expects `ptr`.
+**test_posix_directory_read.mog**: Uses `rewinddir(dir)` where `dir` is `i64` but function expects `ptr`.
 
 ## Supported POSIX Functions (48 total)
 
@@ -155,10 +155,10 @@ EPERM through ERANGE (34 standard errno values)
 
 ```bash
 # Working tests (after fixes)
-test_posix_cwd.algol        # mkdir, chdir, rmdir
-test_posix_dup.algol        # dup, dup2
-test_posix_mkdir.algol      # mkdir, rmdir
-test_posix_permissions.algol # chmod, fchmod, chown, fchown
-test_posix_rename.algol     # rename, access
-test_posix_special.algol    # creat, mkfifo, mknod
+test_posix_cwd.mog        # mkdir, chdir, rmdir
+test_posix_dup.mog        # dup, dup2
+test_posix_mkdir.mog      # mkdir, rmdir
+test_posix_permissions.mog # chmod, fchmod, chown, fchown
+test_posix_rename.mog     # rename, access
+test_posix_special.mog    # creat, mkfifo, mknod
 ```

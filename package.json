@@ -1,5 +1,5 @@
 {
-  "name": "algolscript",
+  "name": "mog",
   "version": "0.1.0",
   "type": "module",
   "description": "Algol-68 style programming language with LLM integration, compiled via LLVM",

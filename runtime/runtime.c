@@ -1154,7 +1154,7 @@ uint64_t input_u64(void) {
 #include <fcntl.h>
 #include <errno.h>
 
-/* Socket constants exposed to AlgolScript */
+/* Socket constants exposed to Mog */
 const int AS_AF_INET = AF_INET;
 const int AS_SOCK_STREAM = SOCK_STREAM;
 const int AS_SOCK_DGRAM = SOCK_DGRAM;

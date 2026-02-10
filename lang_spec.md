@@ -1,8 +1,8 @@
-# AlgolScript Language Specification
+# Mog Language Specification
 
 ## Overview
 
-AlgolScript is a small, statically-typed, embeddable language for ML workflows and LLM agent scripting. It compiles to native code via LLVM. Think of it as a statically-typed Lua with native tensor support and async I/O.
+Mog is a small, statically-typed, embeddable language for ML workflows and LLM agent scripting. It compiles to native code via LLVM. Think of it as a statically-typed Lua with native tensor support and async I/O.
 
 **Target use cases:**
 - LLM agent tool-use scripts
@@ -35,7 +35,7 @@ AlgolScript is a small, statically-typed, embeddable language for ML workflows a
 
 Programs are sequences of top-level declarations (functions, structs, constants) and a `main` entry point.
 
-```algol
+```mog
 struct Point { x: float, y: float }
 
 fn distance(a: Point, b: Point) -> float {
@@ -54,7 +54,7 @@ fn main() {
 
 ### Statements
 
-```algol
+```mog
 // Variable declaration with type inference
 x := 42;
 name := "hello";
@@ -76,7 +76,7 @@ some_function();
 
 ### Comments
 
-```algol
+```mog
 // Single line comment
 
 /* Multi-line comment */
@@ -112,7 +112,7 @@ f16  bf16  f32  f64
 
 These exist primarily as **tensor element types**. In scalar code, you almost always use `int` and `float`:
 
-```algol
+```mog
 // Scalar code: use int and float
 count := 42;            // int
 ratio := 3.14;          // float
@@ -131,7 +131,7 @@ Widening conversions are implicit (i32 -> int, f32 -> float). Narrowing requires
 
 Dynamically-sized, homogeneous, GC-managed:
 
-```algol
+```mog
 numbers := [1, 2, 3, 4, 5];             // [int]
 names := ["alice", "bob", "charlie"];    // [string]
 
@@ -149,7 +149,7 @@ slice := numbers[1:3];       // [2, 3]
 
 Key-value dictionaries. Keys must be `int`, `float`, `string`, or `bool`:
 
-```algol
+```mog
 ages := {"alice": 30, "bob": 25};       // {string: int}
 config := {1: "one", 2: "two"};         // {int: string}
 
@@ -174,7 +174,7 @@ for key, value in ages {
 
 Named product types with named fields. No methods, no inheritance:
 
-```algol
+```mog
 struct Point { x: float, y: float }
 
 struct Model {
@@ -197,7 +197,7 @@ p.x = 3.0;
 
 N-dimensional arrays with a fixed element dtype. The core ML primitive:
 
-```algol
+```mog
 // Create from literal
 t := tensor([1.0, 2.0, 3.0]);                    // tensor<float>, shape [3]
 
@@ -255,7 +255,7 @@ See [Tensor Operations](#tensor-operations) for the complete list.
 
 No null. Use `?T` for values that might not exist:
 
-```algol
+```mog
 fn find(items: [string], target: string) -> ?int {
   for i, item in items {
     if item == target {
@@ -275,7 +275,7 @@ if result is some(idx) {
 
 ### Type Aliases
 
-```algol
+```mog
 type Batch = tensor<f32>;
 type Config = {string: string};
 type Callback = fn(int) -> bool;
@@ -285,7 +285,7 @@ type Callback = fn(int) -> bool;
 
 ### Definition
 
-```algol
+```mog
 fn add(a: int, b: int) -> int {
   return a + b;
 }
@@ -303,7 +303,7 @@ fn greet(name: string) {
 
 Functions are first-class values. Closures capture their environment:
 
-```algol
+```mog
 fn make_adder(n: int) -> fn(int) -> int {
   return fn(x: int) -> int { x + n };
 }
@@ -321,7 +321,7 @@ doubled := numbers.map(fn(x: int) -> int { x * 2 });
 
 For functions with many parameters (common in ML APIs):
 
-```algol
+```mog
 fn train(
   model: Model,
   data: tensor<f32>,
@@ -340,7 +340,7 @@ trained := train(model, data, epochs: 50, lr: 0.0001);
 
 ### If/Else
 
-```algol
+```mog
 if x > 0 {
   print("positive");
 } else if x < 0 {
@@ -355,7 +355,7 @@ sign := if x > 0 { 1 } else if x < 0 { -1 } else { 0 };
 
 ### While Loop
 
-```algol
+```mog
 i := 0;
 while i < 10 {
   print(i);
@@ -367,7 +367,7 @@ while i < 10 {
 
 Iterates over arrays, maps, ranges, and tensors:
 
-```algol
+```mog
 // Range
 for i in 0..10 {
   print(i);
@@ -391,7 +391,7 @@ for key, value in config {
 
 ### Break and Continue
 
-```algol
+```mog
 for i in 0..100 {
   if i % 2 == 0 { continue; }
   if i > 50 { break; }
@@ -403,7 +403,7 @@ for i in 0..100 {
 
 Errors are values, not exceptions. Functions that can fail return `Result<T>`:
 
-```algol
+```mog
 // Result is a built-in sum type:
 //   ok(value: T)
 //   err(message: string)
@@ -443,9 +443,9 @@ try {
 
 ## Async/Await
 
-Agent scripts need to wait on external operations (API calls, model inference, file I/O). AlgolScript uses async/await with structured concurrency:
+Agent scripts need to wait on external operations (API calls, model inference, file I/O). Mog uses async/await with structured concurrency:
 
-```algol
+```mog
 // Async function
 async fn fetch_data(url: string) -> Result<string> {
   response := await http.get(url)?;
@@ -480,17 +480,17 @@ async fn fastest() -> Result<string> {
 }
 ```
 
-The host runtime manages the event loop. AlgolScript code never creates threads or manages concurrency primitives directly.
+The host runtime manages the event loop. Mog code never creates threads or manages concurrency primitives directly.
 
 ## Host Capabilities
 
-AlgolScript has **no built-in I/O**. All side effects go through capability objects provided by the host at initialization. This makes sandboxing trivial — if you don't grant a capability, the script can't use it.
+Mog has **no built-in I/O**. All side effects go through capability objects provided by the host at initialization. This makes sandboxing trivial — if you don't grant a capability, the script can't use it.
 
 ### Standard Capabilities
 
 These are conventional names the host may provide. None are guaranteed — a host can provide all, some, or none:
 
-```algol
+```mog
 // File system (if granted by host)
 content := await fs.read("data.csv")?;
 await fs.write("output.txt", result)?;
@@ -519,7 +519,7 @@ rows := await db.query("SELECT * FROM users WHERE age > ?", [18])?;
 
 Scripts declare what capabilities they require. The host checks this before execution:
 
-```algol
+```mog
 // At top of script — declares required capabilities
 requires fs, http, model;
 
@@ -533,7 +533,7 @@ If a script tries to use an undeclared capability, the compiler rejects it. If i
 
 ### Creation
 
-```algol
+```mog
 tensor<dtype>.zeros(shape)          // all zeros
 tensor<dtype>.ones(shape)           // all ones
 tensor<dtype>.full(shape, value)    // filled with value
@@ -547,7 +547,7 @@ tensor<f16>([1.0, 2.0, 3.0])       // from literal with explicit dtype
 
 ### Shape Operations
 
-```algol
+```mog
 t.shape                   // [int] - dimensions
 t.dtype                   // dtype enum
 t.reshape(new_shape)      // view with new shape
@@ -563,7 +563,7 @@ t.view(shape)             // alias for reshape
 
 ### Elementwise Operations
 
-```algol
+```mog
 a + b       a - b       a * b       a / b       // arithmetic
 a ** b                                           // power
 a == b      a != b      a < b       a > b       // comparison (returns bool tensor)
@@ -578,7 +578,7 @@ clamp(a, min, max)                               // clamping
 
 ### Reduction Operations
 
-```algol
+```mog
 t.sum()               t.sum(dim)             // sum
 t.mean()              t.mean(dim)            // mean
 t.max()               t.max(dim)             // max
@@ -590,7 +590,7 @@ t.any()               t.all()                // logical
 
 ### Linear Algebra
 
-```algol
+```mog
 matmul(a, b)                    // matrix multiplication
 dot(a, b)                       // dot product
 norm(a)                         // L2 norm
@@ -600,7 +600,7 @@ cross(a, b)                     // cross product
 
 ### ML Operations
 
-```algol
+```mog
 // Activations
 relu(x)
 gelu(x)
@@ -639,7 +639,7 @@ embedding(indices, weight)
 
 ### Autograd
 
-```algol
+```mog
 // Enable gradient tracking
 x := tensor<f32>.randn([10, 10]).requires_grad();
 y := matmul(x, x) + x;
@@ -660,7 +660,7 @@ with no_grad() {
 
 ### Dtype Conversion
 
-```algol
+```mog
 t_f16 := t.to(f16);              // convert to half precision
 t_f32 := t.to(f32);              // convert to single precision
 t_int := t.to(i32);              // convert to integer
@@ -668,7 +668,7 @@ t_int := t.to(i32);              // convert to integer
 
 ## String Operations
 
-```algol
+```mog
 // String interpolation
 name := "world";
 greeting := "hello {name}";         // "hello world"
@@ -697,7 +697,7 @@ float("3.14")                        // parse to float (returns Result)
 
 Available as builtins (no import needed):
 
-```algol
+```mog
 abs(x)       // absolute value
 sqrt(x)      // square root
 pow(x, n)    // power
@@ -713,7 +713,7 @@ PI           E                          // constants
 
 ### Simple Script
 
-```algol
+```mog
 fn fibonacci(n: int) -> int {
   if n <= 1 { return n; }
   a := 0;
@@ -735,7 +735,7 @@ fn main() {
 
 ### Agent Tool Script
 
-```algol
+```mog
 requires http, model, log;
 
 struct SearchResult {
@@ -773,7 +773,7 @@ async fn search_and_summarize(query: string) -> Result<string> {
 }
 
 async fn main() -> Result<()> {
-  summary := await search_and_summarize("AlgolScript language")?;
+  summary := await search_and_summarize("Mog language")?;
   print(summary);
   return ok(());
 }
@@ -781,7 +781,7 @@ async fn main() -> Result<()> {
 
 ### ML Training Loop
 
-```algol
+```mog
 requires model, log;
 
 struct TrainConfig {
@@ -839,7 +839,7 @@ async fn main() -> Result<()> {
 
 ### Plugin Example
 
-```algol
+```mog
 // A plugin that the host loads and calls into
 // Only needs logging — no file or network access
 
@@ -893,7 +893,7 @@ fn process(input: PluginInput) -> PluginOutput {
 ### Embedding Model
 
 The host application:
-1. Compiles AlgolScript source to a module
+1. Compiles Mog source to a module
 2. Validates capability requirements against granted capabilities
 3. Provides capability objects (fs, http, model, etc.) at initialization
 4. Calls exported functions (like `main` or `process`)
@@ -902,7 +902,7 @@ The host application:
 
 ```
 Host Application
-├── AlgolScript Runtime
+├── Mog Runtime
 │   ├── GC (mark-and-sweep)
 │   ├── Tensor Engine (dispatches to host ML backend)
 │   └── Async Executor (host-managed event loop)

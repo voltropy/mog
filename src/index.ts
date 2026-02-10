@@ -5,13 +5,13 @@ import { basename } from "path"
 
 const filePath = process.argv[2]
 if (!filePath) {
-  console.log("Usage: bun run src/index.ts <source.algol>")
+  console.log("Usage: bun run src/index.ts <source.mog>")
   process.exit(1)
 }
 
 const source = readFileSync(filePath, "utf-8")
 
-console.log("\nAlgolScript Compiler")
+console.log("\nMog Compiler")
 console.log("===================")
 
 const result = await compile(source)
@@ -28,7 +28,7 @@ console.log("\\nCompiling runtime...")
 const runtimeLib = await compileRuntime()
 
 console.log("Linking to executable...")
-const outputPath = process.cwd() + "/" + basename(filePath, ".algol")
+const outputPath = process.cwd() + "/" + basename(filePath, ".mog")
 await linkToExecutable(result.llvmIR, outputPath, runtimeLib)
 
 console.log(`\\n✓ Executable created: ${outputPath}`)

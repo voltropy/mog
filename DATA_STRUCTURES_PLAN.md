@@ -1,4 +1,4 @@
-# AlgolScript Data Structure Implementation Plan
+# Mog Data Structure Implementation Plan
 
 **Status**: ✅ Completed
 
@@ -349,7 +349,7 @@ Phase 5 (Integration)
 
 ### Map Examples
 
-```algol
+```mog
 // Map literal with string keys
 config := {host: "localhost", port: 8080};
 
@@ -364,7 +364,7 @@ println(config[key]);      // runtime key lookup
 
 ### Struct Examples
 
-```algol
+```mog
 // Struct definition
 struct Point {
     x: f64,
@@ -381,7 +381,7 @@ p.x := 5.0;  // Assignment
 
 ### AoS (Array of Structs) Examples
 
-```algol
+```mog
 // Define a struct first
 struct Particle {
     x: f64,
@@ -408,7 +408,7 @@ c := cap(particles);
 
 ### SoA (Struct of Arrays) Examples
 
-```algol
+```mog
 // SoA struct definition - each field is an array
 struct Particles {
     x: [f64],
@@ -438,7 +438,7 @@ for i := 0 to len(particles) {
 
 ### Performance Comparison
 
-```algol
+```mog
 // AoS: Good for row-major access (process whole struct at once)
 for i := 0 to len(particles) {
     updateParticle(particles[i]);  // Cache-friendly per-particle
@@ -452,7 +452,7 @@ for i := 0 to len(particles) {
 
 ### Migration Guide (table → Map)
 
-```algol
+```mog
 // Old syntax (deprecated)
 tbl: table := {a: 1, b: 2};
 

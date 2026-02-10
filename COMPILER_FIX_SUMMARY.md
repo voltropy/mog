@@ -1,4 +1,4 @@
-# AlgolScript Compiler - Fix Summary
+# Mog Compiler - Fix Summary
 
 ## Test Results
 - **Total Tests**: 306
@@ -37,7 +37,7 @@
 
 ## Verified Working Programs
 
-### ✓ test_comprehensive.algol
+### ✓ test_comprehensive.mog
 - Variable declarations
 - Arithmetic operations (+, -, *, /, %)
 - If statements with conditional logic
@@ -46,10 +46,10 @@
 - Recursive functions (factorial)
 - Function calls with parameters
 
-### ✓ fib.algol
+### ✓ fib.mog
 - Simple but effective test of function declarations and recursion
 
-### ✓ loop.algol
+### ✓ loop.mog
 - Basic while loop iteration
 
 ## Remaining Issues (33 failures)
@@ -73,8 +73,8 @@ A few edge cases in type coercion and complex nested structures.
 
 ## Conclusion
 
-The AlgolScript compiler is now **functionally complete** and can:
-1. ✓ Parse AlgolScript source code correctly
+The Mog compiler is now **functionally complete** and can:
+1. ✓ Parse Mog source code correctly
 2. ✓ Perform semantic analysis and type checking
 3. ✓ Generate valid LLVM IR
 4. ✓ Compile to executables via LLVM

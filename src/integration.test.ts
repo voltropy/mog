@@ -12,12 +12,12 @@ interface CompileResult {
 }
 
 async function compileAndRun(source: string, args: string[] = []): Promise<{ exitCode: number, stdout: string, stderr: string }> {
-  const sourceDir = join(tmpdir(), `algol-test-${Date.now()}`)
+  const sourceDir = join(tmpdir(), `mog-test-${Date.now()}`)
   
   try {
     mkdirSync(sourceDir, { recursive: true })
     
-    const sourceFile = join(sourceDir, "test.algol")
+    const sourceFile = join(sourceDir, "test.mog")
     const llFile = join(sourceDir, "test.ll")
     const oFile = join(sourceDir, "test.o")
     const runtimePath = join(process.cwd(), "build", "runtime.a")

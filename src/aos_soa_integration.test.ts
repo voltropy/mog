@@ -6,7 +6,7 @@ import { existsSync, unlinkSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
-// Helper to compile and run AlgolScript code
+// Helper to compile and run Mog code
 async function compileAndRun(source: string, expectedExitCode: number = 0): Promise<string> {
   const result = await compile(source)
   if (result.errors.length > 0) {

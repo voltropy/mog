@@ -65,7 +65,7 @@ export async function compile(source: string): Promise<CompiledProgram> {
   }
 }
 
-export class AlgolScriptCompiler implements Compiler {
+export class MogCompiler implements Compiler {
   async compile(source: string): Promise<CompiledProgram> {
     return compile(source)
   }
@@ -94,7 +94,7 @@ export async function compileToExecutable(source: string, outputPath: string): P
   await llc.exited
 
   const objFile = llFile.replace(".ll", ".o")
-  const clang = Bun.spawn(["clang", objFile, "-o", outputPath, "-L./runtime", "-lalgol_runtime"], {
+  const clang = Bun.spawn(["clang", objFile, "-o", outputPath, "-L./runtime", "-lmog_runtime"], {
     cwd: process.cwd(),
   })
   await clang.exited

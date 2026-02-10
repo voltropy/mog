@@ -2,7 +2,7 @@
 
 import re
 
-def format_algol(filepath):
+def format_mog(filepath):
     with open(filepath, 'r') as f:
         lines = f.read().splitlines()
 
@@ -76,11 +76,11 @@ def format_algol(filepath):
 
     print(f"Formatted {filepath}")
 
-# Process all .algol files
+# Process all .mog files
 import glob
-for filepath in sorted(glob.glob('./*.algol')):
+for filepath in sorted(glob.glob('./*.mog')):
     try:
-        format_algol(filepath)
+        format_mog(filepath)
     except Exception as e:
         print(f"Error formatting {filepath}: {e}")
 

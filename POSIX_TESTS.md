@@ -1,8 +1,8 @@
-# AlgolScript POSIX Test Suite Summary
+# Mog POSIX Test Suite Summary
 
 ## Overview
 
-This document provides a comprehensive summary of the 17 POSIX test files in the AlgolScript test suite. These tests validate the POSIX filesystem and I/O bindings available in AlgolScript.
+This document provides a comprehensive summary of the 17 POSIX test files in the Mog test suite. These tests validate the POSIX filesystem and I/O bindings available in Mog.
 
 **Total Tests:** 17 test files  
 **Test Categories:** File I/O, Directory Operations, File Metadata, Links, Permissions, Process Control
@@ -11,7 +11,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ## Test File Details
 
-### 1. test_posix_basic.algol
+### 1. test_posix_basic.mog
 **Purpose:** Basic POSIX file operations
 
 **Functions Tested:**
@@ -25,7 +25,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 2. test_posix_read.algol
+### 2. test_posix_read.mog
 **Purpose:** POSIX read operations
 
 **Functions Tested:**
@@ -39,7 +39,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 3. test_posix_seek_sync.algol
+### 3. test_posix_seek_sync.mog
 **Purpose:** File positioning and synchronization
 
 **Functions Tested:**
@@ -53,7 +53,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 4. test_posix_dup.algol
+### 4. test_posix_dup.mog
 **Purpose:** File descriptor duplication
 
 **Functions Tested:**
@@ -66,7 +66,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 5. test_posix_truncate.algol
+### 5. test_posix_truncate.mog
 **Purpose:** File truncation operations
 
 **Functions Tested:**
@@ -79,7 +79,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 6. test_posix_time.algol
+### 6. test_posix_time.mog
 **Purpose:** File timestamp operations
 
 **Functions Tested:**
@@ -92,7 +92,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 7. test_posix_stat.algol
+### 7. test_posix_stat.mog
 **Purpose:** File metadata retrieval
 
 **Functions Tested:**
@@ -107,7 +107,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 8. test_posix_access.algol
+### 8. test_posix_access.mog
 **Purpose:** File accessibility checks
 
 **Functions Tested:**
@@ -120,7 +120,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 9. test_posix_permissions.algol
+### 9. test_posix_permissions.mog
 **Purpose:** File permission operations
 
 **Functions Tested:**
@@ -135,7 +135,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 10. test_posix_links.algol
+### 10. test_posix_links.mog
 **Purpose:** File linking operations
 
 **Functions Tested:**
@@ -148,7 +148,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 11. test_posix_rename.algol
+### 11. test_posix_rename.mog
 **Purpose:** File renaming
 
 **Functions Tested:**
@@ -161,7 +161,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 12. test_posix_mkdir.algol
+### 12. test_posix_mkdir.mog
 **Purpose:** Directory creation and removal
 
 **Functions Tested:**
@@ -174,7 +174,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 13. test_posix_directory_read.algol
+### 13. test_posix_directory_read.mog
 **Purpose:** Directory traversal
 
 **Functions Tested:**
@@ -189,7 +189,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 14. test_posix_cwd.algol
+### 14. test_posix_cwd.mog
 **Purpose:** Current working directory operations
 
 **Functions Tested:**
@@ -201,7 +201,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 15. test_posix_control.algol
+### 15. test_posix_control.mog
 **Purpose:** File and path configuration
 
 **Functions Tested:**
@@ -215,7 +215,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 16. test_posix_special.algol
+### 16. test_posix_special.mog
 **Purpose:** Special file creation
 
 **Functions Tested:**
@@ -229,7 +229,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 
 ---
 
-### 17. test_posix_comprehensive.algol
+### 17. test_posix_comprehensive.mog
 **Purpose:** Integration test combining multiple operations
 
 **Functions Tested:**
@@ -246,7 +246,7 @@ This document provides a comprehensive summary of the 17 POSIX test files in the
 ## Common Patterns for POSIX Functions
 
 ### File Operations Pattern
-```algol
+```mog
 fd: i64 = open("filename", O_CREAT | O_WRONLY, 0644);
 if (fd == -1) {
   return error_code;
@@ -256,7 +256,7 @@ close(fd);
 ```
 
 ### Buffer Declaration Pattern
-```algol
+```mog
 # For stat structures (51 i64s for struct stat)
 statbuf: i64[] = [0, 0, 0, ...];  # 51 zeros
 
@@ -265,7 +265,7 @@ buf: i64[] = [0, 0, 0, ...];  # size as needed
 ```
 
 ### Error Handling Pattern
-```algol
+```mog
 result: i64 = posix_function(args);
 if (result == -1) {
   cleanup_resources();
@@ -296,7 +296,7 @@ if (result == -1) {
 
 ### macOS Variadic Function Limitations
 
-**Important:** AlgolScript's POSIX bindings have a known limitation on macOS (ARM64/x86_64) regarding variadic C functions.
+**Important:** Mog's POSIX bindings have a known limitation on macOS (ARM64/x86_64) regarding variadic C functions.
 
 **Affected Functions:**
 - `open()` - Works (special-cased in binding)

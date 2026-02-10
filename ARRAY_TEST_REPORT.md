@@ -1,13 +1,13 @@
-# AlgolScript Array Literal Feature Test Report
+# Mog Array Literal Feature Test Report
 
 ## Executive Summary
 
-Comprehensive testing of the array literal feature in AlgolScript revealed **4 major bugs** that need to be fixed. Basic 1D array literals work correctly, but 2D arrays, function parameters, and complex conditions have issues.
+Comprehensive testing of the array literal feature in Mog revealed **4 major bugs** that need to be fixed. Basic 1D array literals work correctly, but 2D arrays, function parameters, and complex conditions have issues.
 
 ## Test Environment
 
-- Compiler: AlgolScript at `/Users/ted/me/algolscript`
-- Command: `bun run src/index.ts <file.algol>`
+- Compiler: Mog at `/Users/ted/me/mog`
+- Command: `bun run src/index.ts <file.mog>`
 - Platform: macOS arm64
 
 ---
@@ -70,7 +70,7 @@ Type mismatch: cannot assign [[i64[2]][2]] to [i64[]]
 ```
 
 **Test Case:**
-```algol
+```mog
 fn main() -> i64 {
   matrix: i64[][] = [[1, 2], [3, 4]];  // ERROR
   return 0;
@@ -97,7 +97,7 @@ error: '%10' defined with type 'i64' but expected 'ptr'
 ```
 
 **Test Case:**
-```algol
+```mog
 fn getFirst(arr: i64[]) -> i64 {
   return arr[0];
 }
@@ -129,7 +129,7 @@ error: '%16' defined with type 'i1' but expected 'i64'
 ```
 
 **Test Case:**
-```algol
+```mog
 fn main() -> i64 {
   arr: i64[] = [1, 2, 3];
   if (arr[0] == 1 && arr[1] == 2) {  // ERROR
@@ -165,7 +165,7 @@ Same as Bug #1 - recursive dimension inference missing.
 ## Working Test Cases
 
 ### Basic 1D Array Usage
-```algol
+```mog
 fn main() -> i64 {
   arr: i64[] = [1, 2, 3, 4, 5];
   x: i64 = arr[0];
@@ -176,7 +176,7 @@ fn main() -> i64 {
 ```
 
 ### Array in Loop
-```algol
+```mog
 fn main() -> i64 {
   arr: i64[] = [0, 1, 2, 3, 4];
   sum: i64 = 0;

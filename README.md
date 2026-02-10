@@ -1,6 +1,6 @@
-# AlgolScript
+# Mog
 
-A compiled programming language with an LLVM backend, designed for clean syntax and predictable behavior. AlgolScript compiles to native executables with strong static typing, structs, n-dimensional arrays, and direct POSIX access.
+A compiled programming language with an LLVM backend, designed for clean syntax and predictable behavior. Mog compiles to native executables with strong static typing, structs, n-dimensional arrays, and direct POSIX access.
 
 ## Features
 
@@ -21,27 +21,27 @@ bun install
 
 ## Usage
 
-Compile an AlgolScript program:
+Compile an Mog program:
 
 ```bash
-bun run src/index.ts input.algol
+bun run src/index.ts input.mog
 ```
 
 Run the compiled executable:
 
 ```bash
-./input  # (if your file was named input.algol)
+./input  # (if your file was named input.mog)
 ```
 
 ## Language Syntax
 
 ### Program Structure
 
-AlgolScript programs can be written in two styles:
+Mog programs can be written in two styles:
 
 **Style 1: Script-style (no main function)**
 
-```algol
+```mog
 // Script-style - runs top-level statements
 x: i64 = 10;
 y: i64 = 20;
@@ -50,7 +50,7 @@ result: i64 = x + y;
 
 **Style 2: main() function (with exit code)**
 
-```algol
+```mog
 // main() function style - returns exit code
 fn main() -> i64 {
   x: i64 = 10;
@@ -64,7 +64,7 @@ When using `main()`, the return value becomes the program's exit code (truncated
 
 ### Variable Declaration
 
-```algol
+```mog
 name: type = value;
 ```
 
@@ -76,7 +76,7 @@ Supported types:
 
 ### Functions
 
-```algol
+```mog
 fn name(param: type) -> return_type {
   return value;
 }
@@ -84,7 +84,7 @@ fn name(param: type) -> return_type {
 
 Example with multiple parameters:
 
-```algol
+```mog
 fn add(a: i64, b: i64) -> i64 {
   return a + b;
 }
@@ -92,7 +92,7 @@ fn add(a: i64, b: i64) -> i64 {
 
 Nested functions are supported - define functions inside other functions:
 
-```algol
+```mog
 fn outer() -> i64 {
   fn inner() -> i64 {
     return 42;
@@ -105,7 +105,7 @@ fn outer() -> i64 {
 
 #### If Statement
 
-```algol
+```mog
 if (condition) {
   statements;
 } else {
@@ -115,7 +115,7 @@ if (condition) {
 
 #### While Loop
 
-```algol
+```mog
 while (condition) {
   statements;
 }
@@ -123,7 +123,7 @@ while (condition) {
 
 #### For Loop
 
-```algol
+```mog
 for variable := start to end {
   statements;
 }
@@ -131,7 +131,7 @@ for variable := start to end {
 
 #### Break and Continue
 
-```algol
+```mog
 while (condition) {
   if (some_condition) {
     break;     // Exit the loop immediately
@@ -156,7 +156,7 @@ All operators have clear, explicit precedence—no surprises.
 
 #### Print Functions
 
-```algol
+```mog
 print(value);          # Print any type without newline (auto-detects type)
 println(value);        # Print any type with newline
 println();             # Print just a newline
@@ -174,7 +174,7 @@ Type-specific variants:
 
 #### Input Functions
 
-```algol
+```mog
 value: i64 = input_i64();  # Read integer from stdin
 ```
 
@@ -186,7 +186,7 @@ Type-specific variants:
 
 ### Arrays and N-Dimensional Arrays
 
-```algol
+```mog
 // 1D arrays
 arr: i64[] = [1, 2, 3];
 element: i64 = arr[0];
@@ -208,7 +208,7 @@ fives: [f64; 3] = [5.0; 3];    // [5.0, 5.0, 5.0]
 
 Key-value stores with string keys, created using `table_new` and accessed with bracket notation:
 
-```algol
+```mog
 // Create a map
 tbl: ptr = table_new(4);
 
@@ -224,7 +224,7 @@ val: i64 = table_get(tbl, "key", 3);
 ```
 
 Map literals with member access:
-```algol
+```mog
 person = {name: "Alice", age: 30};
 print(person.age);
 println();
@@ -234,7 +234,7 @@ println();
 
 Structs group related data with named, typed fields. Fields are separated by commas. Structs are heap-allocated and accessed via pointer.
 
-```algol
+```mog
 struct Point { x: f64, y: f64 }
 
 // Create with explicit type prefix
@@ -249,7 +249,7 @@ p.x := 5.0;
 ```
 
 Structs work as function parameters and return types:
-```algol
+```mog
 struct Point { x: f64, y: f64 }
 
 fn create_point(x: f64, y: f64) -> Point {
@@ -275,7 +275,7 @@ fn main() -> i64 {
 
 SoA declarations store each field as a separate array. Access pattern is `soa.field[i]`:
 
-```algol
+```mog
 soa Particles {
   x: [f64],
   y: [f64]
@@ -295,7 +295,7 @@ particles.x[0] := 10.0;
 
 Strings are arrays of unsigned bytes (`u8`) with special syntax support:
 
-```algol
+```mog
 // String literals use double quotes
 msg: string = "Hello, World!";
 greeting: string = "Hi";
@@ -316,13 +316,13 @@ combined: string = string_concat(greeting, " there!");
 
 ### POSIX Filesystem Operations
 
-AlgolScript provides direct access to POSIX filesystem functions for low-level file operations.
+Mog provides direct access to POSIX filesystem functions for low-level file operations.
 
 **Note:** On macOS ARM64, `open()` with `O_CREAT` has calling convention issues. Use `creat()` instead for creating files.
 
 #### Basic File Operations
 
-```algol
+```mog
 # Open, write, and close a file
 fd: i64 = open("output.txt", O_CREAT | O_WRONLY, 0644);
 if (fd == -1) {
@@ -347,7 +347,7 @@ Common open flags: `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`, `O_AP
 
 #### Directory Operations
 
-```algol
+```mog
 # Create and remove directories
 result: i64 = mkdir("mydir", 0755);
 if (result == -1) {
@@ -366,7 +366,7 @@ if (dir != 0) {
 
 #### File Metadata
 
-```algol
+```mog
 # stat - get file information
 statbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -399,7 +399,7 @@ fchmod(fd, 0755);              # By file descriptor
 
 Buffers for POSIX functions are created as i64 arrays. Pass the array directly (no cast needed):
 
-```algol
+```mog
 # Small buffer for string operations
 small_buf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
@@ -413,7 +413,7 @@ bytes: i64 = read(fd, read_buf, 512);
 
 #### Common Patterns and Best Practices
 
-```algol
+```mog
 # Pattern 1: Always check for errors
 fd: i64 = open("file.txt", O_RDONLY, 0);
 if (fd == -1) {
@@ -443,9 +443,9 @@ rmdir("temp_dir");
 
 ### POSIX Sockets
 
-AlgolScript provides BSD socket wrappers for network programming:
+Mog provides BSD socket wrappers for network programming:
 
-```algol
+```mog
 fn main() -> i64 {
   // Create a TCP socket
   sockfd: i64 = sys_socket(2, 1, 0);  // AF_INET, SOCK_STREAM
@@ -481,14 +481,14 @@ Available socket functions: `sys_socket`, `sys_connect`, `sys_send`, `sys_recv`,
 
 The repository includes HTTP client examples demonstrating socket programming:
 
-- `http_client.algol` - Full HTTP client with connection, request, and response handling
-- `minimal_http.algol` - Minimal HTTP GET request
-- `clean_http.algol` - Clean HTTP client with error handling
+- `http_client.mog` - Full HTTP client with connection, request, and response handling
+- `minimal_http.mog` - Minimal HTTP GET request
+- `clean_http.mog` - Clean HTTP client with error handling
 
 Try compiling one:
 
 ```bash
-bun run src/index.ts http_client.algol
+bun run src/index.ts http_client.mog
 ./http_client
 ```
 
@@ -503,10 +503,10 @@ bun test
 Use the included formatter to ensure consistent indentation:
 
 ```bash
-python3 format_algol.py
+python3 format_mog.py
 ```
 
-This formats all `.algol` files with 2-space indentation based on brace nesting.
+This formats all `.mog` files with 2-space indentation based on brace nesting.
 
 ## Architecture
 
@@ -530,7 +530,7 @@ On macOS ARM64, the `open()` system call with the `O_CREAT` flag may fail due to
 
 **Workaround**: Use `creat()` instead when creating files:
 
-```algol
+```mog
 // This may fail on macOS ARM64
 // fd: i32 = open("file.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
@@ -541,7 +541,7 @@ fd: i32 = creat("file.txt", 0644);
 // fd = open("file.txt", O_RDONLY);
 ```
 
-This limitation affects any variadic C library function when called from AlgolScript on macOS ARM64.
+This limitation affects any variadic C library function when called from Mog on macOS ARM64.
 
 ## License
 
