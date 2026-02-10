@@ -71,6 +71,13 @@ class Parser {
       return null
     }
 
+    if (this.matchType("requires")) {
+      return this.requiresDeclaration()
+    }
+    if (this.matchType("optional_kw")) {
+      return this.optionalDeclaration()
+    }
+
     if (this.matchType("LBRACE")) {
       return this.blockStatement()
     }
@@ -508,6 +515,42 @@ if (!this.checkType("RPAREN")) {
         end: this.lastPosition(),
       },
     }
+  }
+
+  private requiresDeclaration(): StatementNode {
+    const startPos = this.previous().position?.start || { line: 1, column: 1, index: 0 }
+    const capabilities: string[] = []
+    capabilities.push(this.consume("IDENTIFIER", "Expected capability name").value)
+    while (this.matchType("COMMA")) {
+      capabilities.push(this.consume("IDENTIFIER", "Expected capability name").value)
+    }
+    this.matchType("SEMICOLON")
+    return {
+      type: "RequiresDeclaration" as any,
+      capabilities,
+      position: {
+        start: startPos,
+        end: this.lastPosition(),
+      },
+    } as any
+  }
+
+  private optionalDeclaration(): StatementNode {
+    const startPos = this.previous().position?.start || { line: 1, column: 1, index: 0 }
+    const capabilities: string[] = []
+    capabilities.push(this.consume("IDENTIFIER", "Expected capability name").value)
+    while (this.matchType("COMMA")) {
+      capabilities.push(this.consume("IDENTIFIER", "Expected capability name").value)
+    }
+    this.matchType("SEMICOLON")
+    return {
+      type: "OptionalDeclaration" as any,
+      capabilities,
+      position: {
+        start: startPos,
+        end: this.lastPosition(),
+      },
+    } as any
   }
 
   private variableDeclaration(): StatementNode {
@@ -999,7 +1042,7 @@ private comparison(): ExpressionNode {
 
           object = {
             type: "CallExpression",
-            callee: object.type === "Identifier" ? object : { type: "Identifier", name: (object as any).name, position: token.position },
+            callee: (object.type === "Identifier" || object.type === "MemberExpression") ? object : { type: "Identifier", name: (object as any).name, position: token.position },
             args: callArgs,
             position: this.combinePositions(object, this.previous()),
           }

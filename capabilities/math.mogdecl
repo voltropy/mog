@@ -1,0 +1,9 @@
+capability math {
+  fn add(a: int, b: int) -> int;
+  fn multiply(a: int, b: int) -> int;
+  fn subtract(a: int, b: int) -> int;
+  fn divide(a: int, b: int) -> int;
+  fn abs(x: int) -> int;
+  fn max(a: int, b: int) -> int;
+  fn min(a: int, b: int) -> int;
+}

@@ -55,6 +55,12 @@ class LLVMIRGenerator {
     this.opts = { ...defaultOptimizationOptions, ...options }
   }
 
+  setCapabilities(caps: string[]): void {
+    for (const cap of caps) {
+      this.capabilities.add(cap)
+    }
+  }
+
   private resetValueCounter(start: number = 0): void {
     this.valueCounter = start
   }
@@ -64,6 +70,10 @@ class LLVMIRGenerator {
   private stringNameMap: Map<string, string> = new Map()
   // Struct definitions: maps struct name -> ordered list of { name, type } fields
   private structDefs: Map<string, { name: string; fieldType: any }[]> = new Map()
+  // Capability tracking for Host FFI
+  private capabilities: Set<string> = new Set()
+  private capCallDeclared = false
+  private capStringConstants: string[] = []
   private resetStringCounter(): void {
     this.stringCounter = 0
     this.stringNameMap.clear()
@@ -85,6 +95,9 @@ class LLVMIRGenerator {
     this.setupDeclarations(ir)
     this.generatePrintDeclarations(ir)
     this.generateSocketDeclarations(ir)
+    if (this.capabilities.size > 0) {
+      this.generateCapabilityDeclarations(ir)
+    }
 
     this.resetValueCounter(0)
     this.resetStringCounter()
@@ -1189,7 +1202,98 @@ class LLVMIRGenerator {
       return reg
     }
 
+    // Handle capability function calls (MemberExpression like fs.read(...))
+    if (expr.callee.type === "MemberExpression") {
+      const memberExpr = expr.callee
+      if (memberExpr.object.type === "Identifier" && this.capabilities.has(memberExpr.object.name)) {
+        return this.generateCapabilityCall(ir, memberExpr.object.name, memberExpr.property, args, expr)
+      }
+    }
+
     return ""
+  }
+
+  private generateCapabilityCall(ir: string[], capName: string, funcName: string, args: string[], expr: any): string {
+    // Create capability name string on stack
+    const capStrAlloca = `%${this.valueCounter++}`
+    ir.push(`  ${capStrAlloca} = alloca [${capName.length + 1} x i8]`)
+    ir.push(`  store [${capName.length + 1} x i8] c"${capName}\\00", ptr ${capStrAlloca}`)
+
+    // Create function name string on stack
+    const funcStrAlloca = `%${this.valueCounter++}`
+    ir.push(`  ${funcStrAlloca} = alloca [${funcName.length + 1} x i8]`)
+    ir.push(`  store [${funcName.length + 1} x i8] c"${funcName}\\00", ptr ${funcStrAlloca}`)
+
+    const nargs = args.length
+    if (nargs > 0) {
+      // Allocate MogValue array for arguments
+      const argsArrayReg = `%${this.valueCounter++}`
+      ir.push(`  ${argsArrayReg} = alloca %MogValue, i32 ${nargs}`)
+
+      // Initialize each MogValue argument
+      const argExprs = expr.args || expr.arguments || []
+      for (let i = 0; i < nargs; i++) {
+        const argExpr = argExprs[i]
+        const argVal = args[i]
+
+        // Determine tag from the expression type
+        const isFloat = this.isFloatOperand(argExpr)
+        const isString = argExpr && (argExpr.type === "StringLiteral" || argExpr.type === "TemplateLiteral")
+
+        const gepTag = `%${this.valueCounter++}`
+        ir.push(`  ${gepTag} = getelementptr %MogValue, ptr ${argsArrayReg}, i32 ${i}, i32 0`)
+
+        const gepData = `%${this.valueCounter++}`
+        ir.push(`  ${gepData} = getelementptr %MogValue, ptr ${argsArrayReg}, i32 ${i}, i32 1`)
+
+        if (isString) {
+          // MOG_STRING = 3
+          ir.push(`  store i32 3, ptr ${gepTag}`)
+          const ptrToInt = `%${this.valueCounter++}`
+          ir.push(`  ${ptrToInt} = ptrtoint ptr ${argVal} to i64`)
+          ir.push(`  store i64 ${ptrToInt}, ptr ${gepData}`)
+        } else if (isFloat) {
+          // MOG_FLOAT = 1
+          ir.push(`  store i32 1, ptr ${gepTag}`)
+          const bitcast = `%${this.valueCounter++}`
+          ir.push(`  ${bitcast} = bitcast double ${argVal} to i64`)
+          ir.push(`  store i64 ${bitcast}, ptr ${gepData}`)
+        } else {
+          // MOG_INT = 0 (default for integers)
+          ir.push(`  store i32 0, ptr ${gepTag}`)
+          ir.push(`  store i64 ${argVal}, ptr ${gepData}`)
+        }
+      }
+
+      // Call mog_cap_call(vm_ptr, cap_name, func_name, args, nargs)
+      // Pass null for vm_ptr - the host sets up a global VM pointer
+      const resultReg = `%${this.valueCounter++}`
+      ir.push(`  ${resultReg} = call %MogValue @mog_cap_call(ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr ${argsArrayReg}, i32 ${nargs})`)
+
+      // Extract the data field (i64) from the returned MogValue aggregate
+      const extractReg = `%${this.valueCounter++}`
+      ir.push(`  ${extractReg} = extractvalue %MogValue ${resultReg}, 1`)
+
+      return extractReg
+    } else {
+      // No arguments - call with null args
+      const resultReg = `%${this.valueCounter++}`
+      ir.push(`  ${resultReg} = call %MogValue @mog_cap_call(ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr null, i32 0)`)
+
+      const extractReg = `%${this.valueCounter++}`
+      ir.push(`  ${extractReg} = extractvalue %MogValue ${resultReg}, 1`)
+
+      return extractReg
+    }
+  }
+
+  private generateCapabilityDeclarations(ir: string[]): void {
+    ir.push("")
+    ir.push("; Host FFI declarations")
+    ir.push("%MogValue = type { i32, i64 }")
+    ir.push("declare %MogValue @mog_cap_call(ptr, ptr, ptr, ptr, i32)")
+    ir.push("")
+    this.capCallDeclared = true
   }
 
   private generateInputCall(ir: string[], funcName: string): string {
@@ -3061,8 +3165,11 @@ private getIntBits(type: LLVMType): number {
   }
 }
 
-export function generateLLVMIR(ast: ProgramNode, options?: Partial<OptimizationOptions>): string {
+export function generateLLVMIR(ast: ProgramNode, options?: Partial<OptimizationOptions>, capabilities?: string[]): string {
   const generator = new LLVMIRGenerator(options)
+  if (capabilities && capabilities.length > 0) {
+    generator.setCapabilities(capabilities)
+  }
   return generator.generate(ast)
 }
 

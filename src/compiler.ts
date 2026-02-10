@@ -4,6 +4,9 @@ import { SemanticAnalyzer } from "./analyzer.js"
 import { generateLLVMIR } from "./llvm_codegen.js"
 import { type ProgramNode } from "./analyzer.js"
 import { compileRuntime, linkToExecutable } from "./linker.js"
+import { parseCapabilityDecl } from "./capability.js"
+import { existsSync, readFileSync } from "fs"
+import * as path from "path"
 
 export interface Compiler {
   compile(source: string): Promise<CompiledProgram>
@@ -30,7 +33,43 @@ export async function compile(source: string): Promise<CompiledProgram> {
     const filteredTokens = tokens.filter((t) => t.type !== "WHITESPACE" && t.type !== "COMMENT")
     const ast: ProgramNode = parseTokens(filteredTokens)
 
+    // Extract capability declarations from AST
+    const requiredCaps: string[] = []
+    const optionalCaps: string[] = []
+    for (const stmt of ast.statements) {
+      if ((stmt as any).type === "RequiresDeclaration") {
+        requiredCaps.push(...(stmt as any).capabilities)
+      }
+      if ((stmt as any).type === "OptionalDeclaration") {
+        optionalCaps.push(...(stmt as any).capabilities)
+      }
+    }
+
+    // Load capability declarations from .mogdecl files
+    const capabilityDecls = new Map<string, any>()
+    const allCaps = [...requiredCaps, ...optionalCaps]
+    const __dirname = import.meta.dirname || path.dirname(new URL(import.meta.url).pathname)
+    const searchPaths = [
+      path.resolve(__dirname, "../capabilities"),
+      path.resolve(process.cwd(), "capabilities"),
+    ]
+    for (const capName of allCaps) {
+      for (const searchPath of searchPaths) {
+        const declPath = path.join(searchPath, `${capName}.mogdecl`)
+        if (existsSync(declPath)) {
+          const declSource = readFileSync(declPath, "utf-8")
+          const decls = parseCapabilityDecl(declSource)
+          const decl = decls.find(d => d.name === capName)
+          if (decl) {
+            capabilityDecls.set(capName, decl)
+          }
+          break
+        }
+      }
+    }
+
     const analyzer = new SemanticAnalyzer()
+    analyzer.setCapabilityDecls(capabilityDecls)
     const semanticErrors = analyzer.analyze(ast)
 
     if (semanticErrors.length > 0) {
@@ -44,7 +83,7 @@ export async function compile(source: string): Promise<CompiledProgram> {
       return { llvmIR: "", errors }
     }
 
-    const llvmIR = generateLLVMIR(ast)
+    const llvmIR = generateLLVMIR(ast, undefined, allCaps)
 
     return { llvmIR, errors: [] }
   } catch (error: unknown) {

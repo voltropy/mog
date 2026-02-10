@@ -16,9 +16,20 @@ export async function compileRuntime(): Promise<string> {
 
   const runtimeLibPath = tempDir + "/runtime.a"
   const runtimeObjPath = tempDir + "/runtime.o"
+  const mogVmPath = __dirname + "/../runtime/mog_vm.c"
+  const mogVmObjPath = tempDir + "/mog_vm.o"
+  const mogHeaderPath = __dirname + "/../runtime"
 
   await $`clang -c ${shellPath(runtimePath)} -o ${shellPath(runtimeObjPath)}`
-  await $`ar rcs ${shellPath(runtimeLibPath)} ${shellPath(runtimeObjPath)}`
+
+  // Compile mog_vm.c if it exists and include it in the archive
+  if (existsSync(mogVmPath)) {
+    await $`clang -c -I${shellPath(mogHeaderPath)} ${shellPath(mogVmPath)} -o ${shellPath(mogVmObjPath)}`
+    await $`ar rcs ${shellPath(runtimeLibPath)} ${shellPath(runtimeObjPath)} ${shellPath(mogVmObjPath)}`
+  } else {
+    await $`ar rcs ${shellPath(runtimeLibPath)} ${shellPath(runtimeObjPath)}`
+  }
+
   return runtimeLibPath
 }
 

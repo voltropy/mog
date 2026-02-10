@@ -1,0 +1,6 @@
+capability log {
+  fn info(message: string);
+  fn warn(message: string);
+  fn error(message: string);
+  fn debug(message: string);
+}

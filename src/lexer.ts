@@ -15,6 +15,8 @@ type TokenType =
   | "not"
   | "struct"
   | "soa"
+  | "requires"
+  | "optional_kw"
   | "MODULO"
   | "BITWISE_AND"
   | "BITWISE_OR"
@@ -130,6 +132,8 @@ class Lexer {
     const notRegex = /not\b/y
     const structRegex = /struct\b/y
     const soaRegex = /soa\b/y
+    const requiresRegex = /requires\b/y
+    const optionalKwRegex = /optional\b/y
     const llmRegex = /LLM\b/y
     const notEqualRegex = /!=/y
     const equalEqualRegex = /==/y
@@ -357,6 +361,30 @@ class Lexer {
       value = this.match(soaRegex)
       if (value) {
         type = "soa"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(requiresRegex)
+      if (value) {
+        type = "requires"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(optionalKwRegex)
+      if (value) {
+        type = "optional_kw"
         this.advance(value.length)
         tokens.push({
           type,

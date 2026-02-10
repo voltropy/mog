@@ -1,0 +1,6 @@
+capability fs {
+  fn read(path: string) -> string;
+  fn write(path: string, content: string);
+  fn exists(path: string) -> bool;
+  fn delete(path: string) -> bool;
+}

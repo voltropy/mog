@@ -61,6 +61,8 @@ type StatementNode =
   | SoADeclarationNode
   | StructDefinitionNode
   | StructDeclarationNode
+  | RequiresDeclarationNode
+  | OptionalDeclarationNode
 
 interface SoADeclarationNode extends ASTNode {
   type: "SoADeclaration"
@@ -311,6 +313,16 @@ interface CastExpressionNode extends ASTNode {
   sourceType?: Type
 }
 
+interface RequiresDeclarationNode extends ASTNode {
+  type: "RequiresDeclaration"
+  capabilities: string[]
+}
+
+interface OptionalDeclarationNode extends ASTNode {
+  type: "OptionalDeclaration"
+  capabilities: string[]
+}
+
 interface SemanticError {
   message: string
   position: {
@@ -392,15 +404,25 @@ class SemanticAnalyzer {
   private warnings: SemanticError[] = []
   private currentFunction: string | null = null
   private loopDepth: number = 0
+  // Capability tracking
+  private requiredCapabilities: string[] = []
+  private optionalCapabilities: string[] = []
+  private capabilityDecls: Map<string, any> = new Map()
 
   constructor() {
     this.symbolTable = new SymbolTable()
+  }
+
+  setCapabilityDecls(decls: Map<string, any>): void {
+    this.capabilityDecls = decls
   }
 
   analyze(program: ProgramNode): SemanticError[] {
     this.symbolTable = new SymbolTable()
     this.errors = []
     this.warnings = []
+    this.requiredCapabilities = []
+    this.optionalCapabilities = []
     this.declarePOSIXBuiltins()
     this.visitProgram(program)
     // Print warnings if any
@@ -631,6 +653,27 @@ class SemanticAnalyzer {
       case "StructDeclaration":
         this.visitStructDeclaration(node as StructDeclarationNode)
         break
+      case "RequiresDeclaration":
+        this.visitRequiresDeclaration(node as any)
+        break
+      case "OptionalDeclaration":
+        this.visitOptionalDeclaration(node as any)
+        break
+    }
+  }
+
+  private visitRequiresDeclaration(node: any): void {
+    for (const cap of node.capabilities) {
+      this.requiredCapabilities.push(cap)
+      // Register capability name in symbol table so it can be used as an object
+      this.symbolTable.declare(cap, "variable", new PointerType())
+    }
+  }
+
+  private visitOptionalDeclaration(node: any): void {
+    for (const cap of node.capabilities) {
+      this.optionalCapabilities.push(cap)
+      this.symbolTable.declare(cap, "variable", new PointerType())
     }
   }
 
@@ -1614,6 +1657,65 @@ class SemanticAnalyzer {
       }
     }
 
+    // Handle capability function calls (e.g., fs.read(...))
+    if (node.callee.type === "MemberExpression") {
+      const memberExpr = node.callee as MemberExpressionNode
+      if (memberExpr.object.type === "Identifier") {
+        const objName = (memberExpr.object as IdentifierNode).name
+        const allCaps = [...this.requiredCapabilities, ...this.optionalCapabilities]
+        if (allCaps.includes(objName)) {
+          // This is a capability call - type check against declaration
+          const capDecl = this.capabilityDecls.get(objName)
+          if (capDecl) {
+            const funcDecl = capDecl.functions.find((f: any) => f.name === memberExpr.property)
+            if (!funcDecl) {
+              this.emitError(`Capability '${objName}' has no function '${memberExpr.property}'`, node.position)
+              return null
+            }
+            // Type check arguments
+            const args = (node as any).args ?? node.arguments ?? []
+            const requiredParams = funcDecl.params.filter((p: any) => !p.optional)
+            if (args.length < requiredParams.length) {
+              this.emitError(`${objName}.${memberExpr.property}() expects at least ${requiredParams.length} arguments, got ${args.length}`, node.position)
+            }
+            if (args.length > funcDecl.params.length) {
+              this.emitError(`${objName}.${memberExpr.property}() expects at most ${funcDecl.params.length} arguments, got ${args.length}`, node.position)
+            }
+            // Visit args to check their types
+            for (const arg of args) {
+              this.visitExpression(arg)
+            }
+            // Return the declared return type (mapped to Mog types)
+            if (funcDecl.returnType) {
+              switch (funcDecl.returnType) {
+                case "int": return new IntegerType("i64")
+                case "float": return new FloatType("f64")
+                case "bool": return new IntegerType("i32")
+                case "string": return new PointerType()
+                default:
+                  if (funcDecl.returnType.startsWith("Result<")) {
+                    const inner = funcDecl.returnType.slice(7, -1)
+                    switch (inner) {
+                      case "int": return new IntegerType("i64")
+                      case "float": return new FloatType("f64")
+                      case "string": return new PointerType()
+                      default: return new IntegerType("i64")
+                    }
+                  }
+                  return new IntegerType("i64")
+              }
+            }
+            return new VoidType()
+          }
+          // If no declaration loaded, still allow it (runtime will handle)
+          for (const arg of (node.arguments || [])) {
+            this.visitExpression(arg)
+          }
+          return new IntegerType("i64")
+        }
+      }
+    }
+
     if (node.callee.type === "MemberExpression") {
       const memberExpr = node.callee as MemberExpressionNode
       const objectType = this.visitExpression(memberExpr.object)
@@ -1635,6 +1737,15 @@ class SemanticAnalyzer {
   }
 
   private visitMemberExpression(node: MemberExpressionNode): Type | null {
+    // Allow member access on capability names (handled by visitCallExpression)
+    if (node.object.type === "Identifier") {
+      const objName = (node.object as IdentifierNode).name
+      const allCaps = [...this.requiredCapabilities, ...this.optionalCapabilities]
+      if (allCaps.includes(objName)) {
+        return new IntegerType("i64")
+      }
+    }
+
     const objectType = this.visitExpression(node.object)
 
     if (!objectType) {
@@ -1870,4 +1981,6 @@ BlockNode,
   ConditionalNode,
   ExpressionStatementNode,
   CastExpressionNode,
+  RequiresDeclarationNode,
+  OptionalDeclarationNode,
 }
