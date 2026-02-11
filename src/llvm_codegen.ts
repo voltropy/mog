@@ -1604,27 +1604,27 @@ class LLVMIRGenerator {
         }
       }
 
-      // Call mog_cap_call via sret - the result is written to a stack-allocated MogValue
-      // sret convention: first param is pointer to return value
-      const sretAlloca = `%${this.valueCounter++}`
-      ir.push(`  ${sretAlloca} = alloca %MogValue, align 8`)
-      ir.push(`  call void @mog_cap_call(ptr sret(%MogValue) ${sretAlloca}, ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr ${argsArrayReg}, i32 ${nargs})`)
+      // Call mog_cap_call_out with explicit output pointer (avoids ARM64 ABI issues)
+      const outAlloca = `%${this.valueCounter++}`
+      ir.push(`  ${outAlloca} = alloca %MogValue, align 8`)
+      ir.push(`  call void @mog_cap_call_out(ptr ${outAlloca}, ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr ${argsArrayReg}, i32 ${nargs})`)
 
-      // Load the data field (first i64 in the union at field index 1, sub-index 0, sub-index 0)
+      // Load the data field (at byte offset 8: skip tag i32 + 4 bytes padding)
       const dataGep = `%${this.valueCounter++}`
-      ir.push(`  ${dataGep} = getelementptr inbounds %MogValue, ptr ${sretAlloca}, i32 0, i32 1`)
+      ir.push(`  ${dataGep} = getelementptr inbounds %MogValue, ptr ${outAlloca}, i32 0, i32 1`)
       const extractReg = `%${this.valueCounter++}`
       ir.push(`  ${extractReg} = load i64, ptr ${dataGep}, align 8`)
 
       return extractReg
     } else {
-      // No arguments - call with null args via sret
-      const sretAlloca = `%${this.valueCounter++}`
-      ir.push(`  ${sretAlloca} = alloca %MogValue, align 8`)
-      ir.push(`  call void @mog_cap_call(ptr sret(%MogValue) ${sretAlloca}, ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr null, i32 0)`)
+      // No arguments - call with explicit output pointer
+      const outAlloca = `%${this.valueCounter++}`
+      ir.push(`  ${outAlloca} = alloca %MogValue, align 8`)
+      ir.push(`  call void @mog_cap_call_out(ptr ${outAlloca}, ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr null, i32 0)`)
 
+      // Load the data field (at byte offset 8: skip tag i32 + 4 bytes padding)
       const dataGep = `%${this.valueCounter++}`
-      ir.push(`  ${dataGep} = getelementptr inbounds %MogValue, ptr ${sretAlloca}, i32 0, i32 1`)
+      ir.push(`  ${dataGep} = getelementptr inbounds %MogValue, ptr ${outAlloca}, i32 0, i32 1`)
       const extractReg = `%${this.valueCounter++}`
       ir.push(`  ${extractReg} = load i64, ptr ${dataGep}, align 8`)
 
@@ -1636,7 +1636,9 @@ class LLVMIRGenerator {
     ir.push("")
     ir.push("; Host FFI declarations")
     ir.push("%MogValue = type { i32, { { ptr, ptr } } }")  // tag(4) + pad(4) + union{handle{ptr,ptr}}(16) = 24 bytes
-    ir.push("declare void @mog_cap_call(ptr sret(%MogValue), ptr, ptr, ptr, ptr, i32)")
+    // Use explicit output pointer to avoid ABI issues with large struct returns on ARM64.
+    // mog_cap_call_out(MogValue *out, MogVM *vm, const char *cap, const char *func, MogValue *args, int nargs)
+    ir.push("declare void @mog_cap_call_out(ptr, ptr, ptr, ptr, ptr, i32)")
     ir.push("")
     this.capCallDeclared = true
   }

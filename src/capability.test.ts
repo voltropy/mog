@@ -358,19 +358,21 @@ describe("Codegen - capability calls", () => {
     const result = await compile(source)
     expect(result.errors).toHaveLength(0)
     expect(result.llvmIR).toContain("%MogValue = type { i32, { { ptr, ptr } } }")
-    expect(result.llvmIR).toContain("declare void @mog_cap_call(ptr sret(%MogValue), ptr, ptr, ptr, ptr, i32)")
+    // Explicit output pointer to avoid ARM64 struct return ABI issues
+    expect(result.llvmIR).toContain("declare void @mog_cap_call_out(ptr, ptr, ptr, ptr, ptr, i32)")
   })
 
-  test("extracts return value from MogValue via sret", async () => {
+  test("extracts return value from MogValue via output pointer", async () => {
     const source = `
       requires math;
       x: i64 = math.add(1, 2);
     `
     const result = await compile(source)
     expect(result.errors).toHaveLength(0)
-    // sret convention: result is loaded via GEP from stack alloca, not extractvalue
-    expect(result.llvmIR).toContain("call void @mog_cap_call(ptr sret(%MogValue)")
+    // Output pointer: alloca MogValue, call mog_cap_call_out, GEP + load data field
+    expect(result.llvmIR).toContain("call void @mog_cap_call_out(")
     expect(result.llvmIR).toContain("getelementptr inbounds %MogValue")
+    expect(result.llvmIR).toContain("load i64, ptr")
   })
 
   test("does not generate capability declarations when no capabilities used", async () => {

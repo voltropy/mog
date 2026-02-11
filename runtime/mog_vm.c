@@ -83,7 +83,15 @@ int mog_register_capability(MogVM *vm, const char *cap_name, const MogCapEntry *
     return 0;
 }
 
-// --- Capability call (used by generated code) ---
+// --- Capability call wrapper (used by generated LLVM IR code) ---
+// Takes an explicit output pointer to avoid ABI issues with large struct returns on ARM64.
+// On AAPCS64, structs > 16 bytes use x8 for indirect return, but LLVM IR can't reliably
+// match this convention. Using an explicit pointer parameter makes the ABI unambiguous.
+void mog_cap_call_out(MogValue *out, MogVM *vm, const char *cap_name, const char *func_name, MogValue *args, int nargs) {
+    *out = mog_cap_call(vm, cap_name, func_name, args, nargs);
+}
+
+// --- Capability call (internal, also callable from C host code) ---
 
 MogValue mog_cap_call(MogVM *vm, const char *cap_name, const char *func_name, MogValue *args, int nargs) {
     if (!vm) vm = g_mog_vm;  // Fall back to global VM

@@ -47,8 +47,11 @@ MogVM  *mog_vm_get_global(void);
 // Capability registration (like luaL_newlib)
 int  mog_register_capability(MogVM *vm, const char *cap_name, const MogCapEntry *entries);
 
-// Call a registered capability function (used by generated code)
+// Call a registered capability function (internal, also callable from C host code)
 MogValue mog_cap_call(MogVM *vm, const char *cap_name, const char *func_name, MogValue *args, int nargs);
+
+// Wrapper with explicit output pointer (used by generated LLVM IR code to avoid ARM64 ABI issues)
+void mog_cap_call_out(MogValue *out, MogVM *vm, const char *cap_name, const char *func_name, MogValue *args, int nargs);
 
 // Value constructors
 MogValue mog_int(int64_t value);
