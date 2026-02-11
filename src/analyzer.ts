@@ -6,6 +6,7 @@ import {
   isBoolType,
   isTypeAliasType,
   isFunctionType,
+  isTensorType,
   isResultType,
   isOptionalType,
   resolveTypeAlias,
@@ -31,6 +32,7 @@ import {
   StructType,
   SOAType,
   FunctionType,
+  TensorType,
   ResultType,
   OptionalType,
   boolType,
@@ -679,6 +681,17 @@ class SemanticAnalyzer {
     const stringFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
       string_length: { params: [{ name: "str", type: ptrType }], returnType: u64Type },
       string_concat: { params: [{ name: "a", type: ptrType }, { name: "b", type: ptrType }], returnType: ptrType },
+      string_upper: { params: [{ name: "str", type: ptrType }], returnType: ptrType },
+      string_lower: { params: [{ name: "str", type: ptrType }], returnType: ptrType },
+      string_trim: { params: [{ name: "str", type: ptrType }], returnType: ptrType },
+      string_split: { params: [{ name: "str", type: ptrType }, { name: "delim", type: ptrType }], returnType: ptrType },
+      string_contains: { params: [{ name: "str", type: ptrType }, { name: "sub", type: ptrType }], returnType: boolType },
+      string_starts_with: { params: [{ name: "str", type: ptrType }, { name: "prefix", type: ptrType }], returnType: boolType },
+      string_ends_with: { params: [{ name: "str", type: ptrType }, { name: "suffix", type: ptrType }], returnType: boolType },
+      string_replace: { params: [{ name: "str", type: ptrType }, { name: "old", type: ptrType }, { name: "new", type: ptrType }], returnType: ptrType },
+      int_from_string: { params: [{ name: "str", type: ptrType }], returnType: ptrType },
+      float_from_string: { params: [{ name: "str", type: ptrType }], returnType: ptrType },
+      str: { params: [{ name: "value", type: i64Type }], returnType: ptrType },
     }
 
     for (const [name, func] of Object.entries(stringFunctions)) {
@@ -694,6 +707,37 @@ class SemanticAnalyzer {
     for (const [name, func] of Object.entries(gcBenchmarkFunctions)) {
       this.symbolTable.declare(name, "function", func.returnType)
     }
+
+    // Math builtin functions (available without import)
+    const mathFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      // Single-arg: float -> float
+      abs: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      sqrt: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      sin: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      cos: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      tan: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      asin: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      acos: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      exp: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      log: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      log2: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      floor: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      ceil: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      round: { params: [{ name: "x", type: f64Type }], returnType: f64Type },
+      // Two-arg: (float, float) -> float
+      pow: { params: [{ name: "x", type: f64Type }, { name: "n", type: f64Type }], returnType: f64Type },
+      atan2: { params: [{ name: "y", type: f64Type }, { name: "x", type: f64Type }], returnType: f64Type },
+      min: { params: [{ name: "a", type: f64Type }, { name: "b", type: f64Type }], returnType: f64Type },
+      max: { params: [{ name: "a", type: f64Type }, { name: "b", type: f64Type }], returnType: f64Type },
+    }
+
+    for (const [name, func] of Object.entries(mathFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
+
+    // Math constants (available without import)
+    this.symbolTable.declare("PI", "variable", f64Type)
+    this.symbolTable.declare("E", "variable", f64Type)
 
     // Socket functions
     const socketFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
@@ -1542,6 +1586,9 @@ class SemanticAnalyzer {
       case "IsErrExpression":
         result = this.visitIsErrExpression(node as any)
         break
+      case "TensorConstruction":
+        result = this.visitTensorConstruction(node as any)
+        break
       case "BooleanLiteral":
         result = boolType
         break
@@ -2055,15 +2102,122 @@ class SemanticAnalyzer {
       const memberExpr = node.callee as MemberExpressionNode
       const objectType = this.visitExpression(memberExpr.object)
 
-      if (objectType && isArrayType(objectType)) {
-        const arrayType = objectType as ArrayType
+      // Handle string method calls
+      if (objectType && this.isStringLikeType(objectType)) {
+        const method = memberExpr.property
         const args = (node as any).args ?? node.arguments
+        // Visit arguments for type checking
+        for (const arg of args) {
+          this.visitExpression(arg)
+        }
+        const stringType = new ArrayType(new UnsignedType("u8"), [])
+        switch (method) {
+          case "upper":
+          case "lower":
+          case "trim":
+          case "replace":
+            return stringType
+          case "split":
+            return new ArrayType(stringType, [0])
+          case "contains":
+          case "starts_with":
+          case "ends_with":
+            return new IntegerType("i64")
+          case "len":
+            return new UnsignedType("u64")
+        }
+      }
+
+      // Handle array method calls (non-string arrays)
+      if (objectType && isArrayType(objectType) && !this.isStringLikeType(objectType)) {
+        const arrayType = objectType as ArrayType
+        const method = memberExpr.property
+        const args = (node as any).args ?? node.arguments
+
+        switch (method) {
+          case "push": {
+            // Visit arguments for type checking
+            for (const arg of args) {
+              this.visitExpression(arg)
+            }
+            return new IntegerType("i64") // void-like
+          }
+          case "pop":
+            return arrayType.elementType || new IntegerType("i64")
+          case "contains": {
+            for (const arg of args) {
+              this.visitExpression(arg)
+            }
+            return new IntegerType("i64") // bool as i64 (0 or 1)
+          }
+          case "sort":
+          case "reverse":
+            return new IntegerType("i64") // void-like (in-place)
+          case "len":
+            return new UnsignedType("u64")
+          case "map":
+          case "filter": {
+            for (const arg of args) {
+              this.visitExpression(arg)
+            }
+            return new ArrayType(arrayType.elementType, [])
+          }
+          case "reduce": {
+            for (const arg of args) {
+              this.visitExpression(arg)
+            }
+            return new IntegerType("i64")
+          }
+        }
+
+        // Fallback: array indexing via call syntax arr(i)
         if (args.length === 1) {
           const indexType = this.visitExpression(args[0])
           if (indexType && !(isIntegerType(indexType) || isUnsignedType(indexType))) {
             this.emitError(`Array index must be integer type`, args[0].position)
           }
           return arrayType.elementType
+        }
+      }
+
+      // Handle array indexing via call syntax for string-like arrays
+      if (objectType && isArrayType(objectType) && this.isStringLikeType(objectType)) {
+        // Already handled above in string method section; this is a fallback for call-as-index
+      }
+
+      // Handle tensor method calls
+      if (objectType && isTensorType(objectType)) {
+        const tensorType = objectType as TensorType
+        const method = memberExpr.property
+        const args = (node as any).args ?? node.arguments
+        // Visit arguments for type checking
+        for (const arg of args) {
+          this.visitExpression(arg)
+        }
+        switch (method) {
+          case "matmul":
+          case "transpose":
+          case "reshape":
+          case "view":
+          case "flatten":
+          case "squeeze":
+          case "unsqueeze":
+            return tensorType
+          case "norm":
+          case "sum":
+          case "mean":
+          case "max":
+          case "min":
+          case "prod":
+            return new FloatType(tensorType.dtype instanceof FloatType ? tensorType.dtype.kind : "f32")
+          case "argmax":
+          case "argmin":
+            return new IntegerType("i64")
+          case "dot":
+            return new FloatType(tensorType.dtype instanceof FloatType ? tensorType.dtype.kind : "f32")
+          case "backward":
+          case "requires_grad":
+            return tensorType
         }
       }
     }
@@ -2087,6 +2241,14 @@ class SemanticAnalyzer {
       return null
     }
 
+    // Handle string member access
+    if (this.isStringLikeType(objectType)) {
+      if (node.property === "len") {
+        return new UnsignedType("u64")
+      }
+      return new PointerType()
+    }
+
     if (node.object.type === "Identifier") {
       const identifier = node.object as IdentifierNode
       const symbol = this.symbolTable.lookup(identifier.name)
@@ -2097,7 +2259,12 @@ class SemanticAnalyzer {
       }
     }
 
-    if (isArrayType(objectType)) {
+    if (isArrayType(objectType) && !this.isStringLikeType(objectType)) {
+      // Handle array property access: .len
+      if (node.property === "len") {
+        return new UnsignedType("u64")
+      }
+
       const arrayType = objectType as ArrayType
       if (arrayType.rank > 0) {
         const newDimensions = arrayType.dimensions.slice(0, -1)
@@ -2133,6 +2300,23 @@ class SemanticAnalyzer {
       return null
     }
 
+    // Handle tensor property access
+    if (isTensorType(objectType)) {
+      const tensorType = objectType as TensorType
+      if (node.property === "shape") {
+        return new ArrayType(new IntegerType("i64"), [])
+      }
+      if (node.property === "dtype") {
+        return tensorType.dtype
+      }
+      if (node.property === "grad") {
+        return tensorType
+      }
+      // For method references (without call), return the tensor type
+      // The actual call will be resolved by visitCallExpression
+      return tensorType
+    }
+
     // Allow member access on pointers (tables)
     if (isPointerType(objectType)) {
       return new IntegerType("i64")
@@ -2141,6 +2325,16 @@ class SemanticAnalyzer {
     this.emitError(`Cannot access property '${node.property}' on type ${objectType.toString()}`, node.position)
 
     return null
+  }
+
+  private visitTensorConstruction(node: any): Type | null {
+    // Visit constructor arguments for type checking
+    if (node.args) {
+      for (const arg of node.args) {
+        this.visitExpression(arg)
+      }
+    }
+    return new TensorType(node.dtype)
   }
 
   private visitIndexExpression(node: IndexExpressionNode): Type | null {
@@ -2463,6 +2657,18 @@ class SemanticAnalyzer {
   private visitIsErrExpression(node: any): Type | null {
     this.visitExpression(node.value)
     return boolType
+  }
+
+  private isStringLikeType(type: Type): boolean {
+    if (type instanceof ArrayType) {
+      return type.elementType instanceof UnsignedType &&
+             (type.elementType as UnsignedType).kind === "u8" &&
+             type.dimensions.length === 0
+    }
+    if (type instanceof PointerType) {
+      return true  // ptr types could be strings
+    }
+    return false
   }
 }
 

@@ -77,6 +77,7 @@ type TokenType =
   | "is"
   | "QUESTION_MARK"
   | "UNDERSCORE"
+  | "tensor"
   | "COMMENT"
 
 interface Position {
@@ -161,6 +162,7 @@ class Lexer {
     const someRegex = /some\b/y
     const noneRegex = /none\b/y
     const isRegex = /is\b/y
+    const tensorRegex = /tensor\b/y
     const trueRegex = /true\b/y
     const falseRegex = /false\b/y
     const questionMarkRegex = /\?/y
@@ -230,6 +232,41 @@ class Lexer {
           value,
           position: { start: startPos, end: this.currentPosition() },
         })
+        continue
+      }
+
+      // Multi-line comment: /* ... */
+      if (this.peek() === '/' && this.peek(1) === '*') {
+        let commentValue = '/*'
+        this.advance(2) // consume /*
+        let depth = 1
+        while (this.pos < this.input.length && depth > 0) {
+          if (this.peek() === '/' && this.peek(1) === '*') {
+            commentValue += '/*'
+            this.advance(2)
+            depth++
+          } else if (this.peek() === '*' && this.peek(1) === '/') {
+            commentValue += '*/'
+            this.advance(2)
+            depth--
+          } else {
+            commentValue += this.peek()
+            this.advance(1)
+          }
+        }
+        if (depth > 0) {
+          tokens.push({
+            type: "UNKNOWN",
+            value: commentValue,
+            position: { start: startPos, end: this.currentPosition() },
+          })
+        } else {
+          tokens.push({
+            type: "COMMENT",
+            value: commentValue,
+            position: { start: startPos, end: this.currentPosition() },
+          })
+        }
         continue
       }
 
@@ -548,6 +585,18 @@ class Lexer {
       value = this.match(isRegex)
       if (value) {
         type = "is"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(tensorRegex)
+      if (value) {
+        type = "tensor"
         this.advance(value.length)
         tokens.push({
           type,

@@ -238,6 +238,24 @@ class CustomType {
   }
 }
 
+class TensorType {
+  dtype: Type
+  shape: number[] | null
+  type = "TensorType"
+
+  constructor(dtype: Type, shape: number[] | null = null) {
+    this.dtype = dtype
+    this.shape = shape
+  }
+
+  toString(): string {
+    if (this.shape) {
+      return `tensor<${this.dtype}>(${this.shape.join(", ")})`
+    }
+    return `tensor<${this.dtype}>`
+  }
+}
+
 class ResultType {
   innerType: Type
   type = "ResultType"
@@ -280,7 +298,7 @@ class FunctionType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType | ResultType | OptionalType
+type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType | TensorType | ResultType | OptionalType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -374,6 +392,10 @@ function isFunctionType(type: Type): type is FunctionType {
   return type instanceof FunctionType
 }
 
+function isTensorType(type: Type): type is TensorType {
+  return type instanceof TensorType
+}
+
 function isResultType(type: Type): type is ResultType {
   return type instanceof ResultType
 }
@@ -449,6 +471,16 @@ function sameType(a: Type, b: Type): boolean {
       if (!sameType(a.paramTypes[i], b.paramTypes[i])) return false
     }
     return sameType(a.returnType, b.returnType)
+  }
+  if (a instanceof TensorType && b instanceof TensorType) {
+    if (!sameType(a.dtype, b.dtype)) return false
+    if (a.shape === null && b.shape === null) return true
+    if (a.shape === null || b.shape === null) return false
+    if (a.shape.length !== b.shape.length) return false
+    for (let i = 0; i < a.shape.length; i++) {
+      if (a.shape[i] !== b.shape[i]) return false
+    }
+    return true
   }
   if (a instanceof ResultType && b instanceof ResultType) {
     return sameType(a.innerType, b.innerType)
@@ -709,6 +741,7 @@ export {
   SOAType,
   CustomType,
   FunctionType,
+  TensorType,
   ResultType,
   OptionalType,
   TypeVar,
@@ -722,6 +755,7 @@ export {
   isBoolType,
   isTypeAliasType,
   isFunctionType,
+  isTensorType,
   isResultType,
   isOptionalType,
   resolveTypeAlias,

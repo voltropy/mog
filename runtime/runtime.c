@@ -766,6 +766,96 @@ void* array_slice_step(void* array_ptr, uint64_t start, uint64_t end, uint64_t s
   return slice;
 }
 
+/* --- Array Methods Implementation --- */
+
+void array_push(void* array_ptr, uint64_t value) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0) return;
+
+  uint64_t old_len = arr->dimensions[0];
+  uint64_t new_len = old_len + 1;
+
+  /* Allocate new data buffer with one more element */
+  void* new_data = gc_alloc(arr->element_size * new_len);
+  if (old_len > 0 && arr->data) {
+    memcpy(new_data, arr->data, arr->element_size * old_len);
+  }
+
+  /* Set the new element */
+  uint8_t* data = (uint8_t*)new_data;
+  *(uint64_t*)(data + old_len * arr->element_size) = value;
+
+  /* Update array */
+  arr->data = new_data;
+  arr->dimensions[0] = new_len;
+}
+
+uint64_t array_pop(void* array_ptr) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0 || arr->dimensions[0] == 0) return 0;
+
+  uint64_t old_len = arr->dimensions[0];
+  uint64_t new_len = old_len - 1;
+
+  /* Get the last element before shrinking */
+  uint8_t* data = (uint8_t*)arr->data;
+  uint64_t value = *(uint64_t*)(data + new_len * arr->element_size);
+
+  /* Shrink: just update the dimension (data stays allocated, GC will handle) */
+  arr->dimensions[0] = new_len;
+
+  return value;
+}
+
+uint64_t array_contains(void* array_ptr, uint64_t value) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0) return 0;
+
+  uint64_t len = arr->dimensions[0];
+  uint8_t* data = (uint8_t*)arr->data;
+  for (uint64_t i = 0; i < len; i++) {
+    uint64_t elem = *(uint64_t*)(data + i * arr->element_size);
+    if (elem == value) return 1;
+  }
+  return 0;
+}
+
+/* Comparison function for qsort (ascending i64 order) */
+static int array_sort_cmp(const void* a, const void* b) {
+  int64_t va = *(const int64_t*)a;
+  int64_t vb = *(const int64_t*)b;
+  if (va < vb) return -1;
+  if (va > vb) return 1;
+  return 0;
+}
+
+void array_sort(void* array_ptr) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0 || arr->dimensions[0] <= 1) return;
+
+  qsort(arr->data, arr->dimensions[0], arr->element_size, array_sort_cmp);
+}
+
+void array_reverse(void* array_ptr) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0 || arr->dimensions[0] <= 1) return;
+
+  uint64_t len = arr->dimensions[0];
+  uint8_t* data = (uint8_t*)arr->data;
+  uint64_t elem_size = arr->element_size;
+
+  /* Swap elements from both ends toward the middle */
+  uint8_t temp[8]; /* element_size is at most 8 bytes (i64/f64/ptr) */
+  for (uint64_t i = 0; i < len / 2; i++) {
+    uint64_t j = len - 1 - i;
+    uint8_t* a = data + i * elem_size;
+    uint8_t* b = data + j * elem_size;
+    memcpy(temp, a, elem_size);
+    memcpy(a, b, elem_size);
+    memcpy(b, temp, elem_size);
+  }
+}
+
 /* --- Map Implementation --- */
 /* MapEntry and Map structs defined above for tracing */
 
@@ -1090,6 +1180,193 @@ char* f64_to_string(double value) {
   char* result = (char*)gc_alloc(len + 1);
   memcpy(result, buffer, len + 1);
   return result;
+}
+
+/* Forward declarations for Result functions used by string methods */
+void* mog_result_ok(uint64_t value);
+void* mog_result_err(const char* message);
+
+/* String Method Functions */
+
+char* string_upper(const char* str) {
+  if (!str) return "";
+  uint64_t len = strlen(str);
+  char* result = (char*)gc_alloc(len + 1);
+  for (uint64_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)str[i];
+    result[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : (char)c;
+  }
+  result[len] = '\0';
+  return result;
+}
+
+char* string_lower(const char* str) {
+  if (!str) return "";
+  uint64_t len = strlen(str);
+  char* result = (char*)gc_alloc(len + 1);
+  for (uint64_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)str[i];
+    result[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
+  }
+  result[len] = '\0';
+  return result;
+}
+
+char* string_trim(const char* str) {
+  if (!str) return "";
+  uint64_t len = strlen(str);
+  uint64_t start = 0;
+  while (start < len && (str[start] == ' ' || str[start] == '\t' || str[start] == '\n' || str[start] == '\r')) {
+    start++;
+  }
+  uint64_t end = len;
+  while (end > start && (str[end - 1] == ' ' || str[end - 1] == '\t' || str[end - 1] == '\n' || str[end - 1] == '\r')) {
+    end--;
+  }
+  uint64_t result_len = end - start;
+  char* result = (char*)gc_alloc(result_len + 1);
+  memcpy(result, str + start, result_len);
+  result[result_len] = '\0';
+  return result;
+}
+
+void* string_split(const char* str, const char* delimiter) {
+  if (!str || !delimiter) {
+    /* Return empty array */
+    uint64_t dims[1] = {0};
+    return array_alloc(8, 1, dims);
+  }
+  uint64_t delim_len = strlen(delimiter);
+  if (delim_len == 0) {
+    /* Split into individual characters */
+    uint64_t len = strlen(str);
+    uint64_t dims[1] = {len};
+    void* arr = array_alloc(8, 1, dims);
+    for (uint64_t i = 0; i < len; i++) {
+      char* ch = (char*)gc_alloc(2);
+      ch[0] = str[i];
+      ch[1] = '\0';
+      array_set(arr, i, (uint64_t)(uintptr_t)ch);
+    }
+    return arr;
+  }
+  
+  /* First pass: count splits */
+  uint64_t count = 1;
+  const char* p = str;
+  while ((p = strstr(p, delimiter)) != NULL) {
+    count++;
+    p += delim_len;
+  }
+  
+  /* Allocate array */
+  uint64_t dims[1] = {count};
+  void* arr = array_alloc(8, 1, dims);
+  
+  /* Second pass: extract substrings */
+  const char* start = str;
+  uint64_t idx = 0;
+  p = str;
+  while ((p = strstr(start, delimiter)) != NULL) {
+    uint64_t part_len = (uint64_t)(p - start);
+    char* part = (char*)gc_alloc(part_len + 1);
+    memcpy(part, start, part_len);
+    part[part_len] = '\0';
+    array_set(arr, idx, (uint64_t)(uintptr_t)part);
+    idx++;
+    start = p + delim_len;
+  }
+  /* Last part */
+  uint64_t last_len = strlen(start);
+  char* last = (char*)gc_alloc(last_len + 1);
+  memcpy(last, start, last_len + 1);
+  array_set(arr, idx, (uint64_t)(uintptr_t)last);
+  
+  return arr;
+}
+
+uint64_t string_contains(const char* str, const char* substring) {
+  if (!str || !substring) return 0;
+  return strstr(str, substring) != NULL ? 1 : 0;
+}
+
+uint64_t string_starts_with(const char* str, const char* prefix) {
+  if (!str || !prefix) return 0;
+  uint64_t prefix_len = strlen(prefix);
+  if (strlen(str) < prefix_len) return 0;
+  return strncmp(str, prefix, prefix_len) == 0 ? 1 : 0;
+}
+
+uint64_t string_ends_with(const char* str, const char* suffix) {
+  if (!str || !suffix) return 0;
+  uint64_t str_len = strlen(str);
+  uint64_t suffix_len = strlen(suffix);
+  if (str_len < suffix_len) return 0;
+  return strcmp(str + str_len - suffix_len, suffix) == 0 ? 1 : 0;
+}
+
+char* string_replace(const char* str, const char* old_str, const char* new_str) {
+  if (!str || !old_str || !new_str) return (char*)str;
+  uint64_t old_len = strlen(old_str);
+  uint64_t new_len = strlen(new_str);
+  if (old_len == 0) return (char*)str;
+  
+  /* Count occurrences */
+  uint64_t count = 0;
+  const char* p = str;
+  while ((p = strstr(p, old_str)) != NULL) {
+    count++;
+    p += old_len;
+  }
+  if (count == 0) {
+    uint64_t len = strlen(str);
+    char* result = (char*)gc_alloc(len + 1);
+    memcpy(result, str, len + 1);
+    return result;
+  }
+  
+  uint64_t str_len = strlen(str);
+  uint64_t result_len = str_len + count * (new_len - old_len);
+  char* result = (char*)gc_alloc(result_len + 1);
+  
+  char* dest = result;
+  const char* src = str;
+  while ((p = strstr(src, old_str)) != NULL) {
+    uint64_t chunk_len = (uint64_t)(p - src);
+    memcpy(dest, src, chunk_len);
+    dest += chunk_len;
+    memcpy(dest, new_str, new_len);
+    dest += new_len;
+    src = p + old_len;
+  }
+  /* Copy remaining */
+  strcpy(dest, src);
+  
+  return result;
+}
+
+/* Conversion functions: string -> int/float (returns Result) */
+
+void* int_from_string(const char* str) {
+  if (!str) return mog_result_err("null string");
+  char* endptr;
+  long long val = strtoll(str, &endptr, 10);
+  if (endptr == str || *endptr != '\0') {
+    return mog_result_err("invalid integer");
+  }
+  return mog_result_ok((int64_t)val);
+}
+
+void* float_from_string(const char* str) {
+  if (!str) return mog_result_err("null string");
+  char* endptr;
+  double val = strtod(str, &endptr);
+  if (endptr == str || *endptr != '\0') {
+    return mog_result_err("invalid float");
+  }
+  int64_t bits;
+  memcpy(&bits, &val, sizeof(bits));
+  return mog_result_ok(bits);
 }
 
 /* I/O Functions */

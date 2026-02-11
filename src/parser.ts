@@ -1,7 +1,7 @@
 import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType, FunctionType, ResultType, OptionalType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType, FunctionType, TensorType, ResultType, OptionalType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
 // Decode escape sequences in string literals
@@ -185,6 +185,10 @@ class Parser {
     if (this.matchType("QUESTION_MARK")) {
       const innerType = this.parseReturnType()
       return new OptionalType(innerType)
+    }
+    // Check for tensor<T> type
+    if (this.checkType("tensor")) {
+      return this.parseTensorTypeAnnotation()
     }
     // Accept both TYPE and IDENTIFIER tokens as return types (for custom struct types)
     let returnToken: any
@@ -897,6 +901,10 @@ class Parser {
       // Function type annotation: callback: fn(int) -> int = ...
       varType = this.parseFunctionTypeAnnotation()
       typeName = varType.toString()
+    } else if (this.checkType("tensor")) {
+      // Tensor type annotation: t: tensor<f32> = ...
+      varType = this.parseTensorTypeAnnotation()
+      typeName = varType.toString()
     } else if (this.checkType("LBRACKET")) {
       // Parse array type like [u8], [i32], [f32; 3], or nested [[f64; 3]; 2], etc.
       typeName = this.parseArrayTypeAnnotation()
@@ -1459,6 +1467,77 @@ private comparison(): ExpressionNode {
       }
     }
 
+    // tensor<dtype>(shape) construction expression
+    if (this.matchType("tensor")) {
+      const token = this.previous()
+      this.consume("LESS", "Expected < after tensor")
+      let dtypeName: string
+      if (this.checkType("TYPE")) {
+        dtypeName = this.consume("TYPE", "Expected dtype").value
+      } else {
+        dtypeName = this.consume("IDENTIFIER", "Expected dtype").value
+      }
+      this.consume("GREATER", "Expected > after tensor dtype")
+      const dtype = this.parsePrimitiveType(dtypeName)
+      if (!dtype) {
+        throw new Error(`Invalid tensor dtype: ${dtypeName}`)
+      }
+      // Parse optional constructor arguments: tensor<f32>([2, 3])
+      let args: ExpressionNode[] = []
+      if (this.matchType("LPAREN")) {
+        if (!this.checkType("RPAREN")) {
+          do {
+            args.push(this.expression())
+          } while (this.matchType("COMMA"))
+        }
+        this.consume("RPAREN", "Expected ) after tensor arguments")
+      }
+
+      let object: ExpressionNode = {
+        type: "TensorConstruction" as any,
+        dtype,
+        args,
+        position: {
+          start: token.position.start,
+          end: this.lastPosition(),
+        },
+      } as any
+
+      // Parse chained postfix operations: .method()
+      let done = false
+      while (!done) {
+        if (this.matchType("DOT")) {
+          const property = this.consume("IDENTIFIER", "Expected property name").value
+          object = {
+            type: "MemberExpression",
+            object,
+            property,
+            position: this.combinePositions(object, this.previous()),
+          }
+          // Handle method call: .matmul(other)
+          if (this.matchType("LPAREN")) {
+            const callArgs: ExpressionNode[] = []
+            if (!this.checkType("RPAREN")) {
+              do {
+                callArgs.push(this.expression())
+              } while (this.matchType("COMMA"))
+            }
+            this.consume("RPAREN", "Expected ) after arguments")
+            object = {
+              type: "CallExpression",
+              callee: object,
+              args: callArgs,
+              position: this.combinePositions(object, this.previous()),
+            } as any
+          }
+        } else {
+          done = true
+        }
+      }
+
+      return object
+    }
+
     if (this.matchType("IDENTIFIER")) {
       const token = this.previous()
 
@@ -1751,6 +1830,23 @@ private comparison(): ExpressionNode {
     if (name.startsWith("f")) return new FloatType(name as any)
     if (name === "ptr") return new PointerType()
     return null
+  }
+
+  private parseTensorTypeAnnotation(): TensorType {
+    this.consume("tensor", "Expected tensor keyword")
+    this.consume("LESS", "Expected < after tensor")
+    let dtypeName: string
+    if (this.checkType("TYPE")) {
+      dtypeName = this.consume("TYPE", "Expected dtype").value
+    } else {
+      dtypeName = this.consume("IDENTIFIER", "Expected dtype").value
+    }
+    this.consume("GREATER", "Expected > after tensor dtype")
+    const dtype = this.parsePrimitiveType(dtypeName)
+    if (!dtype) {
+      throw new Error(`Invalid tensor dtype: ${dtypeName}`)
+    }
+    return new TensorType(dtype)
   }
 
   private parseType(typeName: string): any {

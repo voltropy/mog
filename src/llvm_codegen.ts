@@ -1,6 +1,5 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
-import type { ArrayType } from "./types.js"
-import { isArrayType, isMapType, isFloatType, IntegerType, ResultType, OptionalType } from "./types.js"
+import { isArrayType, isMapType, isFloatType, IntegerType, UnsignedType, ArrayType, ResultType, OptionalType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -251,6 +250,7 @@ class LLVMIRGenerator {
     }
 
     this.generateRuntimeFunctions(ir)
+    this.generateMathDeclarations(ir)
     this.generatePOSIXDeclarations(ir)
 
     return ir.join("\n")
@@ -309,6 +309,11 @@ class LLVMIRGenerator {
     ir.push("declare double @dot_f64(ptr %a, ptr %b)")
     ir.push("declare ptr @matmul(ptr %a, ptr %b)")
     ir.push("declare ptr @matrix_add(ptr %a, ptr %b)")
+    ir.push("declare void @array_push(ptr %array, i64 %value)")
+    ir.push("declare i64 @array_pop(ptr %array)")
+    ir.push("declare i64 @array_contains(ptr %array, i64 %value)")
+    ir.push("declare void @array_sort(ptr %array)")
+    ir.push("declare void @array_reverse(ptr %array)")
     ir.push("")
 
     ir.push("; Declare map functions")
@@ -325,6 +330,16 @@ class LLVMIRGenerator {
     ir.push("declare ptr @i64_to_string(i64 %value)")
     ir.push("declare ptr @u64_to_string(i64 %value)")
     ir.push("declare ptr @f64_to_string(double %value)")
+    ir.push("declare ptr @string_upper(ptr %str)")
+    ir.push("declare ptr @string_lower(ptr %str)")
+    ir.push("declare ptr @string_trim(ptr %str)")
+    ir.push("declare ptr @string_split(ptr %str, ptr %delim)")
+    ir.push("declare i64 @string_contains(ptr %str, ptr %sub)")
+    ir.push("declare i64 @string_starts_with(ptr %str, ptr %prefix)")
+    ir.push("declare i64 @string_ends_with(ptr %str, ptr %suffix)")
+    ir.push("declare ptr @string_replace(ptr %str, ptr %old, ptr %new)")
+    ir.push("declare ptr @int_from_string(ptr %str)")
+    ir.push("declare ptr @float_from_string(ptr %str)")
     ir.push("")
 
     ir.push("; Declare CLI argument helper functions")
@@ -355,17 +370,29 @@ class LLVMIRGenerator {
       case "VariableDeclaration": {
         const llvmType = this.toLLVMType(statement.varType)
         const reg = `%${statement.name}`
-        const isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType" 
+        let isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType" 
           || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
           || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
+        // Infer pointer type from value expression when varType is not explicit
+        if (!isPointerLike && statement.value) {
+          isPointerLike = this.isStringProducingExpression(statement.value)
+        }
         const allocaType = isPointerLike ? "ptr" : llvmType
         ir.push(`  ${reg} = alloca ${allocaType}`)
-        this.variableTypes.set(statement.name, statement.varType)
+        if (isPointerLike && !statement.varType) {
+          // For inferred pointer types, register as ArrayType(u8, []) so isStringType works
+          this.variableTypes.set(statement.name, new ArrayType(new UnsignedType("u8"), []))
+        } else {
+          this.variableTypes.set(statement.name, statement.varType)
+        }
         if (statement.value) {
           const value = this.generateExpression(ir, statement.value)
-          const isPointerLike2 = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
+          let isPointerLike2 = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
             || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
             || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
+          if (!isPointerLike2 && isPointerLike) {
+            isPointerLike2 = true
+          }
           const storeType = isPointerLike2 ? "ptr" : llvmType
           ir.push(`  store ${storeType} ${value}, ptr ${reg}`)
         }
@@ -492,6 +519,15 @@ class LLVMIRGenerator {
         return this.generateTemplateLiteral(ir, expr)
       case "Identifier": {
         const name = expr.name
+
+        // Math constants: PI and E as compile-time constant doubles
+        if (name === "PI") {
+          return "0x400921fb54442d18" // Math.PI as f64 bit pattern
+        }
+        if (name === "E") {
+          return "0x4005bf0a8b145769" // Math.E as f64 bit pattern
+        }
+
         const ptrReg = `%${name}_local`
         const valReg = `%${this.valueCounter++}`
 
@@ -1181,6 +1217,93 @@ class LLVMIRGenerator {
         return "0"
       }
 
+      // Handle math builtin functions
+      const mathSingleArg: Record<string, string> = {
+        sqrt: "@llvm.sqrt.f64",
+        sin: "@llvm.sin.f64",
+        cos: "@llvm.cos.f64",
+        tan: "@tan",
+        asin: "@asin",
+        acos: "@acos",
+        exp: "@llvm.exp.f64",
+        log: "@llvm.log.f64",
+        log2: "@llvm.log2.f64",
+        floor: "@llvm.floor.f64",
+        ceil: "@llvm.ceil.f64",
+        round: "@llvm.round.f64",
+        abs: "@llvm.fabs.f64",
+      }
+      const mathTwoArg: Record<string, string> = {
+        pow: "@llvm.pow.f64",
+        atan2: "@atan2",
+        min: "@llvm.minnum.f64",
+        max: "@llvm.maxnum.f64",
+      }
+
+      if (mathSingleArg[funcName]) {
+        const argReg = args[0]
+        // Bitcast i64 arg to double
+        const doubleReg = `%${this.valueCounter++}`
+        ir.push(`  ${doubleReg} = bitcast i64 ${argReg} to double`)
+        const resultReg = `%${this.valueCounter++}`
+        ir.push(`  ${resultReg} = call double ${mathSingleArg[funcName]}(double ${doubleReg})`)
+        // Bitcast result back to i64
+        const i64Reg = `%${this.valueCounter++}`
+        ir.push(`  ${i64Reg} = bitcast double ${resultReg} to i64`)
+        return i64Reg
+      }
+
+      if (mathTwoArg[funcName]) {
+        const argReg0 = args[0]
+        const argReg1 = args[1]
+        // Bitcast i64 args to double
+        const doubleReg0 = `%${this.valueCounter++}`
+        ir.push(`  ${doubleReg0} = bitcast i64 ${argReg0} to double`)
+        const doubleReg1 = `%${this.valueCounter++}`
+        ir.push(`  ${doubleReg1} = bitcast i64 ${argReg1} to double`)
+        const resultReg = `%${this.valueCounter++}`
+        ir.push(`  ${resultReg} = call double ${mathTwoArg[funcName]}(double ${doubleReg0}, double ${doubleReg1})`)
+        // Bitcast result back to i64
+        const i64Reg = `%${this.valueCounter++}`
+        ir.push(`  ${i64Reg} = bitcast double ${resultReg} to i64`)
+        return i64Reg
+      }
+
+      // Handle str() conversion function
+      if (funcName === "str") {
+        const argReg = args[0]
+        // Check if the argument is a float type
+        const argExpr = positionalArgs[0]
+        const isFloat = argExpr?.inferredType?.type === "FloatType" || 
+                        argExpr?.type === "FloatLiteral" ||
+                        (argExpr?.type === "Identifier" && this.variableTypes.get(argExpr.name)?.type === "FloatType")
+        if (isFloat) {
+          const doubleReg = `%${this.valueCounter++}`
+          ir.push(`  ${doubleReg} = bitcast i64 ${argReg} to double`)
+          const reg = `%${this.valueCounter++}`
+          ir.push(`  ${reg} = call ptr @f64_to_string(double ${doubleReg})`)
+          return reg
+        } else {
+          const reg = `%${this.valueCounter++}`
+          ir.push(`  ${reg} = call ptr @i64_to_string(i64 ${argReg})`)
+          return reg
+        }
+      }
+
+      // Handle int_from_string() conversion
+      if (funcName === "int_from_string") {
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call ptr @int_from_string(ptr ${args[0]})`)
+        return reg
+      }
+
+      // Handle float_from_string() conversion
+      if (funcName === "float_from_string") {
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call ptr @float_from_string(ptr ${args[0]})`)
+        return reg
+      }
+
       const funcInfo = this.functions.get(funcName)
 
       // POSIX function signatures for proper argument typing
@@ -1239,6 +1362,18 @@ class LLVMIRGenerator {
         map_set: { params: ["ptr", "ptr", "i64", "i64"], ret: "void" },
         string_length: { params: ["ptr"], ret: "i64" },
         string_concat: { params: ["ptr", "ptr"], ret: "ptr" },
+        string_upper: { params: ["ptr"], ret: "ptr" },
+        string_lower: { params: ["ptr"], ret: "ptr" },
+        string_trim: { params: ["ptr"], ret: "ptr" },
+        string_split: { params: ["ptr", "ptr"], ret: "ptr" },
+        string_contains: { params: ["ptr", "ptr"], ret: "i64" },
+        string_starts_with: { params: ["ptr", "ptr"], ret: "i64" },
+        string_ends_with: { params: ["ptr", "ptr"], ret: "i64" },
+        string_replace: { params: ["ptr", "ptr", "ptr"], ret: "ptr" },
+        int_from_string: { params: ["ptr"], ret: "ptr" },
+        float_from_string: { params: ["ptr"], ret: "ptr" },
+        i64_to_string: { params: ["i64"], ret: "ptr" },
+        f64_to_string: { params: ["double"], ret: "ptr" },
         gc_alloc: { params: ["i64"], ret: "ptr" },
       }
 
@@ -1296,6 +1431,107 @@ class LLVMIRGenerator {
     // Handle capability function calls (MemberExpression like fs.read(...))
     if (expr.callee.type === "MemberExpression") {
       const memberExpr = expr.callee
+
+      // Check if this is a string method call (e.g., s.upper(), s.lower())
+      if (this.isStringType(memberExpr.object)) {
+        const strReg = this.generateExpression(ir, memberExpr.object)
+        const method = memberExpr.property
+        const callArgs = expr.args || expr.arguments || []
+
+        switch (method) {
+          case "upper": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @string_upper(ptr ${strReg})`)
+            return reg
+          }
+          case "lower": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @string_lower(ptr ${strReg})`)
+            return reg
+          }
+          case "trim": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @string_trim(ptr ${strReg})`)
+            return reg
+          }
+          case "split": {
+            const delimReg = callArgs.length > 0 ? this.generateExpression(ir, callArgs[0]) : this.generateStringLiteral(ir, "")
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @string_split(ptr ${strReg}, ptr ${delimReg})`)
+            return reg
+          }
+          case "contains": {
+            const subReg = this.generateExpression(ir, callArgs[0])
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @string_contains(ptr ${strReg}, ptr ${subReg})`)
+            return reg
+          }
+          case "starts_with": {
+            const prefixReg = this.generateExpression(ir, callArgs[0])
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @string_starts_with(ptr ${strReg}, ptr ${prefixReg})`)
+            return reg
+          }
+          case "ends_with": {
+            const suffixReg = this.generateExpression(ir, callArgs[0])
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @string_ends_with(ptr ${strReg}, ptr ${suffixReg})`)
+            return reg
+          }
+          case "replace": {
+            const oldReg = this.generateExpression(ir, callArgs[0])
+            const newReg = this.generateExpression(ir, callArgs[1])
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @string_replace(ptr ${strReg}, ptr ${oldReg}, ptr ${newReg})`)
+            return reg
+          }
+          case "len": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @string_length(ptr ${strReg})`)
+            return reg
+          }
+        }
+      }
+
+      // Check if this is an array method call (e.g., arr.push(5), arr.pop())
+      if (this.isArrayType(memberExpr.object)) {
+        const arrReg = this.generateExpression(ir, memberExpr.object)
+        const method = memberExpr.property
+        const callArgs = expr.args || expr.arguments || []
+
+        switch (method) {
+          case "push": {
+            const valueReg = this.generateExpression(ir, callArgs[0])
+            ir.push(`  call void @array_push(ptr ${arrReg}, i64 ${valueReg})`)
+            return "0" // void return
+          }
+          case "pop": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @array_pop(ptr ${arrReg})`)
+            return reg
+          }
+          case "contains": {
+            const valueReg = this.generateExpression(ir, callArgs[0])
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @array_contains(ptr ${arrReg}, i64 ${valueReg})`)
+            return reg
+          }
+          case "sort": {
+            ir.push(`  call void @array_sort(ptr ${arrReg})`)
+            return "0" // void return
+          }
+          case "reverse": {
+            ir.push(`  call void @array_reverse(ptr ${arrReg})`)
+            return "0" // void return
+          }
+          case "len": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @array_length(ptr ${arrReg})`)
+            return reg
+          }
+        }
+      }
+
       if (memberExpr.object.type === "Identifier" && this.capabilities.has(memberExpr.object.name)) {
         return this.generateCapabilityCall(ir, memberExpr.object.name, memberExpr.property, args, expr)
       }
@@ -1575,7 +1811,17 @@ class LLVMIRGenerator {
         }
       }
     }
+    // Check if it's a string method call result (e.g., s.upper(), s.lower(), s.trim())
+    if (!argType && this.isStringType(arg)) {
+      argType = "PointerType"
+    }
     argType = argType || "IntegerType"
+
+    // Force ptr type for direct print_string/println_string calls
+    if (actualFunc === "print_string" || actualFunc === "println_string") {
+      ir.push(`  call void @${actualFunc}(ptr ${args[0]})`)
+      return ""
+    }
 
     // If generic print/println, determine specific version based on type
     if (funcName === "print" || funcName === "println") {
@@ -1766,13 +2012,17 @@ class LLVMIRGenerator {
       let varType = this.variableTypes.get(name)
       // If variable doesn't exist yet (walrus-style new variable), allocate it
       if (!varType && name) {
-        // Determine type from value - function pointer or general
+        // Determine type from value - function pointer, string, or general
         const isFuncPtr = valueReg.startsWith("@")
-        const allocaType = isFuncPtr ? "ptr" : "i64"
+        const isStringExpr = this.isStringProducingExpression(value)
+        const allocaType = (isFuncPtr || isStringExpr) ? "ptr" : "i64"
         ir.push(`  %${name} = alloca ${allocaType}`)
         if (isFuncPtr) {
           // Track as a function type for later loads
           this.variableTypes.set(name, { type: "FunctionType" })
+        } else if (isStringExpr) {
+          // Track as string type for later isStringType checks
+          this.variableTypes.set(name, new ArrayType(new UnsignedType("u8"), []))
         }
         varType = this.variableTypes.get(name)
       }
@@ -2048,6 +2298,22 @@ class LLVMIRGenerator {
   }
 
   private generateMemberExpression(ir: string[], expr: any): string {
+    // String property access: s.len
+    if (expr.property === "len" && this.isStringType(expr.object)) {
+      const strReg = this.generateExpression(ir, expr.object)
+      const reg = `%${this.valueCounter++}`
+      ir.push(`  ${reg} = call i64 @string_length(ptr ${strReg})`)
+      return reg
+    }
+
+    // Array property access: arr.len
+    if (expr.property === "len" && this.isArrayType(expr.object)) {
+      const arrReg = this.generateExpression(ir, expr.object)
+      const reg = `%${this.valueCounter++}`
+      ir.push(`  ${reg} = call i64 @array_length(ptr ${arrReg})`)
+      return reg
+    }
+
     // Check if the object is a struct type - use GEP-based field access
     if (expr.object?.type === "Identifier") {
       const varType = this.variableTypes.get(expr.object.name)
@@ -2248,11 +2514,42 @@ class LLVMIRGenerator {
     return null
   }
 
+  private isStringProducingExpression(expr: any): boolean {
+    if (!expr) return false
+    // str() conversion
+    if (expr.type === "CallExpression" && expr.callee?.type === "Identifier") {
+      const name = expr.callee.name
+      if (name === "str" || name === "string_concat" || name === "string_upper" || 
+          name === "string_lower" || name === "string_trim" || name === "string_replace" ||
+          name === "string_char_at" || name === "string_slice" ||
+          name === "i64_to_string" || name === "u64_to_string" || name === "f64_to_string") {
+        return true
+      }
+    }
+    // String method calls (e.g., s.upper(), s.trim())
+    if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
+      const method = expr.callee.property
+      if (["upper", "lower", "trim", "replace", "split"].includes(method)) {
+        return true
+      }
+    }
+    // String literals and template literals
+    if (expr.type === "StringLiteral" || expr.type === "TemplateLiteral") {
+      return true
+    }
+    return false
+  }
+
   private isStringType(expr: any): boolean {
     if (!expr) return false
 
     // Check if it's a string literal
     if (expr.type === "StringLiteral") {
+      return true
+    }
+
+    // Check if it's a template literal (f-string)
+    if (expr.type === "TemplateLiteral") {
       return true
     }
 
@@ -2264,6 +2561,36 @@ class LLVMIRGenerator {
         return arrType.elementType?.type === "UnsignedType" &&
                (arrType.elementType as any)?.kind === "u8" &&
                arrType.dimensions.length === 0
+      }
+    }
+
+    // Check if it's a method call that returns a string (e.g., s.upper().lower())
+    if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
+      const method = expr.callee.property
+      const stringMethods = ["upper", "lower", "trim", "replace", "split"]
+      if (stringMethods.includes(method) && method !== "split") {
+        return this.isStringType(expr.callee.object)
+      }
+    }
+
+    return false
+  }
+
+  private isArrayType(expr: any): boolean {
+    if (!expr) return false
+
+    // If it's an identifier, look up the variable type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "ArrayType") {
+        // Exclude string types ([u8])
+        const arrType = varType as ArrayType
+        if (arrType.elementType?.type === "UnsignedType" &&
+            (arrType.elementType as any)?.kind === "u8" &&
+            arrType.dimensions.length === 0) {
+          return false
+        }
+        return true
       }
     }
 
@@ -3267,6 +3594,31 @@ class LLVMIRGenerator {
   private generateRuntimeFunctions(ir: string[]): void {
     ir.push("")
     ir.push("; Runtime function definitions (linked from runtime library)")
+  }
+
+  private generateMathDeclarations(ir: string[]): void {
+    ir.push("")
+    ir.push("; Math function declarations (libm)")
+    // Single-arg: double -> double
+    ir.push("declare double @llvm.sqrt.f64(double)")
+    ir.push("declare double @llvm.sin.f64(double)")
+    ir.push("declare double @llvm.cos.f64(double)")
+    ir.push("declare double @tan(double)")
+    ir.push("declare double @asin(double)")
+    ir.push("declare double @acos(double)")
+    ir.push("declare double @atan2(double, double)")
+    ir.push("declare double @llvm.exp.f64(double)")
+    ir.push("declare double @llvm.log.f64(double)")
+    ir.push("declare double @llvm.log2.f64(double)")
+    ir.push("declare double @llvm.floor.f64(double)")
+    ir.push("declare double @llvm.ceil.f64(double)")
+    ir.push("declare double @llvm.round.f64(double)")
+    ir.push("declare double @llvm.fabs.f64(double)")
+    // Two-arg: (double, double) -> double
+    ir.push("declare double @llvm.pow.f64(double, double)")
+    ir.push("declare double @llvm.minnum.f64(double, double)")
+    ir.push("declare double @llvm.maxnum.f64(double, double)")
+    ir.push("")
   }
 
   private generatePOSIXDeclarations(ir: string[]): void {
