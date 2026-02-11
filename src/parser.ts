@@ -27,6 +27,7 @@ type ParseResult<T> = T | null
 class Parser {
   private tokens: Token[]
   private current = 0
+  private allowStructLiteral = true
 
   constructor(tokens: Token[]) {
     this.tokens = tokens
@@ -293,9 +294,18 @@ if (!this.checkType("RPAREN")) {
   }
 
   private ifStatement(): StatementNode {
-    this.consume("LPAREN", "Expected ( after if")
-    const condition = this.expression()
-    this.consume("RPAREN", "Expected ) after condition")
+    // Support both (condition) and condition { styles
+    let condition: ExpressionNode
+    if (this.matchType("LPAREN")) {
+      condition = this.expression()
+      this.consume("RPAREN", "Expected ) after condition")
+    } else {
+      // Parse condition up to the opening brace - disable struct literal so { starts the block
+      const prevAllow = this.allowStructLiteral
+      this.allowStructLiteral = false
+      condition = this.expression()
+      this.allowStructLiteral = prevAllow
+    }
 
     this.consume("LBRACE", "Expected { after if condition")
 
@@ -319,22 +329,34 @@ if (!this.checkType("RPAREN")) {
 
     let falseBranch: BlockNode | null = null
     if (this.matchType("else")) {
-      this.consume("LBRACE", "Expected { after else")
-      const falseBranchStatements: StatementNode[] = []
-      while (!this.checkType("RBRACE") && !this.isAtEnd()) {
-        const stmt = this.statement()
-        if (stmt) {
-          falseBranchStatements.push(stmt)
+      // Support else if chaining
+      if (this.checkType("if")) {
+        this.advance() // consume 'if'
+        const nestedIf = this.ifStatement()
+        // Wrap the nested if in a block
+        falseBranch = {
+          type: "Block",
+          statements: [nestedIf],
+          position: nestedIf.position,
         }
-      }
-      this.consume("RBRACE", "Expected } after else body")
-      falseBranch = {
-        type: "Block",
-        statements: falseBranchStatements,
-        position: {
-          start: { line: 1, column: 1, index: 0 },
-          end: this.lastPosition(),
-        },
+      } else {
+        this.consume("LBRACE", "Expected { after else")
+        const falseBranchStatements: StatementNode[] = []
+        while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+          const stmt = this.statement()
+          if (stmt) {
+            falseBranchStatements.push(stmt)
+          }
+        }
+        this.consume("RBRACE", "Expected } after else body")
+        falseBranch = {
+          type: "Block",
+          statements: falseBranchStatements,
+          position: {
+            start: { line: 1, column: 1, index: 0 },
+            end: this.lastPosition(),
+          },
+        }
       }
     }
 
@@ -387,10 +409,30 @@ if (!this.checkType("RPAREN")) {
     }
   }
 
+  private parseForBody(): BlockNode {
+    this.consume("LBRACE", "Expected { after for header")
+    const bodyStatements: StatementNode[] = []
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        bodyStatements.push(stmt)
+      }
+    }
+    this.consume("RBRACE", "Expected } after for loop")
+    return {
+      type: "Block",
+      statements: bodyStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
   private forStatement(): StatementNode {
     const variable = this.consume("IDENTIFIER", "Expected variable name after for").value
 
-    // Check if this is a for-each loop: for item: type in arr { ... }
+    // Check if this is a for-each loop with type annotation: for item: type in arr { ... }
     if (this.checkType("COLON")) {
       this.consume("COLON", "Expected : after variable name")
       let typeToken = this.consume("TYPE", "Expected type after :")
@@ -403,28 +445,11 @@ if (!this.checkType("RPAREN")) {
       }
       const varType = this.parseType(typeName)
       this.consume("in", "Expected 'in' after type annotation")
+      const prevAllow = this.allowStructLiteral
+      this.allowStructLiteral = false
       const array = this.expression()
-
-      this.consume("LBRACE", "Expected { after for header")
-
-      const bodyStatements: StatementNode[] = []
-      while (!this.checkType("RBRACE") && !this.isAtEnd()) {
-        const stmt = this.statement()
-        if (stmt) {
-          bodyStatements.push(stmt)
-        }
-      }
-
-      this.consume("RBRACE", "Expected } after for loop")
-
-      const body: BlockNode = {
-        type: "Block",
-        statements: bodyStatements,
-        position: {
-          start: { line: 1, column: 1, index: 0 },
-          end: this.lastPosition(),
-        },
-      }
+      this.allowStructLiteral = prevAllow
+      const body = this.parseForBody()
 
       return {
         type: "ForEachLoop",
@@ -439,32 +464,81 @@ if (!this.checkType("RPAREN")) {
       }
     }
 
+    // Check for comma: for i, item in ... (index+value or map key+value)
+    if (this.matchType("COMMA")) {
+      const secondVar = this.consume("IDENTIFIER", "Expected second variable name after comma").value
+      this.consume("in", "Expected 'in' after variable names")
+      const prevAllow = this.allowStructLiteral
+      this.allowStructLiteral = false
+      const iterable = this.expression()
+      this.allowStructLiteral = prevAllow
+      const body = this.parseForBody()
+
+      // We'll determine ForInIndex vs ForInMap at analysis/codegen time based on the iterable type
+      // For now, parse as ForInIndex (works for both arrays and maps)
+      return {
+        type: "ForInIndex",
+        indexVariable: variable,
+        valueVariable: secondVar,
+        iterable,
+        body,
+        position: {
+          start: { line: 1, column: 1, index: 0 },
+          end: this.lastPosition(),
+        },
+      }
+    }
+
+    // Check for `in` keyword: for item in ... (foreach without type annotation, or range)
+    if (this.matchType("in")) {
+      // Parse the expression after `in` - disable struct literal so { starts the body block
+      const prevAllow = this.allowStructLiteral
+      this.allowStructLiteral = false
+      const iterableExpr = this.expression()
+      this.allowStructLiteral = prevAllow
+
+      // Check if the next token is `..` (RANGE) indicating a range loop
+      if (this.matchType("RANGE")) {
+        // for i in start..end { ... } - disable struct literal for end expression too
+        const prevAllow2 = this.allowStructLiteral
+        this.allowStructLiteral = false
+        const endExpr = this.expression()
+        this.allowStructLiteral = prevAllow2
+        const body = this.parseForBody()
+        return {
+          type: "ForInRange",
+          variable,
+          start: iterableExpr,
+          end: endExpr,
+          body,
+          position: {
+            start: { line: 1, column: 1, index: 0 },
+            end: this.lastPosition(),
+          },
+        }
+      }
+
+      // for item in array { ... } (no type annotation)
+      const body = this.parseForBody()
+      return {
+        type: "ForEachLoop",
+        variable,
+        varType: null,
+        array: iterableExpr,
+        body,
+        position: {
+          start: { line: 1, column: 1, index: 0 },
+          end: this.lastPosition(),
+        },
+      }
+    }
+
     // Traditional for loop: for i := start to end { ... }
     this.consume("ASSIGN", "Expected := after variable name")
     const start = this.expression()
     this.consume("to", "Expected to after start value")
     const end = this.expression()
-
-    this.consume("LBRACE", "Expected { after for header")
-
-    const bodyStatements: StatementNode[] = []
-    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
-      const stmt = this.statement()
-      if (stmt) {
-        bodyStatements.push(stmt)
-      }
-    }
-
-    this.consume("RBRACE", "Expected } after for loop")
-
-    const body: BlockNode = {
-      type: "Block",
-      statements: bodyStatements,
-      position: {
-        start: { line: 1, column: 1, index: 0 },
-        end: this.lastPosition(),
-      },
-    }
+    const body = this.parseForBody()
 
     return {
       type: "ForLoop",
@@ -1028,6 +1102,16 @@ private comparison(): ExpressionNode {
   }
 
   private primary(): ExpressionNode {
+    // If expression: if condition { expr } else { expr }
+    if (this.matchType("if")) {
+      return this.ifExpression()
+    }
+
+    // Match expression: match expr { pattern => expr, ... }
+    if (this.matchType("match")) {
+      return this.matchExpression()
+    }
+
     if (this.matchType("false")) {
       const token = this.previous()
       return {
@@ -1084,7 +1168,7 @@ private comparison(): ExpressionNode {
       const token = this.previous()
 
       // Check for struct literal: TypeName { field: value, ... }
-      if (this.matchType("LBRACE")) {
+      if (this.allowStructLiteral && this.matchType("LBRACE")) {
         const fields: { name: string; value: ExpressionNode }[] = []
         if (!this.checkType("RBRACE")) {
           do {
@@ -1440,6 +1524,160 @@ private comparison(): ExpressionNode {
     return {
       start: a.position.start,
       end: b.position.end,
+    }
+  }
+
+  private ifExpression(): ExpressionNode {
+    // Parse condition - support both (condition) and condition { styles
+    let condition: ExpressionNode
+    if (this.matchType("LPAREN")) {
+      condition = this.expression()
+      this.consume("RPAREN", "Expected ) after condition")
+    } else {
+      // Parse condition up to the opening brace - disable struct literal so { starts the block
+      const prevAllow = this.allowStructLiteral
+      this.allowStructLiteral = false
+      condition = this.expression()
+      this.allowStructLiteral = prevAllow
+    }
+
+    // Parse true branch block
+    this.consume("LBRACE", "Expected { after if condition")
+    const trueBranchStatements: StatementNode[] = []
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        trueBranchStatements.push(stmt)
+      }
+    }
+    this.consume("RBRACE", "Expected } after if body")
+
+    const trueBranch: BlockNode = {
+      type: "Block",
+      statements: trueBranchStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+
+    // Parse else branch (required for if-expression)
+    let falseBranch: any = null
+    if (this.matchType("else")) {
+      if (this.matchType("if")) {
+        // else if - recursive
+        falseBranch = this.ifExpression()
+      } else {
+        this.consume("LBRACE", "Expected { after else")
+        const falseBranchStatements: StatementNode[] = []
+        while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+          const stmt = this.statement()
+          if (stmt) {
+            falseBranchStatements.push(stmt)
+          }
+        }
+        this.consume("RBRACE", "Expected } after else body")
+        falseBranch = {
+          type: "Block",
+          statements: falseBranchStatements,
+          position: {
+            start: { line: 1, column: 1, index: 0 },
+            end: this.lastPosition(),
+          },
+        }
+      }
+    }
+
+    return {
+      type: "IfExpression",
+      condition,
+      trueBranch,
+      falseBranch,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    }
+  }
+
+  private matchExpression(): ExpressionNode {
+    // Parse the subject expression - disable struct literal so { starts the match body
+    const prevAllow = this.allowStructLiteral
+    this.allowStructLiteral = false
+    const subject = this.expression()
+    this.allowStructLiteral = prevAllow
+
+    this.consume("LBRACE", "Expected { after match subject")
+
+    const arms: any[] = []
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      // Parse pattern
+      let pattern: any
+
+      if (this.matchType("UNDERSCORE")) {
+        // Wildcard pattern: _
+        pattern = { type: "WildcardPattern" }
+      } else if (this.checkType("IDENTIFIER") && this.peekNext()?.type === "LPAREN") {
+        // Variant pattern: ok(val), err(msg), some(x)
+        const name = this.consume("IDENTIFIER", "Expected pattern name").value
+        this.consume("LPAREN", "Expected ( after variant name")
+        let binding: string | null = null
+        if (!this.checkType("RPAREN")) {
+          binding = this.consume("IDENTIFIER", "Expected binding variable").value
+        }
+        this.consume("RPAREN", "Expected ) after variant binding")
+        pattern = { type: "VariantPattern", name, binding }
+      } else {
+        // Literal pattern (number, string, identifier, boolean)
+        const value = this.expression()
+        pattern = { type: "LiteralPattern", value }
+      }
+
+      this.consume("FAT_ARROW", "Expected => after pattern")
+
+      // Parse arm body - can be a single expression or a block
+      let body: ExpressionNode
+      if (this.checkType("LBRACE")) {
+        this.advance() // consume {
+        const stmts: StatementNode[] = []
+        while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+          const stmt = this.statement()
+          if (stmt) {
+            stmts.push(stmt)
+          }
+        }
+        this.consume("RBRACE", "Expected } after match arm body")
+        // Convert block to an expression - use last expression
+        if (stmts.length > 0) {
+          const last = stmts[stmts.length - 1]
+          if (last.type === "ExpressionStatement") {
+            body = (last as any).expression
+          } else {
+            body = { type: "NumberLiteral", value: "0", position: last.position, literalType: null } as any
+          }
+        } else {
+          body = { type: "NumberLiteral", value: "0", position: subject.position, literalType: null } as any
+        }
+      } else {
+        body = this.expression()
+      }
+
+      arms.push({ pattern, body })
+
+      // Arms separated by commas (optional trailing comma)
+      this.matchType("COMMA")
+    }
+
+    this.consume("RBRACE", "Expected } after match expression")
+
+    return {
+      type: "MatchExpression",
+      subject,
+      arms,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
     }
   }
 

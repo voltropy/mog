@@ -62,6 +62,9 @@ type StatementNode =
   | WhileLoopNode
   | ForLoopNode
   | ForEachLoopNode
+  | ForInRangeNode
+  | ForInIndexNode
+  | ForInMapNode
   | BreakNode
   | ContinueNode
   | SoADeclarationNode
@@ -146,6 +149,30 @@ interface ForEachLoopNode extends ASTNode {
   body: BlockNode
 }
 
+interface ForInRangeNode extends ASTNode {
+  type: "ForInRange"
+  variable: string
+  start: ExpressionNode
+  end: ExpressionNode
+  body: BlockNode
+}
+
+interface ForInIndexNode extends ASTNode {
+  type: "ForInIndex"
+  indexVariable: string
+  valueVariable: string
+  iterable: ExpressionNode
+  body: BlockNode
+}
+
+interface ForInMapNode extends ASTNode {
+  type: "ForInMap"
+  keyVariable: string
+  valueVariable: string
+  map: ExpressionNode
+  body: BlockNode
+}
+
 interface BreakNode extends ASTNode {
   type: "Break"
 }
@@ -189,6 +216,8 @@ type ExpressionNode =
   | LambdaNode
   | BlockExpressionNode
   | CastExpressionNode
+  | IfExpressionNode
+  | MatchExpressionNode
 
 interface IdentifierNode extends ASTNode {
   type: "Identifier"
@@ -317,6 +346,29 @@ interface CastExpressionNode extends ASTNode {
   targetType: Type
   value: ExpressionNode
   sourceType?: Type
+}
+
+interface IfExpressionNode extends ASTNode {
+  type: "IfExpression"
+  condition: ExpressionNode
+  trueBranch: BlockNode
+  falseBranch: BlockNode | IfExpressionNode
+}
+
+interface MatchArm {
+  pattern: MatchPattern
+  body: ExpressionNode
+}
+
+type MatchPattern =
+  | { type: "LiteralPattern"; value: ExpressionNode }
+  | { type: "WildcardPattern" }
+  | { type: "VariantPattern"; name: string; binding: string | null }
+
+interface MatchExpressionNode extends ASTNode {
+  type: "MatchExpression"
+  subject: ExpressionNode
+  arms: MatchArm[]
 }
 
 interface RequiresDeclarationNode extends ASTNode {
@@ -637,6 +689,15 @@ class SemanticAnalyzer {
       case "ForEachLoop":
         this.visitForEachLoop(node as ForEachLoopNode)
         break
+      case "ForInRange":
+        this.visitForInRange(node as any)
+        break
+      case "ForInIndex":
+        this.visitForInIndex(node as any)
+        break
+      case "ForInMap":
+        this.visitForInMap(node as any)
+        break
       case "Break":
         if (this.loopDepth === 0) {
           this.emitError("break statement can only be used inside a loop", node.position)
@@ -928,8 +989,81 @@ class SemanticAnalyzer {
     }
 
     this.symbolTable.pushScope()
-    this.symbolTable.declare(node.variable, "variable", node.varType)
-    this.symbolTable.setCurrentType(node.variable, node.varType)
+    // If varType is provided, use it; otherwise infer from array element type
+    let elemType: Type = node.varType
+    if (!elemType && arrayType && isArrayType(arrayType)) {
+      elemType = (arrayType as ArrayType).elementType
+    }
+    if (!elemType) {
+      elemType = new IntegerType("i64")
+    }
+    this.symbolTable.declare(node.variable, "variable", elemType)
+    this.symbolTable.setCurrentType(node.variable, elemType)
+    this.loopDepth++
+    this.visitBlock(node.body)
+    this.loopDepth--
+    this.symbolTable.popScope()
+  }
+
+  private visitForInRange(node: any): void {
+    const startType = this.visitExpression(node.start)
+    const endType = this.visitExpression(node.end)
+
+    if (startType && !isIntegerType(startType) && !isUnsignedType(startType)) {
+      this.emitError(`For-in range start must be integer type, got ${startType.toString()}`, node.position)
+    }
+    if (endType && !isIntegerType(endType) && !isUnsignedType(endType)) {
+      this.emitError(`For-in range end must be integer type, got ${endType.toString()}`, node.position)
+    }
+
+    this.symbolTable.pushScope()
+    this.symbolTable.declare(node.variable, "variable", startType || new IntegerType("i64"))
+    this.loopDepth++
+    this.visitBlock(node.body)
+    this.loopDepth--
+    this.symbolTable.popScope()
+  }
+
+  private visitForInIndex(node: any): void {
+    const iterableType = this.visitExpression(node.iterable)
+
+    if (iterableType && !isArrayType(iterableType)) {
+      this.emitError(`For-in-index requires array type, got ${iterableType.toString()}`, node.position)
+    }
+
+    this.symbolTable.pushScope()
+    // Index variable is always i64
+    this.symbolTable.declare(node.indexVariable, "variable", new IntegerType("i64"))
+    // Value variable type is the array element type
+    let elemType: Type = new IntegerType("i64")
+    if (iterableType && isArrayType(iterableType)) {
+      elemType = (iterableType as ArrayType).elementType
+    }
+    this.symbolTable.declare(node.valueVariable, "variable", elemType)
+    this.symbolTable.setCurrentType(node.valueVariable, elemType)
+    this.loopDepth++
+    this.visitBlock(node.body)
+    this.loopDepth--
+    this.symbolTable.popScope()
+  }
+
+  private visitForInMap(node: any): void {
+    const mapType = this.visitExpression(node.map)
+
+    if (mapType && !isMapType(mapType)) {
+      this.emitError(`For-in-map requires map type, got ${mapType.toString()}`, node.position)
+    }
+
+    this.symbolTable.pushScope()
+    // Key and value types from the map type
+    let keyType: Type = new ArrayType(new UnsignedType("u8"), [])  // default: string
+    let valueType: Type = new IntegerType("i64")
+    if (mapType && isMapType(mapType)) {
+      keyType = (mapType as MapType).keyType
+      valueType = (mapType as MapType).valueType
+    }
+    this.symbolTable.declare(node.keyVariable, "variable", keyType)
+    this.symbolTable.declare(node.valueVariable, "variable", valueType)
     this.loopDepth++
     this.visitBlock(node.body)
     this.loopDepth--
@@ -1251,6 +1385,12 @@ class SemanticAnalyzer {
         break
       case "AssignmentExpression":
         result = this.visitAssignmentExpression(node as AssignmentExpressionNode)
+        break
+      case "IfExpression":
+        result = this.visitIfExpression(node as any)
+        break
+      case "MatchExpression":
+        result = this.visitMatchExpression(node as any)
         break
       case "BooleanLiteral":
         result = boolType
@@ -1966,6 +2106,76 @@ class SemanticAnalyzer {
 
     return new VoidType()
   }
+
+  private visitIfExpression(node: any): Type | null {
+    const conditionType = this.visitExpression(node.condition)
+
+    if (conditionType) {
+      if (!isIntegerType(conditionType) && !isUnsignedType(conditionType) && !isBoolType(conditionType)) {
+        this.emitError(
+          `If-expression condition must be integer, unsigned, or bool type, got ${conditionType.toString()}`,
+          node.condition.position,
+        )
+      }
+    }
+
+    // Visit true branch - get the type of the last expression
+    let trueType: Type | null = null
+    if (node.trueBranch.type === "Block") {
+      this.symbolTable.pushScope()
+      for (const stmt of node.trueBranch.statements) {
+        this.visitStatement(stmt)
+      }
+      this.symbolTable.popScope()
+      // The type is from the last expression statement
+      const stmts = node.trueBranch.statements
+      if (stmts.length > 0) {
+        const last = stmts[stmts.length - 1]
+        if (last.type === "ExpressionStatement") {
+          trueType = this.visitExpression(last.expression)
+        }
+      }
+    }
+
+    // Visit false branch
+    let falseType: Type | null = null
+    if (node.falseBranch) {
+      if (node.falseBranch.type === "IfExpression") {
+        falseType = this.visitIfExpression(node.falseBranch)
+      } else if (node.falseBranch.type === "Block") {
+        this.symbolTable.pushScope()
+        for (const stmt of node.falseBranch.statements) {
+          this.visitStatement(stmt)
+        }
+        this.symbolTable.popScope()
+        const stmts = node.falseBranch.statements
+        if (stmts.length > 0) {
+          const last = stmts[stmts.length - 1]
+          if (last.type === "ExpressionStatement") {
+            falseType = this.visitExpression(last.expression)
+          }
+        }
+      }
+    }
+
+    // Return the type from true branch (both should match)
+    return trueType || falseType || new IntegerType("i64")
+  }
+
+  private visitMatchExpression(node: any): Type | null {
+    this.visitExpression(node.subject)
+
+    let resultType: Type | null = null
+    for (const arm of node.arms) {
+      // Visit the arm body expression
+      const armType = this.visitExpression(arm.body)
+      if (!resultType && armType) {
+        resultType = armType
+      }
+    }
+
+    return resultType || new IntegerType("i64")
+  }
 }
 
 export { SemanticAnalyzer, SymbolTable, SemanticError }
@@ -1993,11 +2203,20 @@ export type {
   LLMExpressionNode,
   LambdaNode,
   BlockExpressionNode,
-BlockNode,
+  BlockNode,
   ReturnNode,
   ConditionalNode,
   ExpressionStatementNode,
   CastExpressionNode,
   RequiresDeclarationNode,
   OptionalDeclarationNode,
+  ForInRangeNode,
+  ForInIndexNode,
+  ForInMapNode,
+  ForEachLoopNode,
+  ForLoopNode,
+  IfExpressionNode,
+  MatchExpressionNode,
+  MatchArm,
+  MatchPattern,
 }

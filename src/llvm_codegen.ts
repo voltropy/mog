@@ -408,6 +408,12 @@ class LLVMIRGenerator {
       case "ForEachLoop":
         this.generateForEachLoop(ir, statement)
         break
+      case "ForInRange":
+        this.generateForInRange(ir, statement)
+        break
+      case "ForInIndex":
+        this.generateForInIndex(ir, statement)
+        break
       case "Break":
         this.generateBreak(ir)
         break
@@ -517,6 +523,10 @@ class LLVMIRGenerator {
         return this.generateMapExpression(ir, expr)
       case "CastExpression":
         return this.generateCastExpression(ir, expr)
+      case "IfExpression":
+        return this.generateIfExpression(ir, expr)
+      case "MatchExpression":
+        return this.generateMatchExpression(ir, expr)
       default:
         return ""
     }
@@ -2509,6 +2519,243 @@ class LLVMIRGenerator {
     // Pop loop context
     this.loopStack.pop()
     this.blockTerminated = prevTerminated
+  }
+
+  private generateForInRange(ir: string[], statement: any): void {
+    const headerLabel = this.nextLabel()
+    const bodyLabel = this.nextLabel()
+    const incLabel = this.nextLabel()
+    const endLabel = this.nextLabel()
+
+    // Push loop context for break/continue
+    this.loopStack.push({ breakLabel: endLabel, continueLabel: incLabel })
+
+    const { variable, start, end, body } = statement
+
+    const reg = `%${variable}`
+    ir.push(`  ${reg} = alloca i64`)
+    this.variableTypes.set(variable, { type: "IntegerType", kind: "i64" })
+    const startValue = this.generateExpression(ir, start)
+    ir.push(`  store i64 ${startValue}, ptr ${reg}`)
+
+    ir.push(`  br label %${headerLabel}`)
+    ir.push("")
+
+    ir.push(`${headerLabel}:`)
+    const varValue = `%${this.valueCounter++}`
+    ir.push(`  ${varValue} = load i64, ptr ${reg}`)
+    const endValue = this.generateExpression(ir, end)
+    const cond = `%${this.valueCounter++}`
+    ir.push(`  ${cond} = icmp slt i64 ${varValue}, ${endValue}`)
+    ir.push(`  br i1 ${cond}, label %${bodyLabel}, label %${endLabel}`)
+    ir.push("")
+
+    ir.push(`${bodyLabel}:`)
+    this.blockTerminated = false
+    this.generateStatement(ir, body)
+    if (!this.blockTerminated) {
+      ir.push(`  br label %${incLabel}`)
+      ir.push("")
+    }
+
+    ir.push(`${incLabel}:`)
+    const currentValue = `%${this.valueCounter++}`
+    ir.push(`  ${currentValue} = load i64, ptr ${reg}`)
+    const incValue = `%${this.valueCounter++}`
+    ir.push(`  ${incValue} = add i64 ${currentValue}, 1`)
+    ir.push(`  store i64 ${incValue}, ptr %${variable}`)
+    ir.push(`  br label %${headerLabel}`)
+    ir.push("")
+
+    ir.push(`${endLabel}:`)
+    this.blockTerminated = false
+
+    // Pop loop context
+    this.loopStack.pop()
+  }
+
+  private generateForInIndex(ir: string[], statement: any): void {
+    const startLabel = this.nextLabel()
+    const bodyLabel = this.nextLabel()
+    const incLabel = this.nextLabel()
+    const endLabel = this.nextLabel()
+
+    // Push loop context for break/continue
+    this.loopStack.push({ breakLabel: endLabel, continueLabel: incLabel })
+    const prevTerminated = this.blockTerminated
+    this.blockTerminated = false
+
+    const { indexVariable, valueVariable, iterable, body } = statement
+
+    // Generate array and get its length
+    const arrayPtr = this.generateExpression(ir, iterable)
+    const indexReg = `%${indexVariable}`
+    const valueReg = `%${valueVariable}`
+
+    // Allocate index variable and value variable
+    ir.push(`  ${indexReg} = alloca i64`)
+    ir.push(`  store i64 0, ptr ${indexReg}`)
+    ir.push(`  ${valueReg} = alloca i64`)
+    this.variableTypes.set(indexVariable, { type: "IntegerType", kind: "i64" })
+    this.variableTypes.set(valueVariable, { type: "IntegerType", kind: "i64" })
+
+    // Get array length
+    const lengthReg = `%${this.valueCounter++}`
+    ir.push(`  ${lengthReg} = call i64 @array_length(ptr ${arrayPtr})`)
+
+    ir.push(`  br label %${startLabel}`)
+    ir.push("")
+
+    // Header: check if index < length
+    ir.push(`${startLabel}:`)
+    const currentIndex = `%${this.valueCounter++}`
+    ir.push(`  ${currentIndex} = load i64, ptr ${indexReg}`)
+    const cond = `%${this.valueCounter++}`
+    ir.push(`  ${cond} = icmp slt i64 ${currentIndex}, ${lengthReg}`)
+    ir.push(`  br i1 ${cond}, label %${bodyLabel}, label %${endLabel}`)
+    ir.push("")
+
+    // Body: get element and execute
+    ir.push(`${bodyLabel}:`)
+    const elemValue = `%${this.valueCounter++}`
+    ir.push(`  ${elemValue} = call i64 @array_get(ptr ${arrayPtr}, i64 ${currentIndex})`)
+    ir.push(`  store i64 ${elemValue}, ptr ${valueReg}`)
+    this.generateStatement(ir, body)
+    if (!this.blockTerminated) {
+      ir.push(`  br label %${incLabel}`)
+      ir.push("")
+    }
+
+    // Increment
+    ir.push(`${incLabel}:`)
+    const nextIndex = `%${this.valueCounter++}`
+    ir.push(`  ${nextIndex} = add i64 ${currentIndex}, 1`)
+    ir.push(`  store i64 ${nextIndex}, ptr ${indexReg}`)
+    ir.push(`  br label %${startLabel}`)
+    ir.push("")
+
+    ir.push(`${endLabel}:`)
+
+    // Pop loop context
+    this.loopStack.pop()
+    this.blockTerminated = prevTerminated
+  }
+
+  private generateIfExpression(ir: string[], expr: any): string {
+    const condValue = this.generateExpression(ir, expr.condition)
+    // Convert i64 condition to i1
+    const condBool = `%${this.valueCounter++}`
+    ir.push(`  ${condBool} = icmp ne i64 ${condValue}, 0`)
+
+    const trueLabel = this.nextLabel()
+    const falseLabel = this.nextLabel()
+    const endLabel = this.nextLabel()
+
+    // Allocate a place to store the result
+    const resultReg = `%ifexpr_result_${this.valueCounter++}`
+    ir.push(`  ${resultReg} = alloca i64`)
+
+    ir.push(`  br i1 ${condBool}, label %${trueLabel}, label %${falseLabel}`)
+    ir.push("")
+
+    // True branch
+    ir.push(`${trueLabel}:`)
+    const trueValue = this.generateBlockExpression(ir, expr.trueBranch)
+    ir.push(`  store i64 ${trueValue}, ptr ${resultReg}`)
+    ir.push(`  br label %${endLabel}`)
+    ir.push("")
+
+    // False branch
+    ir.push(`${falseLabel}:`)
+    if (expr.falseBranch) {
+      let falseValue: string
+      if (expr.falseBranch.type === "IfExpression") {
+        falseValue = this.generateIfExpression(ir, expr.falseBranch)
+      } else {
+        falseValue = this.generateBlockExpression(ir, expr.falseBranch)
+      }
+      ir.push(`  store i64 ${falseValue}, ptr ${resultReg}`)
+    } else {
+      ir.push(`  store i64 0, ptr ${resultReg}`)
+    }
+    ir.push(`  br label %${endLabel}`)
+    ir.push("")
+
+    ir.push(`${endLabel}:`)
+    const result = `%${this.valueCounter++}`
+    ir.push(`  ${result} = load i64, ptr ${resultReg}`)
+    return result
+  }
+
+  private generateBlockExpression(ir: string[], block: any): string {
+    // Generate all statements in a block, returning the value of the last expression statement
+    if (block.type === "Block") {
+      let lastValue = "0"
+      for (const stmt of block.statements) {
+        if (stmt.type === "ExpressionStatement") {
+          lastValue = this.generateExpression(ir, stmt.expression)
+        } else {
+          this.generateStatement(ir, stmt)
+        }
+      }
+      return lastValue
+    }
+    // Single expression
+    return this.generateExpression(ir, block)
+  }
+
+  private generateMatchExpression(ir: string[], expr: any): string {
+    const subjectValue = this.generateExpression(ir, expr.subject)
+
+    // Allocate result
+    const resultReg = `%match_result_${this.valueCounter++}`
+    ir.push(`  ${resultReg} = alloca i64`)
+
+    const endLabel = this.nextLabel()
+    const arms = expr.arms as any[]
+
+    for (let i = 0; i < arms.length; i++) {
+      const arm = arms[i]
+      const isLast = i === arms.length - 1
+
+      if (arm.pattern.type === "WildcardPattern") {
+        // Wildcard always matches - generate arm body and jump to end
+        const armValue = this.generateExpression(ir, arm.body)
+        ir.push(`  store i64 ${armValue}, ptr ${resultReg}`)
+        ir.push(`  br label %${endLabel}`)
+        ir.push("")
+        break
+      }
+
+      const matchBodyLabel = this.nextLabel()
+      const nextArmLabel = isLast ? endLabel : this.nextLabel()
+
+      if (arm.pattern.type === "LiteralPattern") {
+        // Generate the pattern value
+        const patternValue = this.generateExpression(ir, arm.pattern.value)
+        const cmpResult = `%${this.valueCounter++}`
+        ir.push(`  ${cmpResult} = icmp eq i64 ${subjectValue}, ${patternValue}`)
+        ir.push(`  br i1 ${cmpResult}, label %${matchBodyLabel}, label %${nextArmLabel}`)
+        ir.push("")
+      }
+
+      // Arm body
+      ir.push(`${matchBodyLabel}:`)
+      const armValue = this.generateExpression(ir, arm.body)
+      ir.push(`  store i64 ${armValue}, ptr ${resultReg}`)
+      ir.push(`  br label %${endLabel}`)
+      ir.push("")
+
+      // If not the last arm and not wildcard, emit the next arm label
+      if (!isLast) {
+        ir.push(`${nextArmLabel}:`)
+      }
+    }
+
+    ir.push(`${endLabel}:`)
+    const result = `%${this.valueCounter++}`
+    ir.push(`  ${result} = load i64, ptr ${resultReg}`)
+    return result
   }
 
   private generateBreak(ir: string[]): void {

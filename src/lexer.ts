@@ -65,6 +65,10 @@ type TokenType =
   | "POSIX_CONSTANT"
   | "UNKNOWN"
   | "WHITESPACE"
+  | "RANGE"
+  | "FAT_ARROW"
+  | "match"
+  | "UNDERSCORE"
   | "COMMENT"
 
 interface Position {
@@ -141,11 +145,14 @@ class Lexer {
     const optionalKwRegex = /optional\b/y
     const llmRegex = /LLM\b/y
     const typeKwRegex = /type\b/y
+    const matchRegex = /match\b/y
     const trueRegex = /true\b/y
     const falseRegex = /false\b/y
     const notEqualRegex = /!=/y
     const equalEqualRegex = /==/y
+    const fatArrowRegex = /=>/y
     const assignRegex = /:=/y
+    const rangeRegex = /\.\./y
     const lessEqualRegex = /<=/y
     const greaterEqualRegex = />=/y
     const arrowRegex = /->/y
@@ -438,6 +445,18 @@ class Lexer {
         continue
       }
 
+      value = this.match(matchRegex)
+      if (value) {
+        type = "match"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
       value = this.match(trueRegex)
       if (value) {
         type = "true"
@@ -453,6 +472,18 @@ class Lexer {
       value = this.match(falseRegex)
       if (value) {
         type = "false"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(fatArrowRegex)
+      if (value) {
+        type = "FAT_ARROW"
         this.advance(value.length)
         tokens.push({
           type,
@@ -834,6 +865,18 @@ class Lexer {
         continue
       }
 
+      value = this.match(rangeRegex)
+      if (value) {
+        type = "RANGE"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
       value = this.match(dotRegex)
       if (value) {
         type = "DOT"
@@ -1102,7 +1145,9 @@ class Lexer {
 
       value = this.match(identifierRegex)
       if (value) {
-        if (isPOSIXConstant(value)) {
+        if (value === "_") {
+          type = "UNDERSCORE"
+        } else if (isPOSIXConstant(value)) {
           type = "POSIX_CONSTANT"
         } else {
           type = "IDENTIFIER"
