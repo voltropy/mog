@@ -70,6 +70,11 @@ function createSoAFieldMap(fields: { name: string; type: ArrayType }[]): Map<str
   return map
 }
 
+function createSOAType(structName: string, fields: { name: string; type: any }[], capacity: number | null = null): types.SOAType {
+  const structType = new types.StructType(structName, createFieldMap(fields))
+  return new types.SOAType(structType, capacity)
+}
+
 describe("Type Constructors", () => {
   describe("Integer Types", () => {
     test("i8 constructor creates integer type with 8 bits", () => {
@@ -993,34 +998,55 @@ describe("AOSType (Array of Structs)", () => {
   })
 })
 
-describe("SOAType (Struct of Arrays)", () => {
-  test("SOAType constructor creates SoA type", () => {
-    const soaType = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) }
+describe("SOAType (Struct of Arrays) - new design", () => {
+  test("SOAType constructor creates SoA type from StructType", () => {
+    const structType = new types.StructType("Datum", createFieldMap([
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
     ]))
+    const soaType = new types.SOAType(structType, 100)
+    expect(soaType.structType).toBe(structType)
+    expect(soaType.capacity).toBe(100)
     expect(soaType.fields.size).toBe(2)
-    expect(soaType.fields.get("x")).toEqual(array(f64, []))
+    expect(soaType.fields.get("x")).toEqual(f64)
   })
 
-  test("SOAType with multiple array fields", () => {
-    const soaType = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) },
-      { name: "vx", type: array(f64, []) },
-      { name: "vy", type: array(f64, []) },
-      { name: "id", type: array(i32, []) }
+  test("SOAType with null capacity (dynamic)", () => {
+    const structType = new types.StructType("Datum", createFieldMap([
+      { name: "id", type: i64 },
+      { name: "val", type: i64 }
     ]))
+    const soaType = new types.SOAType(structType)
+    expect(soaType.capacity).toBeNull()
+  })
+
+  test("SOAType toString with capacity", () => {
+    const soaType = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ], 100)
+    expect(soaType.toString()).toBe("soa Datum[100]")
+  })
+
+  test("SOAType toString without capacity", () => {
+    const soaType = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ])
+    expect(soaType.toString()).toBe("soa Datum[]")
+  })
+
+  test("SOAType name delegates to structType", () => {
+    const soaType = createSOAType("Particle", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 },
+      { name: "vx", type: f64 },
+      { name: "vy", type: f64 },
+      { name: "id", type: i32 }
+    ], 1000)
+    expect(soaType.name).toBe("Particle")
     expect(soaType.fields.size).toBe(5)
     expect(soaType.fields.has("id")).toBe(true)
-  })
-
-  test("SOAType toString", () => {
-    const soaType = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) }
-    ]))
-    expect(soaType.toString()).toBe("{x: [f64], y: [f64]}")
   })
 })
 
@@ -1065,10 +1091,10 @@ describe("isAOSType type guard", () => {
 
 describe("isSOAType type guard", () => {
   test("returns true for SOAType", () => {
-    const soaType = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) }
-    ]))
+    const soaType = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ], 100)
     expect(types.isSOAType(soaType)).toBe(true)
   })
 
@@ -1160,27 +1186,39 @@ describe("AoS type equality", () => {
 
 describe("SoA type equality", () => {
   test("same SoA types are equal", () => {
-    const soa1 = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) }
-    ]))
-    const soa2 = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) }
-    ]))
+    const soa1 = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ], 100)
+    const soa2 = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ], 100)
     expect(sameType(soa1, soa2)).toBe(true)
   })
 
-  test("SoA types with different fields are not equal", () => {
-    const soa1 = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) }
-    ]))
-    const soa2 = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) },
-      { name: "z", type: array(f64, []) }
-    ]))
+  test("SoA types with different backing structs are not equal", () => {
+    const soa1 = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ], 100)
+    const soa2 = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 },
+      { name: "z", type: f64 }
+    ], 100)
+    expect(sameType(soa1, soa2)).toBe(false)
+  })
+
+  test("SoA types with different capacities are not equal", () => {
+    const soa1 = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ], 100)
+    const soa2 = createSOAType("Datum", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ], 200)
     expect(sameType(soa1, soa2)).toBe(false)
   })
 })
@@ -1212,10 +1250,10 @@ describe("Data structure type compatibility", () => {
       { name: "y", type: f64 }
     ]))
     const aosType = new types.AOSType(pointType)
-    const soaType = new types.SOAType(createSoAFieldMap([
-      { name: "x", type: array(f64, []) },
-      { name: "y", type: array(f64, []) }
-    ]))
+    const soaType = createSOAType("Point", [
+      { name: "x", type: f64 },
+      { name: "y", type: f64 }
+    ], 100)
     expect(sameType(aosType, soaType)).toBe(false)
     expect(types.compatibleTypes(aosType, soaType)).toBe(false)
   })

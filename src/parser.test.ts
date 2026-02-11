@@ -535,48 +535,41 @@ describe("parser AoS (Array of Structs)", () => {
   })
 })
 
-describe("parser SoA (Struct of Arrays)", () => {
-  test("SoA declaration", () => {
-    const ast = parse(`soa Particles {
-      x: [f64],
-      y: [f64],
-      vx: [f64],
-      vy: [f64]
-    }`)
+describe("parser SoA (Struct of Arrays) - new design", () => {
+  test("SoA declaration with capacity", () => {
+    const ast = parse(`soa datums: Datum[100]`)
     const stmt = ast.statements[0] as any
     expect(stmt.type).toBe("SoADeclaration")
-    expect(stmt.name).toBe("Particles")
-    expect(stmt.fields.length).toBe(4)
-    expect(stmt.fields[0].name).toBe("x")
-    expect(stmt.fields[0].fieldType.type).toBe("ArrayType")
+    expect(stmt.name).toBe("datums")
+    expect(stmt.structName).toBe("Datum")
+    expect(stmt.capacity).toBe(100)
   })
 
-  test("SoA literal", () => {
-    const ast = parse(`{
-      particles: Particles := {
-        x: [0.0, 1.0, 2.0],
-        y: [0.0, 1.0, 2.0],
-        vx: [1.0, 0.0, 0.5],
-        vy: [0.0, 1.0, 0.5]
-      };
-    }`)
+  test("SoA declaration without capacity (dynamic)", () => {
+    const ast = parse(`soa items: Item[]`)
     const stmt = ast.statements[0] as any
-    expect(stmt.initializer.type).toBe("MapLiteral")
-    expect(stmt.initializer.entries.length).toBe(4)
+    expect(stmt.type).toBe("SoADeclaration")
+    expect(stmt.name).toBe("items")
+    expect(stmt.structName).toBe("Item")
+    expect(stmt.capacity).toBeNull()
   })
 
-  test("SoA field then index access", () => {
-    const ast = parse("{ x := particles.x[0]; }")
+  test("SoA index-then-field access parses as MemberExpression(IndexExpression)", () => {
+    const ast = parse("{ x := datums[0].id; }")
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.value.type).toBe("IndexExpression")
-    expect(stmt.expression.value.object.type).toBe("MemberExpression")
+    expect(stmt.expression.value.type).toBe("MemberExpression")
+    expect(stmt.expression.value.object.type).toBe("IndexExpression")
+    expect(stmt.expression.value.object.object.type).toBe("Identifier")
+    expect(stmt.expression.value.object.object.name).toBe("datums")
+    expect(stmt.expression.value.property).toBe("id")
   })
 
-  test("SoA field assignment", () => {
-    const ast = parse("{ particles.x[0] := 5.0; }")
+  test("SoA field assignment parses correctly", () => {
+    const ast = parse("{ datums[0].id := 42; }")
     const stmt = ast.statements[0] as any
     expect(stmt.type).toBe("ExpressionStatement")
-    expect(stmt.expression.target.type).toBe("IndexExpression")
-    expect(stmt.expression.target.object.type).toBe("MemberExpression")
+    expect(stmt.expression.target.type).toBe("MemberExpression")
+    expect(stmt.expression.target.object.type).toBe("IndexExpression")
+    expect(stmt.expression.target.property).toBe("id")
   })
 })

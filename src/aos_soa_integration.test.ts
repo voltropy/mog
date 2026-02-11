@@ -151,20 +151,21 @@ fn main() -> i64 {
   })
 })
 
-describe("SoA (Struct of Arrays) integration", () => {
-  test("SoA basic operations", async () => {
+describe("SoA (Struct of Arrays) integration - new design", () => {
+  test("SoA basic i64 read/write", async () => {
     const source = `
-soa Particles {
-  x: [f64],
-  y: [f64]
-}
+struct Datum { id: i64, val: i64 }
 
 fn main() -> i64 {
-  particles: Particles = Particles { x: [1.0, 2.0, 3.0], y: [4.0, 5.0, 6.0] };
+  soa datums: Datum[10]
+  datums[0].id = 1;
+  datums[0].val = 100;
+  datums[1].id = 2;
+  datums[1].val = 200;
   
-  print(particles.x[0]);
+  print(datums[0].id);
   println();
-  print(particles.y[1]);
+  print(datums[1].val);
   println();
   
   return 0;
@@ -172,25 +173,27 @@ fn main() -> i64 {
 `
     const output = await compileAndRun(source)
     expect(output).toContain("1")
-    expect(output).toContain("5")
+    expect(output).toContain("200")
   })
 
-  test.skip("SoA field assignment", async () => {
+  test("SoA field assignment and read-back", async () => {
     const source = `
-soa Particles {
-  x: [f64],
-  y: [f64]
-}
+struct Point { x: i64, y: i64 }
 
 fn main() -> i64 {
-  particles: Particles = Particles { x: [1.0, 2.0], y: [3.0, 4.0] };
+  soa points: Point[5]
+  points[0].x = 10;
+  points[0].y = 20;
+  points[1].x = 30;
+  points[1].y = 40;
   
-  particles.x[0] := 10.0;
-  particles.y[1] := 20.0;
-  
-  print(particles.x[0]);
+  print(points[0].x);
   println();
-  print(particles.y[1]);
+  print(points[0].y);
+  println();
+  print(points[1].x);
+  println();
+  print(points[1].y);
   println();
   
   return 0;
@@ -199,49 +202,48 @@ fn main() -> i64 {
     const output = await compileAndRun(source)
     expect(output).toContain("10")
     expect(output).toContain("20")
+    expect(output).toContain("30")
+    expect(output).toContain("40")
   })
 
-  test("SoA with integer fields", async () => {
+  test("SoA with f64 fields", async () => {
     const source = `
-soa Indices {
-  id: [i64],
-  value: [i64]
-}
+struct Particle { x: f64, y: f64 }
 
 fn main() -> i64 {
-  indices: Indices = Indices { id: [1, 2, 3], value: [100, 200, 300] };
+  soa particles: Particle[10]
+  particles[0].x = 1.5;
+  particles[0].y = 2.5;
+  particles[1].x = 3.5;
+  particles[1].y = 4.5;
   
-  print(indices.id[1]);
+  print(particles[0].x);
   println();
-  print(indices.value[2]);
-  println();
-  
-  indices.value[0] := 999;
-  print(indices.value[0]);
+  print(particles[1].y);
   println();
   
   return 0;
 }
 `
     const output = await compileAndRun(source)
-    expect(output).toContain("2")
-    expect(output).toContain("300")
-    expect(output).toContain("999")
+    expect(output).toContain("1.5")
+    expect(output).toContain("4.5")
   })
 
-  test("SoA mixed field types", async () => {
+  test("SoA mixed field types (i64 and f64)", async () => {
     const source = `
-soa Data {
-  flags: [i64],
-  values: [f64]
-}
+struct Data { flag: i64, value: f64 }
 
 fn main() -> i64 {
-  data: Data = Data { flags: [1, 0, 1], values: [1.5, 2.5, 3.5] };
+  soa data: Data[5]
+  data[0].flag = 1;
+  data[0].value = 3.14;
+  data[1].flag = 0;
+  data[1].value = 2.72;
   
-  print(data.flags[0]);
+  print(data[0].flag);
   println();
-  print(data.values[1]);
+  print(data[0].value);
   println();
   
   return 0;
@@ -249,7 +251,7 @@ fn main() -> i64 {
 `
     const output = await compileAndRun(source)
     expect(output).toContain("1")
-    expect(output).toContain("2")
+    expect(output).toContain("3.14")
   })
 })
 

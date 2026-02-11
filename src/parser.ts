@@ -357,32 +357,21 @@ class Parser {
   }
 
   private soaDeclaration(): StatementNode {
-    const name = this.consume("IDENTIFIER", "Expected SoA name").value
-    this.consume("LBRACE", "Expected { after SoA name")
-
-    const fields: { name: string; fieldType: any }[] = []
-    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
-      const fieldName = this.consume("IDENTIFIER", "Expected field name").value
-      this.consume("COLON", "Expected : after field name")
-      // Handle array types like [f64]
-      let fieldType: any
-      if (this.checkType("LBRACKET")) {
-        const typeName = this.parseArrayTypeAnnotation()
-        fieldType = this.parseType(typeName)
-      } else {
-        const typeName = this.consume("TYPE", "Expected type after :").value
-        fieldType = this.parseType(typeName)
-      }
-      fields.push({ name: fieldName, fieldType })
-      this.matchType("COMMA")
+    const name = this.consume("IDENTIFIER", "Expected SoA variable name").value
+    this.consume("COLON", "Expected : after SoA variable name")
+    const structName = this.consume("IDENTIFIER", "Expected struct type name after :").value
+    this.consume("LBRACKET", "Expected [ after struct type name")
+    let capacity: number | null = null
+    if (this.checkType("NUMBER")) {
+      capacity = parseInt(this.advance().value, 10)
     }
-
-    this.consume("RBRACE", "Expected } after SoA fields")
+    this.consume("RBRACKET", "Expected ] after capacity")
 
     return {
       type: "SoADeclaration",
       name,
-      fields,
+      structName,
+      capacity,
       position: {
         start: { line: 1, column: 1, index: 0 },
         end: this.lastPosition(),

@@ -462,20 +462,18 @@ fn main() -> i64 {
   print_string("=== SoA (Struct of Arrays) ===");
   println();
 
-  soa IndexedData {
-    ids: [i64],
-    vals: [i64]
-  }
+  struct Datum { id: i64, val: i64 }
+  soa datums: Datum[10]
+  datums[0].id = 1;
+  datums[0].val = 100;
+  datums[1].id = 2;
+  datums[1].val = 200;
 
-  data: IndexedData = IndexedData { ids: [10, 20, 30], vals: [100, 200, 300] };
-  print_string("  data.ids[0] = ");
-  print(data.ids[0]);
+  print_string("  datums[0].id = ");
+  print(datums[0].id);
   println();
-  print_string("  data.ids[2] = ");
-  print(data.ids[2]);
-  println();
-  print_string("  data.vals[1] = ");
-  print(data.vals[1]);
+  print_string("  datums[1].val = ");
+  print(datums[1].val);
   println();
   println();
 

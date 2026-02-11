@@ -14,6 +14,7 @@ import {
   isMapType,
   isTableType,
   isPointerType,
+  isSOAType,
   isVoidType,
   isNumericType,
   sameType,
@@ -85,7 +86,8 @@ type StatementNode =
 interface SoADeclarationNode extends ASTNode {
   type: "SoADeclaration"
   name: string
-  fields: { name: string; fieldType: ArrayType }[]
+  structName: string
+  capacity: number | null
 }
 
 interface StructDefinitionNode extends ASTNode {
@@ -1274,39 +1276,27 @@ class SemanticAnalyzer {
   }
 
   private visitSoADeclaration(node: SoADeclarationNode): void {
-    // Validate that all fields are array types
-    const fields = new Map<string, ArrayType>()
-
-    for (const field of node.fields) {
-      // The parser guarantees fieldType is ArrayType, but we validate at runtime
-      const fieldType = field.fieldType as Type
-      if (!isArrayType(fieldType)) {
-        this.emitError(
-          `SoA field '${field.name}' must be an array type, got ${fieldType.toString()}`,
-          node.position
-        )
-        continue
-      }
-
-      // Validate element type is valid (not another SoA, void, etc.)
-      const elementType = fieldType.elementType
-      if (elementType instanceof VoidType) {
-        this.emitError(
-          `SoA field '${field.name}' cannot have void element type`,
-          node.position
-        )
-        continue
-      }
-
-      fields.set(field.name, field.fieldType)
+    // Look up the struct type from the symbol table
+    const structDef = this.symbolTable.lookup(node.structName)
+    if (!structDef) {
+      this.emitError(`Undefined struct type '${node.structName}'`, node.position)
+      return
     }
 
-    // Create SOAType from fields and store in symbol table
-    const soaType = new SOAType(fields)
+    if (!structDef.declaredType || !(structDef.declaredType instanceof StructType)) {
+      this.emitError(`'${node.structName}' is not a struct type`, node.position)
+      return
+    }
+
+    const structType = structDef.declaredType as StructType
+
+    // Create SOAType from the backing struct type
+    const soaType = new SOAType(structType, node.capacity)
     // @ts-ignore - resultType is set dynamically
     node.resultType = soaType
-    // Register the SoA type name so it can be used in variable declarations
-    this.symbolTable.declare(node.name, "type", soaType)
+    // Register the SoA variable in symbol table
+    this.symbolTable.declare(node.name, "variable", soaType)
+    this.symbolTable.setCurrentType(node.name, soaType)
   }
 
   private visitStructDefinition(node: StructDefinitionNode): void {
@@ -1357,68 +1347,14 @@ class SemanticAnalyzer {
     node.resultType = structType
   }
 
-  private visitSoALiteral(node: any): Type | null {
-    // node has columns: { name: string; values: ExpressionNode[] }[]
-    const columns = node.columns
-    if (!columns || columns.length === 0) {
-      this.emitError("SoA literal must have at least one column", node.position)
-      return null
-    }
-
-    const fieldTypes = new Map<string, ArrayType>()
-    let expectedLength: number | null = null
-
-    for (const column of columns) {
-      // Get the array type from the column values
-      const elementTypes: Type[] = []
-      for (const elem of column.values) {
-        const elemType = this.visitExpression(elem)
-        if (elemType) {
-          elementTypes.push(elemType)
-        }
-      }
-
-      if (elementTypes.length === 0) {
-        this.emitError(
-          `SoA column '${column.name}' has no elements`,
-          node.position
-        )
-        continue
-      }
-
-      // Check all elements in the column have the same type
-      let commonType = elementTypes[0]
-      for (let i = 1; i < elementTypes.length; i++) {
-        if (!sameType(commonType, elementTypes[i])) {
-          this.emitError(
-            `SoA column '${column.name}' has incompatible element types: ${commonType.toString()} and ${elementTypes[i].toString()}`,
-            node.position
-          )
-          continue
-        }
-      }
-
-      // Check column length consistency
-      if (expectedLength === null) {
-        expectedLength = column.values.length
-      } else if (column.values.length !== expectedLength) {
-        this.emitError(
-          `SoA column '${column.name}' has ${column.values.length} elements, expected ${expectedLength} (all columns must have same length)`,
-          node.position
-        )
-      }
-
-      // Create array type for this column
-      const arrayType = new ArrayType(commonType)
-      fieldTypes.set(column.name, arrayType)
-    }
-
-    if (fieldTypes.size === 0) {
-      return null
-    }
-
-    return new SOAType(fieldTypes)
+  private visitSoALiteral(_node: any): Type | null {
+    // SoA literals are no longer supported in the new design.
+    // SoA containers are declared with: soa name: StructType[capacity]
+    // and accessed with: name[i].field
+    return null
   }
+
+
 
   private visitStructLiteral(node: StructLiteralNode): Type | null {
     // If structName is provided, look up the type definition
@@ -1434,19 +1370,17 @@ class SemanticAnalyzer {
         return null
       }
 
-      if (!structTypeDef.declaredType || (!(structTypeDef.declaredType instanceof StructType) && !(structTypeDef.declaredType instanceof SOAType))) {
+      if (!structTypeDef.declaredType || !(structTypeDef.declaredType instanceof StructType)) {
         this.emitError(`'${node.structName}' is not a struct type`, node.position)
         return null
       }
 
-      const expectedStruct = structTypeDef.declaredType
+      const expectedStruct = structTypeDef.declaredType as StructType
 
       // Validate field types match expected struct definition
       for (const field of node.fields) {
         const fieldType = this.visitExpression(field.value)
-        const expectedFieldType = expectedStruct instanceof StructType
-          ? expectedStruct.fields.get(field.name)
-          : (expectedStruct as SOAType).fields?.get(field.name)
+        const expectedFieldType = expectedStruct.fields.get(field.name)
 
         if (expectedFieldType) {
           if (fieldType && !compatibleTypes(fieldType, expectedFieldType)) {
@@ -2289,15 +2223,17 @@ class SemanticAnalyzer {
       return null
     }
 
-    // Allow member access on SOAType - returns the array field type
+    // Allow member access on SOAType - returns the field type from the backing struct
+    // In the new design, this handles datums[i].field where datums[i] resolves to StructType
+    // but also handles direct datums.field for error recovery
     if (objectType.type === "SOAType") {
       const soaType = objectType as SOAType
       const fieldName = typeof node.property === "string" ? node.property : (node.property as any)?.name
-      const fieldType = soaType.fields.get(fieldName)
+      const fieldType = soaType.structType.fields.get(fieldName)
       if (fieldType) {
         return fieldType
       }
-      this.emitError(`SoA type has no field '${fieldName}'`, node.position)
+      this.emitError(`SoA type '${soaType.structType.name}' has no field '${fieldName}'`, node.position)
       return null
     }
 
@@ -2363,6 +2299,12 @@ class SemanticAnalyzer {
 
     if (!(isIntegerType(indexType) || isUnsignedType(indexType))) {
       this.emitError(`Array index must be integer type, got ${indexType.toString()}`, node.index.position)
+    }
+
+    // Handle SoA indexing: datums[i] returns the backing StructType
+    if (isSOAType(objectType)) {
+      const soaType = objectType as SOAType
+      return soaType.structType
     }
 
     if (isArrayType(objectType)) {

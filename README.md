@@ -168,6 +168,21 @@ p := Point { x: 1.0, y: 2.0 };
 p.x = 3.0;
 ```
 
+**SoA (Struct of Arrays)** — AoS interface over columnar storage:
+
+```mog
+struct Datum { id: i64, val: i64 }
+soa datums: Datum[100]
+
+datums[0].id = 1        // writes to contiguous id array
+datums[0].val = 100     // writes to contiguous val array
+print(datums[0].id)     // 1
+```
+
+You write natural per-element code (`datums[i].field`) but the compiler stores each
+field in its own contiguous array — cache-friendly for column iteration in ML and
+game-engine workloads.
+
 **Optional type** — no null, use `?T`:
 
 ```mog

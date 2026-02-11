@@ -193,6 +193,22 @@ print(p.x);
 p.x = 3.0;
 ```
 
+#### SoA (Struct of Arrays)
+
+Columnar containers backed by an existing struct. You interact using AoS syntax but the compiler transposes access to SoA storage — one contiguous array per field. This gives cache-friendly memory layout for field-iteration patterns common in ML and game engines:
+
+```mog
+struct Datum { id: i64, val: i64 }
+
+soa datums: Datum[100];    // AoS interface, SoA storage
+
+datums[0].id = 1;          // lowers to columnar array access
+datums[1].val = 200;       // lowers to columnar array access
+x := datums[0].id;         // lowers to columnar array read
+```
+
+The `soa` keyword declares a fixed-size columnar container. Under the hood, `datums` is stored as separate contiguous arrays (`id: [i64; 100]`, `val: [i64; 100]`) rather than an array of structs. Element access like `datums[i].field` compiles to a direct index into the corresponding field array.
+
 #### Tensors
 
 N-dimensional arrays with a fixed element dtype. The core ML primitive:
@@ -935,7 +951,7 @@ To keep the surface area small, the following are explicitly **out of scope**:
 ### Removed
 - Raw pointer type (`ptr`) and `gc_alloc`
 - All POSIX syscall wrappers (`sys_socket`, `sys_connect`, `sys_send`, etc.)
-- SoA as user-facing type (compiler may optimize AoS to SoA internally)
+- Old `soa Name { field: [type] }` syntax (replaced by `soa name: Struct[N]` backed by existing structs)
 - `table` type (replaced by `map` and `struct`)
 - Ternary conditional syntax (`condition ? (a) : (b)`) — use `if` expression
 - Custom loop patterns with `continue`/`break` in conditional blocks — use `while` and `for`
@@ -953,6 +969,7 @@ To keep the surface area small, the following are explicitly **out of scope**:
 - Named function arguments with defaults
 - `match` expressions for Result types
 - `with` blocks (for `no_grad()` and similar scoped contexts)
+- `soa name: Struct[N]` columnar containers with AoS syntax and SoA storage
 
 ### Changed
 - Default integer is `int` (64-bit), not `i64`. `i64` still works but is for tensor dtypes.

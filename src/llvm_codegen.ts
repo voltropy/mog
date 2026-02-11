@@ -1,5 +1,5 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
-import { isArrayType, isMapType, isFloatType, IntegerType, UnsignedType, ArrayType, ResultType, OptionalType } from "./types.js"
+import { isArrayType, isMapType, isFloatType, IntegerType, UnsignedType, ArrayType, StructType, SOAType, ResultType, OptionalType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -457,12 +457,65 @@ class LLVMIRGenerator {
         break
       }
       case "SoADeclaration": {
-        // Register SoA definitions (similar to struct but fields are arrays)
-        const soaFields = (statement as any).fields?.map((f: any) => ({
-          name: f.name,
-          fieldType: f.fieldType
-        })) || []
-        this.structDefs.set((statement as any).name, soaFields)
+        // New SoA design: soa name: StructType[capacity]
+        // Allocate one array per field in the backing struct, store pointers in a gc_alloc'd block
+        const soaStmt = statement as any
+        const soaName = soaStmt.name
+        const soaStructName = soaStmt.structName
+        const soaCapacity = soaStmt.capacity || 0
+        const soaStructFields = this.structDefs.get(soaStructName)
+        
+        if (soaStructFields && soaStructFields.length > 0) {
+          const numFields = soaStructFields.length
+          const storageSize = numFields * 8  // one ptr per field
+          
+          // Allocate the storage block for array pointers
+          const storageReg = `%__soa_storage_${soaName}_${this.valueCounter++}`
+          ir.push(`  ${storageReg} = call ptr @gc_alloc(i64 ${storageSize})`)
+          
+          // Allocate one array per field
+          for (let i = 0; i < numFields; i++) {
+            const field = soaStructFields[i]
+            const fieldName = field.name
+            const isFloat = field.fieldType?.type === "FloatType"
+            const elemSize = 8  // all fields are 8 bytes (i64 or f64)
+            
+            // Create dimensions array for array_alloc
+            const dimsReg = `%__soa_dims_${soaName}_${fieldName}_${this.valueCounter++}`
+            ir.push(`  ${dimsReg} = alloca [1 x i64]`)
+            const dimsPtrReg = `%__soa_dimptr_${soaName}_${fieldName}_${this.valueCounter++}`
+            ir.push(`  ${dimsPtrReg} = getelementptr [1 x i64], ptr ${dimsReg}, i64 0, i64 0`)
+            ir.push(`  store i64 ${soaCapacity}, ptr ${dimsPtrReg}`)
+            
+            // Allocate the column array
+            const arrayReg = `%__soa_col_${soaName}_${fieldName}_${this.valueCounter++}`
+            ir.push(`  ${arrayReg} = call ptr @array_alloc(i64 ${elemSize}, i64 1, ptr ${dimsPtrReg})`)
+            
+            // Store the array pointer in the storage block
+            const fieldPtrReg = `%__soa_fptr_${soaName}_${fieldName}_${this.valueCounter++}`
+            ir.push(`  ${fieldPtrReg} = getelementptr i8, ptr ${storageReg}, i64 ${i * 8}`)
+            ir.push(`  store ptr ${arrayReg}, ptr ${fieldPtrReg}`)
+          }
+          
+          // Alloca for the SoA variable and store the storage pointer
+          ir.push(`  %${soaName} = alloca ptr`)
+          ir.push(`  store ptr ${storageReg}, ptr %${soaName}`)
+          
+          // Track variable type for codegen
+          const soaVarType = this.variableTypes.get(soaName)
+          if (!soaVarType) {
+            // Build an SOAType from the struct fields
+            const structFieldMap = new Map<string, any>()
+            for (const f of soaStructFields) {
+              structFieldMap.set(f.name, f.fieldType)
+            }
+            const structType = new StructType(soaStructName, structFieldMap)
+            this.variableTypes.set(soaName, new SOAType(structType, soaCapacity))
+          }
+          
+          // Also register in structDefs for field lookup
+          this.structDefs.set(soaName, soaStructFields)
+        }
         break
       }
       case "WhileLoop":
@@ -1827,6 +1880,17 @@ class LLVMIRGenerator {
         }
       }
     }
+    // SoA transposed access: datums[i].field - look up field type from SOAType
+    if (!argType && arg?.type === "MemberExpression" && arg?.object?.type === "IndexExpression" && arg?.object?.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(arg.object.object.name)
+      if (varType?.type === "SOAType") {
+        const soaType = varType as SOAType
+        const fieldType = soaType.structType.fields.get(arg.property)
+        if (fieldType?.type) {
+          argType = fieldType.type
+        }
+      }
+    }
     // Check if it's a string method call result (e.g., s.upper(), s.lower(), s.trim())
     if (!argType && this.isStringType(arg)) {
       argType = "PointerType"
@@ -1992,6 +2056,68 @@ class LLVMIRGenerator {
         }
       }
     } else if (target && target.type === "MemberExpression") {
+      // SoA transposed write: datums[i].field = val → load column, array_set
+      if (target.object?.type === "IndexExpression" && target.object?.object?.type === "Identifier") {
+        const soaVarName = target.object.object.name
+        const soaVarType = this.variableTypes.get(soaVarName)
+        if (soaVarType?.type === "SOAType") {
+          const soaType = soaVarType as SOAType
+          const structType = soaType.structType
+          const fieldName = target.property
+          const fieldNames = Array.from(structType.fields.keys())
+          const fieldIndex = fieldNames.indexOf(fieldName)
+          
+          if (fieldIndex >= 0) {
+            const fieldType = structType.fields.get(fieldName)
+            const isFloat = fieldType?.type === "FloatType"
+            
+            // Generate the index expression
+            const indexReg = this.generateExpression(ir, target.object.index)
+            
+            // Load the SoA storage pointer
+            const isParam = this.currentFunction && this.currentFunction.params.find((p: any) => p.name === soaVarName)
+            const loadSrc = isParam ? `%${soaVarName}_local` : `%${soaVarName}`
+            const storageReg = `%${this.valueCounter++}`
+            ir.push(`  ${storageReg} = load ptr, ptr ${loadSrc}`)
+            
+            // GEP to the field's column array pointer
+            const colPtrReg = `%${this.valueCounter++}`
+            ir.push(`  ${colPtrReg} = getelementptr i8, ptr ${storageReg}, i64 ${fieldIndex * 8}`)
+            
+            // Load the column array pointer
+            const colArrayReg = `%${this.valueCounter++}`
+            ir.push(`  ${colArrayReg} = load ptr, ptr ${colPtrReg}`)
+            
+            // Set the value in the column array
+            if (isFloat) {
+              const floatKind = (fieldType as any)?.kind || "f64"
+              const isValueFloat = this.isFloatOperand(value) || valueReg.startsWith("0x")
+              if (floatKind === "f32") {
+                if (isValueFloat) {
+                  ir.push(`  call void @array_set_f32(ptr ${colArrayReg}, i64 ${indexReg}, float ${valueReg})`)
+                } else {
+                  const floatConv = `%${this.valueCounter++}`
+                  ir.push(`  ${floatConv} = sitofp i64 ${valueReg} to float`)
+                  ir.push(`  call void @array_set_f32(ptr ${colArrayReg}, i64 ${indexReg}, float ${floatConv})`)
+                }
+              } else {
+                if (isValueFloat) {
+                  ir.push(`  call void @array_set_f64(ptr ${colArrayReg}, i64 ${indexReg}, double ${valueReg})`)
+                } else {
+                  const doubleConv = `%${this.valueCounter++}`
+                  ir.push(`  ${doubleConv} = sitofp i64 ${valueReg} to double`)
+                  ir.push(`  call void @array_set_f64(ptr ${colArrayReg}, i64 ${indexReg}, double ${doubleConv})`)
+                }
+              }
+            } else {
+              ir.push(`  call void @array_set(ptr ${colArrayReg}, i64 ${indexReg}, i64 ${valueReg})`)
+            }
+            
+            return valueReg
+          }
+        }
+      }
+      
       // Check if target object is a struct - use GEP-based assignment
       if (target.object?.type === "Identifier") {
         const varType = this.variableTypes.get(target.object.name)
@@ -2199,27 +2325,6 @@ class LLVMIRGenerator {
   private generateMapLiteral(ir: string[], expr: any): string {
     const entries = expr.entries || expr.columns || []
 
-    // Check if this is a SoA literal (map where values are arrays)
-    if (entries.length > 0) {
-      const firstValue = entries[0].value
-      if (firstValue?.type === "ArrayLiteral") {
-        // Generate as struct of array pointers via gc_alloc
-        const numFields = entries.length
-        const structSize = numFields * 8
-        const structReg = `%${this.valueCounter++}`
-        ir.push(`  ${structReg} = call ptr @gc_alloc(i64 ${structSize})`)
-
-        for (let i = 0; i < entries.length; i++) {
-          const entry = entries[i]
-          const arrayReg = this.generateExpression(ir, entry.value)
-          const fieldPtr = `%${this.valueCounter++}`
-          ir.push(`  ${fieldPtr} = getelementptr i64, ptr ${structReg}, i32 ${i}`)
-          ir.push(`  store i64 ${arrayReg}, ptr ${fieldPtr}`)
-        }
-        return structReg
-      }
-    }
-
     // Regular map literal
     const tableReg = `%${this.valueCounter++}`
     const capacity = entries.length > 0 ? entries.length * 2 : 4
@@ -2294,34 +2399,10 @@ class LLVMIRGenerator {
     return structReg
   }
 
-  private generateSoALiteral(ir: string[], expr: any): string {
-    // SoA is represented as a map of field names to arrays
-    const soaReg = `%${this.valueCounter++}`
-    const capacity = expr.columns.length > 0 ? expr.columns.length * 2 : 4
-    ir.push(`  ${soaReg} = call ptr @map_new(i64 ${capacity})`)
-
-    for (const col of expr.columns) {
-      const fieldName = col.name
-      const values = col.values
-      
-      // Create array for this column
-      const arrReg = `%${this.valueCounter++}`
-      ir.push(`  ${arrReg} = call ptr @array_new(i64 ${values.length})`)
-      
-      // Add elements to array
-      for (let i = 0; i < values.length; i++) {
-        const elemReg = this.generateExpression(ir, values[i])
-        if (elemReg) {
-          ir.push(`  call void @array_push(ptr ${arrReg}, i64 ${elemReg})`)
-        }
-      }
-      
-      // Store array in SoA map
-      const keyStr = this.generateStringLiteral(ir, fieldName)
-      ir.push(`  call void @map_set(ptr ${soaReg}, ptr ${keyStr}, i64 ${fieldName.length}, i64 ptrtoint ptr ${arrReg} to i64)`)
-    }
-
-    return soaReg
+  private generateSoALiteral(_ir: string[], _expr: any): string {
+    // SoA literals are no longer supported in the new design.
+    // SoA containers are declared with: soa name: StructType[capacity]
+    return "0"
   }
 
   private generateMemberExpression(ir: string[], expr: any): string {
@@ -2339,6 +2420,55 @@ class LLVMIRGenerator {
       const reg = `%${this.valueCounter++}`
       ir.push(`  ${reg} = call i64 @array_length(ptr ${arrReg})`)
       return reg
+    }
+
+    // SoA transposed access: datums[i].field → load column array, then array_get
+    if (expr.object?.type === "IndexExpression" && expr.object?.object?.type === "Identifier") {
+      const varName = expr.object.object.name
+      const varType = this.variableTypes.get(varName)
+      if (varType?.type === "SOAType") {
+        const soaType = varType as SOAType
+        const structType = soaType.structType
+        const fieldName = expr.property
+        const fieldNames = Array.from(structType.fields.keys())
+        const fieldIndex = fieldNames.indexOf(fieldName)
+        
+        if (fieldIndex >= 0) {
+          const fieldType = structType.fields.get(fieldName)
+          const isFloat = fieldType?.type === "FloatType"
+          
+          // Generate the index expression
+          const indexReg = this.generateExpression(ir, expr.object.index)
+          
+          // Load the SoA storage pointer
+          const isParam = this.currentFunction && this.currentFunction.params.find((p: any) => p.name === varName)
+          const loadSrc = isParam ? `%${varName}_local` : `%${varName}`
+          const storageReg = `%${this.valueCounter++}`
+          ir.push(`  ${storageReg} = load ptr, ptr ${loadSrc}`)
+          
+          // GEP to the field's column array pointer
+          const colPtrReg = `%${this.valueCounter++}`
+          ir.push(`  ${colPtrReg} = getelementptr i8, ptr ${storageReg}, i64 ${fieldIndex * 8}`)
+          
+          // Load the column array pointer
+          const colArrayReg = `%${this.valueCounter++}`
+          ir.push(`  ${colArrayReg} = load ptr, ptr ${colPtrReg}`)
+          
+          // Index into the column array
+          const resultReg = `%${this.valueCounter++}`
+          if (isFloat) {
+            const floatKind = (fieldType as any)?.kind || "f64"
+            if (floatKind === "f32") {
+              ir.push(`  ${resultReg} = call float @array_get_f32(ptr ${colArrayReg}, i64 ${indexReg})`)
+            } else {
+              ir.push(`  ${resultReg} = call double @array_get_f64(ptr ${colArrayReg}, i64 ${indexReg})`)
+            }
+          } else {
+            ir.push(`  ${resultReg} = call i64 @array_get(ptr ${colArrayReg}, i64 ${indexReg})`)
+          }
+          return resultReg
+        }
+      }
     }
 
     // Check if the object is a struct type - use GEP-based field access
@@ -2521,15 +2651,26 @@ class LLVMIRGenerator {
       return this.getArrayElementType(expr.object)
     }
 
-    // Check if it's a MemberExpression on a SoA variable (returns array field)
+    // Check if it's a MemberExpression on a SoA variable (returns the struct field type)
     if (expr.type === "MemberExpression" && expr.object?.type === "Identifier") {
       const varType = this.variableTypes.get(expr.object.name)
       if (varType?.type === "SOAType") {
+        const soaType = varType as SOAType
         const fieldName = expr.property?.name || expr.property
-        const field = varType.fields?.get(fieldName)
-        if (field?.type === "ArrayType") {
-          return field.elementType
+        const fieldType = soaType.structType.fields.get(fieldName)
+        if (fieldType) {
+          return fieldType
         }
+      }
+    }
+
+    // Check if it's a SoA transposed access pattern: datums[i].field
+    if (expr.type === "MemberExpression" && expr.object?.type === "IndexExpression" && expr.object?.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.object.name)
+      if (varType?.type === "SOAType") {
+        const soaType = varType as SOAType
+        const fieldName = expr.property?.name || expr.property
+        return soaType.structType.fields.get(fieldName) || null
       }
     }
 
@@ -3864,11 +4005,28 @@ private getIntBits(type: LLVMType): number {
       const varType = this.variableTypes.get(expr.object.name)
       if (varType?.type === "StructType" || varType?.type === "SOAType" || varType?.type === "CustomType") {
         const fieldName = expr.property?.name || expr.property
+        // For SOAType, check the backing struct's fields directly
+        if (varType?.type === "SOAType") {
+          const soaType = varType as SOAType
+          const fieldType = soaType.structType.fields.get(fieldName)
+          if (fieldType?.type === "FloatType") return true
+        }
         const structInfo = this.structDefs.get(expr.object.name) || this.structDefs.get(varType.name)
         if (structInfo) {
           const field = structInfo.find((f: any) => f.name === fieldName)
           if (field?.fieldType?.type === "FloatType") return true
         }
+      }
+    }
+
+    // Check if it's a SoA transposed access: datums[i].field
+    if (expr.type === "MemberExpression" && expr.object?.type === "IndexExpression" && expr.object?.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.object.name)
+      if (varType?.type === "SOAType") {
+        const soaType = varType as SOAType
+        const fieldName = expr.property?.name || expr.property
+        const fieldType = soaType.structType.fields.get(fieldName)
+        if (fieldType?.type === "FloatType") return true
       }
     }
 

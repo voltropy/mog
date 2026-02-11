@@ -209,19 +209,28 @@ class AOSType {
 }
 
 class SOAType {
-  fields: Map<string, ArrayType>
+  structType: StructType
+  capacity: number | null
   type = "SOAType"
 
-  constructor(fields: Map<string, ArrayType>) {
-    this.fields = fields
+  constructor(structType: StructType, capacity: number | null = null) {
+    this.structType = structType
+    this.capacity = capacity
+  }
+
+  get name(): string {
+    return this.structType.name
+  }
+
+  get fields(): Map<string, Type> {
+    return this.structType.fields
   }
 
   toString(): string {
-    const fieldStrings: string[] = []
-    for (const [name, arrayType] of this.fields.entries()) {
-      fieldStrings.push(`${name}: ${arrayType}`)
+    if (this.capacity !== null) {
+      return `soa ${this.structType.name}[${this.capacity}]`
     }
-    return `{${fieldStrings.join(", ")}}`
+    return `soa ${this.structType.name}[]`
   }
 }
 
@@ -458,11 +467,8 @@ function sameType(a: Type, b: Type): boolean {
     return true
   }
   if (a instanceof SOAType && b instanceof SOAType) {
-    if (a.fields.size !== b.fields.size) return false
-    for (const [name, aType] of a.fields.entries()) {
-      const bType = b.fields.get(name)
-      if (!bType || !sameType(aType, bType)) return false
-    }
+    if (!sameType(a.structType, b.structType)) return false
+    if (a.capacity !== b.capacity) return false
     return true
   }
   if (a instanceof FunctionType && b instanceof FunctionType) {
