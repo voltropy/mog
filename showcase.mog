@@ -437,8 +437,10 @@ fn main() -> i64 {
 
   env.log("  [env.log] Hello from the host!");
 
-  // NOTE: env.get_name() returns string (ptr) but cap codegen extracts as i64.
-  // This is a known codegen limitation - skipping get_name for now.
+  hname: ptr = env.get_name();
+  print_string("  env.get_name() = ");
+  print_string(hname);
+  println();
 
   hver: i64 = env.get_version();
   print_string("  env.get_version() = ");
@@ -457,18 +459,23 @@ fn main() -> i64 {
   println();
 
   // --- Section: SoA (Struct of Arrays) ---
-  // NOTE: SoA initializes but float field access returns 0.0 (codegen issue
-  // with SoA f64 field indexing). Showing as a declared feature.
   print_string("=== SoA (Struct of Arrays) ===");
   println();
 
-  soa Positions {
-    x: [f64],
-    y: [f64]
+  soa IndexedData {
+    ids: [i64],
+    vals: [i64]
   }
 
-  positions: Positions = Positions { x: [1.0, 2.0, 3.0], y: [4.0, 5.0, 6.0] };
-  print_string("  (SoA declared and initialized - float access has known issue)");
+  data: IndexedData = IndexedData { ids: [10, 20, 30], vals: [100, 200, 300] };
+  print_string("  data.ids[0] = ");
+  print(data.ids[0]);
+  println();
+  print_string("  data.ids[2] = ");
+  print(data.ids[2]);
+  println();
+  print_string("  data.vals[1] = ");
+  print(data.vals[1]);
   println();
   println();
 

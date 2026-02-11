@@ -394,7 +394,19 @@ class LLVMIRGenerator {
             isPointerLike2 = true
           }
           const storeType = isPointerLike2 ? "ptr" : llvmType
-          ir.push(`  store ${storeType} ${value}, ptr ${reg}`)
+          // Capability calls return i64 (raw data from MogValue union).
+          // If storing into a ptr variable, convert i64 -> ptr.
+          const exprVal = statement.value as any
+          const isCapCall = exprVal?.type === "CallExpression" 
+            && exprVal?.callee?.type === "MemberExpression"
+            && this.capabilities.has(exprVal?.callee?.object?.name)
+          if (storeType === "ptr" && isCapCall) {
+            const ptrConv = `%${this.valueCounter++}`
+            ir.push(`  ${ptrConv} = inttoptr i64 ${value} to ptr`)
+            ir.push(`  store ptr ${ptrConv}, ptr ${reg}`)
+          } else {
+            ir.push(`  store ${storeType} ${value}, ptr ${reg}`)
+          }
         }
         break
       }
