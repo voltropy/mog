@@ -1133,7 +1133,11 @@ class LLVMIRGenerator {
     const reg = `%${this.valueCounter++}`
 
     if (expr.operator === "-") {
-      ir.push(`  ${reg} = sub i64 0, ${value}`)
+      if (this.isFloatOperand(argument) || value.startsWith("0x")) {
+        ir.push(`  ${reg} = fneg double ${value}`)
+      } else {
+        ir.push(`  ${reg} = sub i64 0, ${value}`)
+      }
     } else if (expr.operator === "!") {
       ir.push(`  ${reg} = xor i64 ${value}, 1`)
     } else if (expr.operator === "~") {
@@ -1242,31 +1246,23 @@ class LLVMIRGenerator {
 
       if (mathSingleArg[funcName]) {
         const argReg = args[0]
-        // Bitcast i64 arg to double
-        const doubleReg = `%${this.valueCounter++}`
-        ir.push(`  ${doubleReg} = bitcast i64 ${argReg} to double`)
+        const argExpr = positionalArgs[0]
+        const doubleArg = this.toDoubleReg(ir, argReg, argExpr)
         const resultReg = `%${this.valueCounter++}`
-        ir.push(`  ${resultReg} = call double ${mathSingleArg[funcName]}(double ${doubleReg})`)
-        // Bitcast result back to i64
-        const i64Reg = `%${this.valueCounter++}`
-        ir.push(`  ${i64Reg} = bitcast double ${resultReg} to i64`)
-        return i64Reg
+        ir.push(`  ${resultReg} = call double ${mathSingleArg[funcName]}(double ${doubleArg})`)
+        // Return double directly — f64 variables store as double, float ops consume double
+        return resultReg
       }
 
       if (mathTwoArg[funcName]) {
-        const argReg0 = args[0]
-        const argReg1 = args[1]
-        // Bitcast i64 args to double
-        const doubleReg0 = `%${this.valueCounter++}`
-        ir.push(`  ${doubleReg0} = bitcast i64 ${argReg0} to double`)
-        const doubleReg1 = `%${this.valueCounter++}`
-        ir.push(`  ${doubleReg1} = bitcast i64 ${argReg1} to double`)
+        const argExpr0 = positionalArgs[0]
+        const argExpr1 = positionalArgs[1]
+        const doubleArg0 = this.toDoubleReg(ir, args[0], argExpr0)
+        const doubleArg1 = this.toDoubleReg(ir, args[1], argExpr1)
         const resultReg = `%${this.valueCounter++}`
-        ir.push(`  ${resultReg} = call double ${mathTwoArg[funcName]}(double ${doubleReg0}, double ${doubleReg1})`)
-        // Bitcast result back to i64
-        const i64Reg = `%${this.valueCounter++}`
-        ir.push(`  ${i64Reg} = bitcast double ${resultReg} to i64`)
-        return i64Reg
+        ir.push(`  ${resultReg} = call double ${mathTwoArg[funcName]}(double ${doubleArg0}, double ${doubleArg1})`)
+        // Return double directly — f64 variables store as double, float ops consume double
+        return resultReg
       }
 
       // Handle str() conversion function
@@ -1608,23 +1604,29 @@ class LLVMIRGenerator {
         }
       }
 
-      // Call mog_cap_call(vm_ptr, cap_name, func_name, args, nargs)
-      // Pass null for vm_ptr - the host sets up a global VM pointer
-      const resultReg = `%${this.valueCounter++}`
-      ir.push(`  ${resultReg} = call %MogValue @mog_cap_call(ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr ${argsArrayReg}, i32 ${nargs})`)
+      // Call mog_cap_call via sret - the result is written to a stack-allocated MogValue
+      // sret convention: first param is pointer to return value
+      const sretAlloca = `%${this.valueCounter++}`
+      ir.push(`  ${sretAlloca} = alloca %MogValue, align 8`)
+      ir.push(`  call void @mog_cap_call(ptr sret(%MogValue) ${sretAlloca}, ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr ${argsArrayReg}, i32 ${nargs})`)
 
-      // Extract the data field (i64) from the returned MogValue aggregate
+      // Load the data field (first i64 in the union at field index 1, sub-index 0, sub-index 0)
+      const dataGep = `%${this.valueCounter++}`
+      ir.push(`  ${dataGep} = getelementptr inbounds %MogValue, ptr ${sretAlloca}, i32 0, i32 1`)
       const extractReg = `%${this.valueCounter++}`
-      ir.push(`  ${extractReg} = extractvalue %MogValue ${resultReg}, 1`)
+      ir.push(`  ${extractReg} = load i64, ptr ${dataGep}, align 8`)
 
       return extractReg
     } else {
-      // No arguments - call with null args
-      const resultReg = `%${this.valueCounter++}`
-      ir.push(`  ${resultReg} = call %MogValue @mog_cap_call(ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr null, i32 0)`)
+      // No arguments - call with null args via sret
+      const sretAlloca = `%${this.valueCounter++}`
+      ir.push(`  ${sretAlloca} = alloca %MogValue, align 8`)
+      ir.push(`  call void @mog_cap_call(ptr sret(%MogValue) ${sretAlloca}, ptr null, ptr ${capStrAlloca}, ptr ${funcStrAlloca}, ptr null, i32 0)`)
 
+      const dataGep = `%${this.valueCounter++}`
+      ir.push(`  ${dataGep} = getelementptr inbounds %MogValue, ptr ${sretAlloca}, i32 0, i32 1`)
       const extractReg = `%${this.valueCounter++}`
-      ir.push(`  ${extractReg} = extractvalue %MogValue ${resultReg}, 1`)
+      ir.push(`  ${extractReg} = load i64, ptr ${dataGep}, align 8`)
 
       return extractReg
     }
@@ -1633,8 +1635,8 @@ class LLVMIRGenerator {
   private generateCapabilityDeclarations(ir: string[]): void {
     ir.push("")
     ir.push("; Host FFI declarations")
-    ir.push("%MogValue = type { i32, i64 }")
-    ir.push("declare %MogValue @mog_cap_call(ptr, ptr, ptr, ptr, i32)")
+    ir.push("%MogValue = type { i32, { { ptr, ptr } } }")  // tag(4) + pad(4) + union{handle{ptr,ptr}}(16) = 24 bytes
+    ir.push("declare void @mog_cap_call(ptr sret(%MogValue), ptr, ptr, ptr, ptr, i32)")
     ir.push("")
     this.capCallDeclared = true
   }
@@ -1837,8 +1839,19 @@ class LLVMIRGenerator {
     }
 
     // Generate call with appropriate type
-    if (argType === "FloatType") {
-      ir.push(`  call void @${actualFunc}(double ${args[0]})`)
+    // For explicitly-typed print functions, use the correct LLVM type
+    const isExplicitFloat = actualFunc === "print_f64" || actualFunc === "println_f64"
+    if (argType === "FloatType" || isExplicitFloat) {
+      // If the arg is a hex constant (like PI/E), it's already a double literal
+      // If it's a register from math builtins, it was bitcast back to i64 — need to convert
+      let doubleVal = args[0]
+      if (!args[0].startsWith("0x") && !this.isFloatOperand(arg)) {
+        // i64 register — bitcast to double
+        const bc = `%${this.valueCounter++}`
+        ir.push(`  ${bc} = bitcast i64 ${args[0]} to double`)
+        doubleVal = bc
+      }
+      ir.push(`  call void @${actualFunc}(double ${doubleVal})`)
     } else if (argType === "ArrayType" || argType === "PointerType") {
       ir.push(`  call void @${actualFunc}(ptr ${args[0]})`)
     } else {
@@ -3792,6 +3805,27 @@ private getIntBits(type: LLVMType): number {
     return llvmType === "half" || llvmType === "float" || llvmType === "double" || llvmType === "fp128"
   }
 
+  /**
+   * Convert a value to a double register for math builtins.
+   * Handles: f64 variable loads (already double), hex float constants (already double),
+   * i64 registers (need bitcast), and integer constants.
+   */
+  private toDoubleReg(ir: string[], reg: string, expr: any): string {
+    // Hex constants like 0x400921... are LLVM double literals — use directly
+    if (reg.startsWith("0x")) {
+      return reg
+    }
+    // If the expression is a float operand AND produced a named register,
+    // it was loaded as `double` — use directly
+    if (this.isFloatOperand(expr) && reg.startsWith("%")) {
+      return reg
+    }
+    // Otherwise it's an i64 register or integer constant — bitcast to double
+    const doubleReg = `%${this.valueCounter++}`
+    ir.push(`  ${doubleReg} = bitcast i64 ${reg} to double`)
+    return doubleReg
+  }
+
   private isFloatOperand(expr: any): boolean {
     if (!expr) return false
 
@@ -3824,9 +3858,26 @@ private getIntBits(type: LLVMType): number {
       }
     }
 
+    // For unary expressions, check the operand recursively
+    if (expr.type === "UnaryExpression") {
+      const arg = expr.argument || expr.operand
+      return this.isFloatOperand(arg)
+    }
+
     // For binary expressions, check left operand recursively
     if (expr.type === "BinaryExpression") {
       return this.isFloatOperand(expr.left) || this.isFloatOperand(expr.right)
+    }
+
+    // Check if it's a call to a math builtin that returns double
+    if (expr.type === "CallExpression") {
+      const callee = expr.callee?.name || expr.function?.name
+      const mathBuiltins = new Set([
+        "sqrt", "sin", "cos", "tan", "asin", "acos",
+        "exp", "log", "log2", "floor", "ceil", "round", "abs",
+        "pow", "atan2", "min", "max",
+      ])
+      if (callee && mathBuiltins.has(callee)) return true
     }
 
     return false

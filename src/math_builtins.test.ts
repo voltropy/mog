@@ -184,12 +184,11 @@ describe("Math Builtins - LLVM Codegen", () => {
           ],
         }
         const ir = generateLLVMIR(ast)
-        // Should have bitcast i64 -> double, call, bitcast double -> i64
-        expect(ir).toContain(`bitcast i64`)
-        expect(ir).toContain(`to double`)
+        // f64 variable loads produce double registers — passed directly, no bitcast needed.
+        // Result stays as double for f64 variable storage.
         expect(ir).toContain(`call double ${llvmName}(double`)
-        expect(ir).toContain(`bitcast double`)
-        expect(ir).toContain(`to i64`)
+        expect(ir).not.toContain(`bitcast double`)
+        expect(ir).not.toContain(`bitcast i64`)
       })
     }
   })

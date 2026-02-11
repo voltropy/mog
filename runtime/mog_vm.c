@@ -20,6 +20,18 @@ struct MogVM {
     MogLimits limits;
 };
 
+// --- Global VM pointer for embedded programs ---
+
+static MogVM *g_mog_vm = NULL;
+
+void mog_vm_set_global(MogVM *vm) {
+    g_mog_vm = vm;
+}
+
+MogVM *mog_vm_get_global(void) {
+    return g_mog_vm;
+}
+
 // --- VM lifecycle ---
 
 MogVM *mog_vm_new(void) {
@@ -74,7 +86,8 @@ int mog_register_capability(MogVM *vm, const char *cap_name, const MogCapEntry *
 // --- Capability call (used by generated code) ---
 
 MogValue mog_cap_call(MogVM *vm, const char *cap_name, const char *func_name, MogValue *args, int nargs) {
-    if (!vm) return mog_error("mog_cap_call: NULL vm");
+    if (!vm) vm = g_mog_vm;  // Fall back to global VM
+    if (!vm) return mog_error("mog_cap_call: no VM (pass one or call mog_vm_set_global)");
     if (!cap_name) return mog_error("mog_cap_call: NULL cap_name");
     if (!func_name) return mog_error("mog_cap_call: NULL func_name");
 

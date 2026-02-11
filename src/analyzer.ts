@@ -1834,7 +1834,8 @@ class SemanticAnalyzer {
   }
 
   private visitUnaryExpression(node: UnaryExpressionNode): Type | null {
-    const argumentType = this.visitExpression(node.operand)
+    const operand = node.operand || (node as any).argument
+    const argumentType = this.visitExpression(operand)
 
     if (!argumentType) {
       return null

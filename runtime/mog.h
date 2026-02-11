@@ -40,6 +40,10 @@ typedef struct {
 MogVM *mog_vm_new(void);
 void   mog_vm_free(MogVM *vm);
 
+// Global VM pointer for embedded programs
+void    mog_vm_set_global(MogVM *vm);
+MogVM  *mog_vm_get_global(void);
+
 // Capability registration (like luaL_newlib)
 int  mog_register_capability(MogVM *vm, const char *cap_name, const MogCapEntry *entries);
 

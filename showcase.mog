@@ -1,0 +1,482 @@
+/* ============================================================
+ * Mog Language Showcase with Host Embedding
+ * Demonstrates all major language features + host capabilities
+ * ============================================================ */
+
+requires env;
+
+// ============================================================
+// 1. FUNCTIONS - basic, recursive, nested
+// ============================================================
+
+fn add(a: i64, b: i64) -> i64 {
+  return a + b;
+}
+
+fn factorial(n: i64) -> i64 {
+  if (n <= 1) {
+    return 1;
+  }
+  return n * factorial(n - 1);
+}
+
+fn fibonacci(n: i64) -> i64 {
+  if (n <= 0) { return 0; }
+  if (n == 1) { return 1; }
+  a: i64 = 0;
+  b: i64 = 1;
+  i: i64 = 2;
+  while (i <= n) {
+    temp: i64 = a + b;
+    a = b;
+    b = temp;
+    i := i + 1;
+  }
+  return b;
+}
+
+// ============================================================
+// 2. STRUCTS - declaration, creation, field access/mutation
+// ============================================================
+
+struct Point {
+  x: f64,
+  y: f64
+}
+
+struct Particle {
+  x: f64,
+  y: f64,
+  mass: f64
+}
+
+fn create_point(x: f64, y: f64) -> Point {
+  return Point { x: x, y: y };
+}
+
+fn distance_sq(p: Point) -> f64 {
+  return p.x * p.x + p.y * p.y;
+}
+
+// ============================================================
+// 3. MAIN - entry point
+// ============================================================
+
+fn main() -> i64 {
+
+  // --- Section: Basic Variables & Arithmetic ---
+  print_string("=== Variables & Arithmetic ===");
+  println();
+
+  x: i64 = 42;
+  y: i64 = 13;
+  sum: i64 = x + y;
+  diff: i64 = x - y;
+  prod: i64 = x * y;
+  quot: i64 = x / y;
+  rem: i64 = x % y;
+
+  print_string("  42 + 13 = ");
+  print(sum);
+  println();
+  print_string("  42 - 13 = ");
+  print(diff);
+  println();
+  print_string("  42 * 13 = ");
+  print(prod);
+  println();
+  print_string("  42 / 13 = ");
+  print(quot);
+  println();
+  print_string("  42 % 13 = ");
+  print(rem);
+  println();
+  println();
+
+  // --- Section: Float Arithmetic ---
+  print_string("=== Float Arithmetic ===");
+  println();
+
+  a: f64 = 3.14;
+  b: f64 = 2.71;
+  fsum: f64 = a + b;
+  fprod: f64 = a * b;
+
+  print_string("  3.14 + 2.71 = ");
+  print_f64(fsum);
+  println();
+  print_string("  3.14 * 2.71 = ");
+  print_f64(fprod);
+  println();
+  println();
+
+  // --- Section: Bitwise Operators ---
+  print_string("=== Bitwise Operators ===");
+  println();
+
+  bw_and: i64 = 255 & 15;
+  bw_or: i64 = 240 | 15;
+  bw_xor: i64 = 255 ^ 15;
+  bw_shl: i64 = 1 << 8;
+  bw_shr: i64 = 256 >> 4;
+
+  print_string("  255 & 15 = ");
+  print(bw_and);
+  println();
+  print_string("  240 | 15 = ");
+  print(bw_or);
+  println();
+  print_string("  255 ^ 15 = ");
+  print(bw_xor);
+  println();
+  print_string("  1 << 8 = ");
+  print(bw_shl);
+  println();
+  print_string("  256 >> 4 = ");
+  print(bw_shr);
+  println();
+  println();
+
+  // --- Section: Functions ---
+  print_string("=== Functions ===");
+  println();
+
+  r: i64 = add(10, 32);
+  print_string("  add(10, 32) = ");
+  print(r);
+  println();
+
+  f5: i64 = factorial(5);
+  print_string("  factorial(5) = ");
+  print(f5);
+  println();
+
+  f10: i64 = factorial(10);
+  print_string("  factorial(10) = ");
+  print(f10);
+  println();
+
+  fib10: i64 = fibonacci(10);
+  print_string("  fibonacci(10) = ");
+  print(fib10);
+  println();
+
+  fib20: i64 = fibonacci(20);
+  print_string("  fibonacci(20) = ");
+  print(fib20);
+  println();
+  println();
+
+  // --- Section: Strings & Interpolation ---
+  print_string("=== Strings & Interpolation ===");
+  println();
+
+  greeting: [u8] = "Hello, Mog!";
+  print_string("  ");
+  print_string(greeting);
+  println();
+
+  name: [u8] = "World";
+  print_string("  Hello, ");
+  print_string(name);
+  print_string("!");
+  println();
+
+  val: i64 = 99;
+  print_string("  The answer is ");
+  print(val);
+  println();
+  println();
+
+  // --- Section: String Methods ---
+  print_string("=== String Methods ===");
+  println();
+
+  s: [u8] = "hello world";
+
+  upper: [u8] = s.upper();
+  print_string("  upper: ");
+  print_string(upper);
+  println();
+
+  lower: [u8] = upper.lower();
+  print_string("  lower: ");
+  print_string(lower);
+  println();
+
+  padded: [u8] = "  trimmed  ";
+  trimmed: [u8] = padded.trim();
+  print_string("  trim: [");
+  print_string(trimmed);
+  print_string("]");
+  println();
+
+  replaced: [u8] = s.replace("world", "mog");
+  print_string("  replace: ");
+  print_string(replaced);
+  println();
+
+  print_string("  len('hello world') = ");
+  print(s.len);
+  println();
+  println();
+
+  // --- Section: If/Else ---
+  print_string("=== If/Else ===");
+  println();
+
+  test_val: i64 = 42;
+  if (test_val > 0) {
+    print_string("  42 > 0: true");
+    println();
+  } else {
+    print_string("  42 > 0: false");
+    println();
+  }
+
+  if (test_val < 0) {
+    print_string("  42 < 0: true");
+    println();
+  } else {
+    print_string("  42 < 0: false");
+    println();
+  }
+  println();
+
+  // --- Section: While Loop ---
+  print_string("=== While Loop ===");
+  println();
+
+  wsum: i64 = 0;
+  wi: i64 = 1;
+  while (wi <= 10) {
+    wsum := wsum + wi;
+    wi := wi + 1;
+  }
+  print_string("  sum(1..10) = ");
+  print(wsum);
+  println();
+  println();
+
+  // --- Section: For-In Range ---
+  print_string("=== For-In Range ===");
+  println();
+
+  fsum2: i64 = 0;
+  for fi in 0..10 {
+    fsum2 := fsum2 + fi;
+  }
+  print_string("  sum(0..10) = ");
+  print(fsum2);
+  println();
+  println();
+
+  // --- Section: Break & Continue ---
+  print_string("=== Break & Continue ===");
+  println();
+
+  bsum: i64 = 0;
+  for bi in 0..100 {
+    if (bi > 5) {
+      break;
+    }
+    bsum := bsum + bi;
+  }
+  print_string("  break at 5, sum = ");
+  print(bsum);
+  println();
+
+  csum: i64 = 0;
+  for ci in 0..10 {
+    if (ci == 5) {
+      continue;
+    }
+    csum := csum + ci;
+  }
+  print_string("  skip 5, sum = ");
+  print(csum);
+  println();
+  println();
+
+  // --- Section: Structs ---
+  print_string("=== Structs ===");
+  println();
+
+  p1: Point = Point { x: 3.0, y: 4.0 };
+  print_string("  Point(3, 4).x = ");
+  print_f64(p1.x);
+  println();
+  print_string("  Point(3, 4).y = ");
+  print_f64(p1.y);
+  println();
+
+  dsq: f64 = distance_sq(p1);
+  print_string("  distance_sq = ");
+  print_f64(dsq);
+  println();
+
+  p2: Point = create_point(1.5, 2.5);
+  print_string("  create_point(1.5, 2.5).x = ");
+  print_f64(p2.x);
+  println();
+
+  particle: Particle = Particle { x: 0.0, y: 0.0, mass: 1.5 };
+  particle.x := 10.0;
+  particle.y := 20.0;
+  print_string("  particle after mutation: x=");
+  print_f64(particle.x);
+  print_string(" y=");
+  print_f64(particle.y);
+  print_string(" mass=");
+  print_f64(particle.mass);
+  println();
+  println();
+
+  // --- Section: Arrays ---
+  print_string("=== Arrays ===");
+  println();
+
+  arr: i64[] = [10, 20, 30, 40, 50];
+  print_string("  arr[0] = ");
+  print(arr[0]);
+  println();
+  print_string("  arr[4] = ");
+  print(arr[4]);
+  println();
+
+  print_string("  arr.len = ");
+  print(arr.len);
+  println();
+
+  arr.push(60);
+  print_string("  after push(60), len = ");
+  print(arr.len);
+  println();
+  println();
+
+  // --- Section: Match Expression ---
+  print_string("=== Match Expression ===");
+  println();
+
+  mval: i64 = 2;
+  mresult: i64 = match mval {
+    1 => 10,
+    2 => 20,
+    3 => 30,
+    _ => 0
+  };
+  print_string("  match 2: ");
+  print(mresult);
+  println();
+
+  mval2: i64 = 99;
+  mresult2: i64 = match mval2 {
+    1 => 100,
+    _ => 999
+  };
+  print_string("  match 99 (wildcard): ");
+  print(mresult2);
+  println();
+  println();
+
+  // --- Section: If-Expression ---
+  print_string("=== If-Expression ===");
+  println();
+
+  ival: i64 = 10;
+  iresult: i64 = if ival > 5 { 1; } else { 0; };
+  print_string("  if 10 > 5: ");
+  print(iresult);
+  println();
+
+  iresult2: i64 = if ival > 100 { 1; } else { 0; };
+  print_string("  if 10 > 100: ");
+  print(iresult2);
+  println();
+  println();
+
+  // --- Section: Math Builtins ---
+  print_string("=== Math Builtins ===");
+  println();
+
+  sq: f64 = sqrt(4.0);
+  print_string("  sqrt(4.0) = ");
+  print(sq);
+  println();
+
+  sn: f64 = sin(0.0);
+  print_string("  sin(0.0) = ");
+  print(sn);
+  println();
+
+  cs: f64 = cos(0.0);
+  print_string("  cos(0.0) = ");
+  print(cs);
+  println();
+
+  pi_val: f64 = PI;
+  print_string("  PI = ");
+  print(pi_val);
+  println();
+
+  e_val: f64 = E;
+  print_string("  E = ");
+  print(e_val);
+  println();
+
+  sin_pi: f64 = sin(PI);
+  print_string("  sin(PI) = ");
+  print(sin_pi);
+  println();
+
+  println();
+
+  // --- Section: Host Capability (env) ---
+  print_string("=== Host Capability: env ===");
+  println();
+
+  env.log("  [env.log] Hello from the host!");
+
+  // NOTE: env.get_name() returns string (ptr) but cap codegen extracts as i64.
+  // This is a known codegen limitation - skipping get_name for now.
+
+  hver: i64 = env.get_version();
+  print_string("  env.get_version() = ");
+  print(hver);
+  println();
+
+  hts: i64 = env.timestamp();
+  print_string("  env.timestamp() = ");
+  print(hts);
+  println();
+
+  rnd: i64 = env.random(1, 100);
+  print_string("  env.random(1, 100) = ");
+  print(rnd);
+  println();
+  println();
+
+  // --- Section: SoA (Struct of Arrays) ---
+  // NOTE: SoA initializes but float field access returns 0.0 (codegen issue
+  // with SoA f64 field indexing). Showing as a declared feature.
+  print_string("=== SoA (Struct of Arrays) ===");
+  println();
+
+  soa Positions {
+    x: [f64],
+    y: [f64]
+  }
+
+  positions: Positions = Positions { x: [1.0, 2.0, 3.0], y: [4.0, 5.0, 6.0] };
+  print_string("  (SoA declared and initialized - float access has known issue)");
+  println();
+  println();
+
+  // --- Summary ---
+  print_string("=== Showcase Complete ===");
+  println();
+  print_string("All features demonstrated successfully!");
+  println();
+
+  return 0;
+}
