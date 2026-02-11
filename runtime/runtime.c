@@ -1285,3 +1285,73 @@ uint64_t get_argv_value(void* cli_map, uint64_t index) {
 
   return array_get((void*)args_array, index);
 }
+
+/* ============================================================================
+ * Result<T> and Optional<T> (Phase 4: Error Handling)
+ *
+ * Result is a tagged union: 16 bytes allocated via gc_alloc
+ *   offset 0: tag (i64) - 0 = ok, 1 = err
+ *   offset 8: value (i64) - for ok: the value; for err: pointer to error string
+ *
+ * Optional is the same layout:
+ *   offset 0: tag (i64) - 0 = none, 1 = some
+ *   offset 8: value (i64) - for some: the value; for none: unused
+ * ============================================================================ */
+
+void* mog_result_ok(uint64_t value) {
+  uint64_t* result = (uint64_t*)gc_alloc(16);
+  result[0] = 0;  /* tag = ok */
+  result[1] = value;
+  return result;
+}
+
+void* mog_result_err(const char* message) {
+  uint64_t* result = (uint64_t*)gc_alloc(16);
+  result[0] = 1;  /* tag = err */
+  result[1] = (uint64_t)(uintptr_t)message;
+  return result;
+}
+
+uint64_t mog_result_is_ok(void* result) {
+  if (!result) return 0;
+  uint64_t* r = (uint64_t*)result;
+  return r[0] == 0 ? 1 : 0;
+}
+
+uint64_t mog_result_unwrap(void* result) {
+  if (!result) return 0;
+  uint64_t* r = (uint64_t*)result;
+  return r[1];
+}
+
+void* mog_result_unwrap_err(void* result) {
+  if (!result) return NULL;
+  uint64_t* r = (uint64_t*)result;
+  return (void*)(uintptr_t)r[1];
+}
+
+void* mog_optional_some(uint64_t value) {
+  uint64_t* opt = (uint64_t*)gc_alloc(16);
+  opt[0] = 1;  /* tag = some */
+  opt[1] = value;
+  return opt;
+}
+
+void* mog_optional_none(void) {
+  uint64_t* opt = (uint64_t*)gc_alloc(16);
+  opt[0] = 0;  /* tag = none */
+  opt[1] = 0;
+  return opt;
+}
+
+uint64_t mog_optional_is_some(void* optional) {
+  if (!optional) return 0;
+  uint64_t* o = (uint64_t*)optional;
+  return o[0] == 1 ? 1 : 0;
+}
+
+uint64_t mog_optional_unwrap(void* optional) {
+  if (!optional) return 0;
+  uint64_t* o = (uint64_t*)optional;
+  return o[1];
+}

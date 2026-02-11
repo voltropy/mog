@@ -68,6 +68,14 @@ type TokenType =
   | "RANGE"
   | "FAT_ARROW"
   | "match"
+  | "try"
+  | "catch"
+  | "ok"
+  | "err"
+  | "some"
+  | "none"
+  | "is"
+  | "QUESTION_MARK"
   | "UNDERSCORE"
   | "COMMENT"
 
@@ -146,8 +154,16 @@ class Lexer {
     const llmRegex = /LLM\b/y
     const typeKwRegex = /type\b/y
     const matchRegex = /match\b/y
+    const tryRegex = /try\b/y
+    const catchRegex = /catch\b/y
+    const okRegex = /ok\b/y
+    const errRegex = /err\b/y
+    const someRegex = /some\b/y
+    const noneRegex = /none\b/y
+    const isRegex = /is\b/y
     const trueRegex = /true\b/y
     const falseRegex = /false\b/y
+    const questionMarkRegex = /\?/y
     const notEqualRegex = /!=/y
     const equalEqualRegex = /==/y
     const fatArrowRegex = /=>/y
@@ -448,6 +464,90 @@ class Lexer {
       value = this.match(matchRegex)
       if (value) {
         type = "match"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(tryRegex)
+      if (value) {
+        type = "try"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(catchRegex)
+      if (value) {
+        type = "catch"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(okRegex)
+      if (value) {
+        type = "ok"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(errRegex)
+      if (value) {
+        type = "err"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(someRegex)
+      if (value) {
+        type = "some"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(noneRegex)
+      if (value) {
+        type = "none"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(isRegex)
+      if (value) {
+        type = "is"
         this.advance(value.length)
         tokens.push({
           type,
@@ -856,6 +956,18 @@ class Lexer {
       value = this.match(semicolonRegex)
       if (value) {
         type = "SEMICOLON"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(questionMarkRegex)
+      if (value) {
+        type = "QUESTION_MARK"
         this.advance(value.length)
         tokens.push({
           type,

@@ -1,7 +1,7 @@
 import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType, FunctionType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType, FunctionType, ResultType, OptionalType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
 // Decode escape sequences in string literals
@@ -107,6 +107,9 @@ class Parser {
     if (this.matchType("for")) {
       return this.forStatement()
     }
+    if (this.matchType("try")) {
+      return this.tryCatchStatement()
+    }
     if (this.matchType("break")) {
       return this.breakStatement()
     }
@@ -178,6 +181,11 @@ class Parser {
     if (this.checkType("fn")) {
       return this.parseFunctionTypeAnnotation()
     }
+    // Check for ?T optional type
+    if (this.matchType("QUESTION_MARK")) {
+      const innerType = this.parseReturnType()
+      return new OptionalType(innerType)
+    }
     // Accept both TYPE and IDENTIFIER tokens as return types (for custom struct types)
     let returnToken: any
     if (this.checkType("TYPE")) {
@@ -186,6 +194,12 @@ class Parser {
       returnToken = this.consume("IDENTIFIER", "Expected return type")
     }
     let returnTypeName = returnToken.value
+    // Check for Result<T> type
+    if (returnTypeName === "Result" && this.matchType("LESS")) {
+      const innerType = this.parseReturnType()
+      this.consume("GREATER", "Expected > after Result<T>")
+      return new ResultType(innerType)
+    }
     while (this.matchType("LBRACKET")) {
       returnTypeName += "["
       this.consume("RBRACKET", "Expected ] after array bracket")
@@ -693,6 +707,62 @@ class Parser {
     }
   }
 
+  private tryCatchStatement(): StatementNode {
+    this.consume("LBRACE", "Expected { after try")
+    const tryStatements: StatementNode[] = []
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        tryStatements.push(stmt)
+      }
+    }
+    this.consume("RBRACE", "Expected } after try body")
+
+    const tryBody: BlockNode = {
+      type: "Block",
+      statements: tryStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    } as any
+
+    this.consume("catch", "Expected catch after try block")
+    this.consume("LPAREN", "Expected ( after catch")
+    const errorVar = this.consume("IDENTIFIER", "Expected error variable name").value
+    this.consume("RPAREN", "Expected ) after catch variable")
+
+    this.consume("LBRACE", "Expected { after catch(...)")
+    const catchStatements: StatementNode[] = []
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) {
+        catchStatements.push(stmt)
+      }
+    }
+    this.consume("RBRACE", "Expected } after catch body")
+
+    const catchBody: BlockNode = {
+      type: "Block",
+      statements: catchStatements,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    } as any
+
+    return {
+      type: "TryCatch" as any,
+      tryBody,
+      errorVar,
+      catchBody,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    } as any
+  }
+
   private requiresDeclaration(): StatementNode {
     const startPos = this.previous().position?.start || { line: 1, column: 1, index: 0 }
     const capabilities: string[] = []
@@ -1079,6 +1149,47 @@ class Parser {
 private comparison(): ExpressionNode {
     let expr = this.additive()
 
+    // Handle `expr is some(name)` or `expr is none` pattern matching
+    if (this.matchType("is")) {
+      if (this.matchType("some")) {
+        this.consume("LPAREN", "Expected ( after some in is-pattern")
+        const binding = this.consume("IDENTIFIER", "Expected binding name in is some(...)").value
+        this.consume("RPAREN", "Expected ) after binding name in is some(...)")
+        return {
+          type: "IsSomeExpression" as any,
+          value: expr,
+          binding,
+          position: this.combinePositions(expr, { position: this.previous().position }),
+        } as any
+      } else if (this.matchType("none")) {
+        return {
+          type: "IsNoneExpression" as any,
+          value: expr,
+          position: this.combinePositions(expr, { position: this.previous().position }),
+        } as any
+      } else if (this.matchType("ok")) {
+        this.consume("LPAREN", "Expected ( after ok in is-pattern")
+        const binding = this.consume("IDENTIFIER", "Expected binding name in is ok(...)").value
+        this.consume("RPAREN", "Expected ) after binding name in is ok(...)")
+        return {
+          type: "IsOkExpression" as any,
+          value: expr,
+          binding,
+          position: this.combinePositions(expr, { position: this.previous().position }),
+        } as any
+      } else if (this.matchType("err")) {
+        this.consume("LPAREN", "Expected ( after err in is-pattern")
+        const binding = this.consume("IDENTIFIER", "Expected binding name in is err(...)").value
+        this.consume("RPAREN", "Expected ) after binding name in is err(...)")
+        return {
+          type: "IsErrExpression" as any,
+          value: expr,
+          binding,
+          position: this.combinePositions(expr, { position: this.previous().position }),
+        } as any
+      }
+    }
+
     while (
       this.matchType("LESS") ||
       this.matchType("LESS_EQUAL") ||
@@ -1198,6 +1309,15 @@ private comparison(): ExpressionNode {
 
     let expr = this.primary()
 
+    // Handle `?` postfix operator for error propagation
+    if (this.matchType("QUESTION_MARK")) {
+      expr = {
+        type: "PropagateExpression" as any,
+        value: expr,
+        position: this.combinePositions(expr, { position: this.previous().position }),
+      } as any
+    }
+
     // Handle `expr as Type` postfix cast syntax
     while (this.matchType("as")) {
       let typeName: string
@@ -1237,6 +1357,54 @@ private comparison(): ExpressionNode {
     // Anonymous function expression: fn(params) -> type { body }
     if (this.matchType("fn")) {
       return this.anonymousFunction()
+    }
+
+    // ok(expr) - Result ok constructor
+    if (this.matchType("ok")) {
+      const token = this.previous()
+      this.consume("LPAREN", "Expected ( after ok")
+      const value = this.expression()
+      this.consume("RPAREN", "Expected ) after ok value")
+      return {
+        type: "OkExpression" as any,
+        value,
+        position: this.combinePositions({ position: token.position }, value),
+      } as any
+    }
+
+    // err(expr) - Result err constructor
+    if (this.matchType("err")) {
+      const token = this.previous()
+      this.consume("LPAREN", "Expected ( after err")
+      const value = this.expression()
+      this.consume("RPAREN", "Expected ) after err value")
+      return {
+        type: "ErrExpression" as any,
+        value,
+        position: this.combinePositions({ position: token.position }, value),
+      } as any
+    }
+
+    // some(expr) - Optional some constructor
+    if (this.matchType("some")) {
+      const token = this.previous()
+      this.consume("LPAREN", "Expected ( after some")
+      const value = this.expression()
+      this.consume("RPAREN", "Expected ) after some value")
+      return {
+        type: "SomeExpression" as any,
+        value,
+        position: this.combinePositions({ position: token.position }, value),
+      } as any
+    }
+
+    // none - Optional none value
+    if (this.matchType("none")) {
+      const token = this.previous()
+      return {
+        type: "NoneExpression" as any,
+        position: token.position,
+      } as any
     }
 
     if (this.matchType("false")) {
@@ -1789,9 +1957,13 @@ private comparison(): ExpressionNode {
       if (this.matchType("UNDERSCORE")) {
         // Wildcard pattern: _
         pattern = { type: "WildcardPattern" }
-      } else if (this.checkType("IDENTIFIER") && this.peekNext()?.type === "LPAREN") {
-        // Variant pattern: ok(val), err(msg), some(x)
-        const name = this.consume("IDENTIFIER", "Expected pattern name").value
+      } else if (
+        (this.checkType("IDENTIFIER") || this.checkType("ok") || this.checkType("err") || this.checkType("some") || this.checkType("none"))
+        && this.peekNext()?.type === "LPAREN"
+      ) {
+        // Variant pattern: ok(val), err(msg), some(x), none()
+        const nameToken = this.advance()
+        const name = nameToken.value
         this.consume("LPAREN", "Expected ( after variant name")
         let binding: string | null = null
         if (!this.checkType("RPAREN")) {
@@ -1799,6 +1971,10 @@ private comparison(): ExpressionNode {
         }
         this.consume("RPAREN", "Expected ) after variant binding")
         pattern = { type: "VariantPattern", name, binding }
+      } else if (this.checkType("none") && this.peekNext()?.type !== "LPAREN") {
+        // Bare `none` pattern (without parentheses)
+        this.advance()
+        pattern = { type: "VariantPattern", name: "none", binding: null }
       } else {
         // Literal pattern (number, string, identifier, boolean)
         const value = this.expression()

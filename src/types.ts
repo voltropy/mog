@@ -238,6 +238,32 @@ class CustomType {
   }
 }
 
+class ResultType {
+  innerType: Type
+  type = "ResultType"
+
+  constructor(innerType: Type) {
+    this.innerType = innerType
+  }
+
+  toString(): string {
+    return `Result<${this.innerType}>`
+  }
+}
+
+class OptionalType {
+  innerType: Type
+  type = "OptionalType"
+
+  constructor(innerType: Type) {
+    this.innerType = innerType
+  }
+
+  toString(): string {
+    return `?${this.innerType}`
+  }
+}
+
 class FunctionType {
   paramTypes: Type[]
   returnType: Type
@@ -254,7 +280,7 @@ class FunctionType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType
+type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType | ResultType | OptionalType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -348,6 +374,14 @@ function isFunctionType(type: Type): type is FunctionType {
   return type instanceof FunctionType
 }
 
+function isResultType(type: Type): type is ResultType {
+  return type instanceof ResultType
+}
+
+function isOptionalType(type: Type): type is OptionalType {
+  return type instanceof OptionalType
+}
+
 function resolveTypeAlias(type: Type): Type {
   if (type instanceof TypeAliasType) return type.aliasedType
   return type
@@ -415,6 +449,12 @@ function sameType(a: Type, b: Type): boolean {
       if (!sameType(a.paramTypes[i], b.paramTypes[i])) return false
     }
     return sameType(a.returnType, b.returnType)
+  }
+  if (a instanceof ResultType && b instanceof ResultType) {
+    return sameType(a.innerType, b.innerType)
+  }
+  if (a instanceof OptionalType && b instanceof OptionalType) {
+    return sameType(a.innerType, b.innerType)
   }
   return false
 }
@@ -669,6 +709,8 @@ export {
   SOAType,
   CustomType,
   FunctionType,
+  ResultType,
+  OptionalType,
   TypeVar,
   TypeInferenceContext,
   array,
@@ -680,6 +722,8 @@ export {
   isBoolType,
   isTypeAliasType,
   isFunctionType,
+  isResultType,
+  isOptionalType,
   resolveTypeAlias,
   isArrayType,
   isMapType,

@@ -810,12 +810,18 @@ test("tokenizes only whitespace", () => {
 
   describe("Unknown characters", () => {
     test("tokenizes unknown characters as UNKNOWN", () => {
-      const tokens = tokenize("@ $ ?")
+      const tokens = tokenize("@ $")
       const unknown = tokens.filter((t) => t.type === "UNKNOWN")
-      expect(unknown).toHaveLength(3)
+      expect(unknown).toHaveLength(2)
       expect(unknown[0].value).toBe("@")
       expect(unknown[1].value).toBe("$")
-      expect(unknown[2].value).toBe("?")
+    })
+
+    test("tokenizes ? as QUESTION_MARK", () => {
+      const tokens = tokenize("?")
+      const qm = tokens.filter((t) => t.type === "QUESTION_MARK")
+      expect(qm).toHaveLength(1)
+      expect(qm[0].value).toBe("?")
     })
 
     test("tokenizes unicode characters as UNKNOWN", () => {

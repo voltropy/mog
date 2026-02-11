@@ -6,6 +6,8 @@ import {
   isBoolType,
   isTypeAliasType,
   isFunctionType,
+  isResultType,
+  isOptionalType,
   resolveTypeAlias,
   isArrayType,
   isMapType,
@@ -29,6 +31,8 @@ import {
   StructType,
   SOAType,
   FunctionType,
+  ResultType,
+  OptionalType,
   boolType,
 } from "./types.js"
 
@@ -74,6 +78,7 @@ type StatementNode =
   | StructDeclarationNode
   | RequiresDeclarationNode
   | OptionalDeclarationNode
+  | TryCatchNode
 
 interface SoADeclarationNode extends ASTNode {
   type: "SoADeclaration"
@@ -221,6 +226,15 @@ type ExpressionNode =
   | CastExpressionNode
   | IfExpressionNode
   | MatchExpressionNode
+  | OkExpressionNode
+  | ErrExpressionNode
+  | SomeExpressionNode
+  | NoneExpressionNode
+  | PropagateExpressionNode
+  | IsSomeExpressionNode
+  | IsNoneExpressionNode
+  | IsOkExpressionNode
+  | IsErrExpressionNode
 
 interface IdentifierNode extends ASTNode {
   type: "Identifier"
@@ -382,6 +396,60 @@ interface RequiresDeclarationNode extends ASTNode {
 interface OptionalDeclarationNode extends ASTNode {
   type: "OptionalDeclaration"
   capabilities: string[]
+}
+
+interface TryCatchNode extends ASTNode {
+  type: "TryCatch"
+  tryBody: BlockNode
+  errorVar: string
+  catchBody: BlockNode
+}
+
+interface OkExpressionNode extends ASTNode {
+  type: "OkExpression"
+  value: ExpressionNode
+}
+
+interface ErrExpressionNode extends ASTNode {
+  type: "ErrExpression"
+  value: ExpressionNode
+}
+
+interface SomeExpressionNode extends ASTNode {
+  type: "SomeExpression"
+  value: ExpressionNode
+}
+
+interface NoneExpressionNode extends ASTNode {
+  type: "NoneExpression"
+}
+
+interface PropagateExpressionNode extends ASTNode {
+  type: "PropagateExpression"
+  value: ExpressionNode
+}
+
+interface IsSomeExpressionNode extends ASTNode {
+  type: "IsSomeExpression"
+  value: ExpressionNode
+  binding: string
+}
+
+interface IsNoneExpressionNode extends ASTNode {
+  type: "IsNoneExpression"
+  value: ExpressionNode
+}
+
+interface IsOkExpressionNode extends ASTNode {
+  type: "IsOkExpression"
+  value: ExpressionNode
+  binding: string
+}
+
+interface IsErrExpressionNode extends ASTNode {
+  type: "IsErrExpression"
+  value: ExpressionNode
+  binding: string
 }
 
 interface SemanticError {
@@ -732,6 +800,9 @@ class SemanticAnalyzer {
       case "TypeAliasDeclaration":
         this.visitTypeAliasDeclaration(node as any)
         break
+      case "TryCatch":
+        this.visitTryCatch(node as TryCatchNode)
+        break
     }
   }
 
@@ -931,7 +1002,7 @@ class SemanticAnalyzer {
     }
 
     if (conditionType) {
-      if (!isIntegerType(conditionType) && !isUnsignedType(conditionType)) {
+      if (!isIntegerType(conditionType) && !isUnsignedType(conditionType) && !isBoolType(conditionType)) {
         this.emitError(
           `Condition must be integer or unsigned type, got ${conditionType.toString()}`,
           node.condition.position,
@@ -939,7 +1010,25 @@ class SemanticAnalyzer {
       }
     }
 
-    this.visitBlock(node.trueBranch)
+    // For is-patterns (IsSome, IsOk, etc.), declare the binding variable in the true branch scope
+    const condNode = node.condition as any
+    if (condNode.type === "IsSomeExpression" || condNode.type === "IsOkExpression") {
+      this.symbolTable.pushScope()
+      this.symbolTable.declare(condNode.binding, "variable", new IntegerType("i64"))
+      for (const stmt of node.trueBranch.statements) {
+        this.visitStatement(stmt)
+      }
+      this.symbolTable.popScope()
+    } else if (condNode.type === "IsErrExpression") {
+      this.symbolTable.pushScope()
+      this.symbolTable.declare(condNode.binding, "variable", new ArrayType(new UnsignedType("u8"), []))
+      for (const stmt of node.trueBranch.statements) {
+        this.visitStatement(stmt)
+      }
+      this.symbolTable.popScope()
+    } else {
+      this.visitBlock(node.trueBranch)
+    }
 
     if (node.falseBranch) {
       this.visitBlock(node.falseBranch)
@@ -1425,6 +1514,33 @@ class SemanticAnalyzer {
         break
       case "MatchExpression":
         result = this.visitMatchExpression(node as any)
+        break
+      case "OkExpression":
+        result = this.visitOkExpression(node as any)
+        break
+      case "ErrExpression":
+        result = this.visitErrExpression(node as any)
+        break
+      case "SomeExpression":
+        result = this.visitSomeExpression(node as any)
+        break
+      case "NoneExpression":
+        result = new OptionalType(new IntegerType("i64"))
+        break
+      case "PropagateExpression":
+        result = this.visitPropagateExpression(node as any)
+        break
+      case "IsSomeExpression":
+        result = this.visitIsSomeExpression(node as any)
+        break
+      case "IsNoneExpression":
+        result = this.visitIsNoneExpression(node as any)
+        break
+      case "IsOkExpression":
+        result = this.visitIsOkExpression(node as any)
+        break
+      case "IsErrExpression":
+        result = this.visitIsErrExpression(node as any)
         break
       case "BooleanLiteral":
         result = boolType
@@ -2257,14 +2373,96 @@ class SemanticAnalyzer {
 
     let resultType: Type | null = null
     for (const arm of node.arms) {
-      // Visit the arm body expression
-      const armType = this.visitExpression(arm.body)
-      if (!resultType && armType) {
-        resultType = armType
+      // If this arm has a VariantPattern with a binding, declare it in a new scope
+      if (arm.pattern && arm.pattern.type === "VariantPattern" && arm.pattern.binding) {
+        this.symbolTable.pushScope()
+        this.symbolTable.declare(arm.pattern.binding, "variable", new IntegerType("i64"))
+        const armType = this.visitExpression(arm.body)
+        if (!resultType && armType) {
+          resultType = armType
+        }
+        this.symbolTable.popScope()
+      } else {
+        // Visit the arm body expression
+        const armType = this.visitExpression(arm.body)
+        if (!resultType && armType) {
+          resultType = armType
+        }
       }
     }
 
     return resultType || new IntegerType("i64")
+  }
+
+  private visitTryCatch(node: TryCatchNode): void {
+    // Visit try body
+    this.symbolTable.pushScope()
+    for (const stmt of node.tryBody.statements) {
+      this.visitStatement(stmt)
+    }
+    this.symbolTable.popScope()
+
+    // Visit catch body with error variable declared
+    this.symbolTable.pushScope()
+    this.symbolTable.declare(node.errorVar, "variable", new ArrayType(new UnsignedType("u8"), []))
+    for (const stmt of node.catchBody.statements) {
+      this.visitStatement(stmt)
+    }
+    this.symbolTable.popScope()
+  }
+
+  private visitOkExpression(node: any): Type | null {
+    const valueType = this.visitExpression(node.value)
+    if (!valueType) return null
+    return new ResultType(valueType)
+  }
+
+  private visitErrExpression(node: any): Type | null {
+    const valueType = this.visitExpression(node.value)
+    // err always creates Result<i64> by default (inner type determined by context)
+    return new ResultType(new IntegerType("i64"))
+  }
+
+  private visitSomeExpression(node: any): Type | null {
+    const valueType = this.visitExpression(node.value)
+    if (!valueType) return null
+    return new OptionalType(valueType)
+  }
+
+  private visitPropagateExpression(node: any): Type | null {
+    const valueType = this.visitExpression(node.value)
+    if (!valueType) return null
+    // ? operator unwraps Result<T> to T
+    if (valueType instanceof ResultType) {
+      return valueType.innerType
+    }
+    // ? operator unwraps ?T to T
+    if (valueType instanceof OptionalType) {
+      return valueType.innerType
+    }
+    return valueType
+  }
+
+  private visitIsSomeExpression(node: any): Type | null {
+    this.visitExpression(node.value)
+    // `is some(name)` binds the name variable in the enclosing if-true scope
+    // The binding is handled at codegen time
+    return boolType
+  }
+
+  private visitIsNoneExpression(node: any): Type | null {
+    this.visitExpression(node.value)
+    return boolType
+  }
+
+  private visitIsOkExpression(node: any): Type | null {
+    this.visitExpression(node.value)
+    return boolType
+  }
+
+  private visitIsErrExpression(node: any): Type | null {
+    this.visitExpression(node.value)
+    return boolType
   }
 }
 
@@ -2309,4 +2507,14 @@ export type {
   MatchExpressionNode,
   MatchArm,
   MatchPattern,
+  TryCatchNode,
+  OkExpressionNode,
+  ErrExpressionNode,
+  SomeExpressionNode,
+  NoneExpressionNode,
+  PropagateExpressionNode,
+  IsSomeExpressionNode,
+  IsNoneExpressionNode,
+  IsOkExpressionNode,
+  IsErrExpressionNode,
 }

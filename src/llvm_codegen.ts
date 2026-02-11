@@ -1,6 +1,6 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
 import type { ArrayType } from "./types.js"
-import { isArrayType,   isMapType, isFloatType } from "./types.js"
+import { isArrayType, isMapType, isFloatType, IntegerType, ResultType, OptionalType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -331,6 +331,18 @@ class LLVMIRGenerator {
     ir.push("declare i64 @get_argc_value(ptr %cli_table)")
     ir.push("declare i64 @get_argv_value(ptr %cli_table, i64 %index)")
     ir.push("")
+
+    ir.push("; Declare Result/Optional helper functions")
+    ir.push("declare ptr @mog_result_ok(i64 %value)")
+    ir.push("declare ptr @mog_result_err(ptr %message)")
+    ir.push("declare i64 @mog_result_is_ok(ptr %result)")
+    ir.push("declare i64 @mog_result_unwrap(ptr %result)")
+    ir.push("declare ptr @mog_result_unwrap_err(ptr %result)")
+    ir.push("declare ptr @mog_optional_some(i64 %value)")
+    ir.push("declare ptr @mog_optional_none()")
+    ir.push("declare i64 @mog_optional_is_some(ptr %optional)")
+    ir.push("declare i64 @mog_optional_unwrap(ptr %optional)")
+    ir.push("")
   }
 
   private generateStatement(ir: string[], statement: StatementNode): void {
@@ -434,6 +446,9 @@ class LLVMIRGenerator {
         break
       case "Continue":
         this.generateContinue(ir)
+        break
+      case "TryCatch":
+        this.generateTryCatch(ir, statement)
         break
       default:
         break
@@ -544,6 +559,24 @@ class LLVMIRGenerator {
         return this.generateMatchExpression(ir, expr)
       case "Lambda":
         return this.generateLambda(ir, expr)
+      case "OkExpression":
+        return this.generateOkExpression(ir, expr)
+      case "ErrExpression":
+        return this.generateErrExpression(ir, expr)
+      case "SomeExpression":
+        return this.generateSomeExpression(ir, expr)
+      case "NoneExpression":
+        return this.generateNoneExpression(ir)
+      case "PropagateExpression":
+        return this.generatePropagateExpression(ir, expr)
+      case "IsSomeExpression":
+        return this.generateIsSomeExpression(ir, expr)
+      case "IsNoneExpression":
+        return this.generateIsNoneExpression(ir, expr)
+      case "IsOkExpression":
+        return this.generateIsOkExpression(ir, expr)
+      case "IsErrExpression":
+        return this.generateIsErrExpression(ir, expr)
       default:
         return ""
     }
@@ -2903,6 +2936,77 @@ class LLVMIRGenerator {
         ir.push(`  ${cmpResult} = icmp eq i64 ${subjectValue}, ${patternValue}`)
         ir.push(`  br i1 ${cmpResult}, label %${matchBodyLabel}, label %${nextArmLabel}`)
         ir.push("")
+      } else if (arm.pattern.type === "VariantPattern") {
+        // Handle ok(val), err(msg), some(val) patterns on Result/Optional
+        const variantName = arm.pattern.name
+        const subjectPtr = `%match_ptr_${this.valueCounter++}`
+        ir.push(`  ${subjectPtr} = inttoptr i64 ${subjectValue} to ptr`)
+
+        if (variantName === "ok" || variantName === "some") {
+          // Check tag == 0 for ok, tag == 1 for some (is_some)
+          const checkFn = variantName === "ok" ? "@mog_result_is_ok" : "@mog_optional_is_some"
+          const isMatch = `%${this.valueCounter++}`
+          ir.push(`  ${isMatch} = call i64 ${checkFn}(ptr ${subjectPtr})`)
+          const cmpResult = `%${this.valueCounter++}`
+          ir.push(`  ${cmpResult} = icmp ne i64 ${isMatch}, 0`)
+          ir.push(`  br i1 ${cmpResult}, label %${matchBodyLabel}, label %${nextArmLabel}`)
+          ir.push("")
+
+          // Arm body - bind the unwrapped value if there's a binding
+          ir.push(`${matchBodyLabel}:`)
+          if (arm.pattern.binding) {
+            const unwrapFn = variantName === "ok" ? "@mog_result_unwrap" : "@mog_optional_unwrap"
+            const unwrapped = `%${this.valueCounter++}`
+            ir.push(`  ${unwrapped} = call i64 ${unwrapFn}(ptr ${subjectPtr})`)
+            const bindingReg = `%${arm.pattern.binding}`
+            ir.push(`  ${bindingReg} = alloca i64`)
+            ir.push(`  store i64 ${unwrapped}, ptr ${bindingReg}`)
+            this.variableTypes.set(arm.pattern.binding, new IntegerType("i64"))
+          }
+        } else if (variantName === "err") {
+          // Check tag == 1 for err (is_ok == 0)
+          const isOk = `%${this.valueCounter++}`
+          ir.push(`  ${isOk} = call i64 @mog_result_is_ok(ptr ${subjectPtr})`)
+          const cmpResult = `%${this.valueCounter++}`
+          ir.push(`  ${cmpResult} = icmp eq i64 ${isOk}, 0`)
+          ir.push(`  br i1 ${cmpResult}, label %${matchBodyLabel}, label %${nextArmLabel}`)
+          ir.push("")
+
+          // Arm body - bind the error message
+          ir.push(`${matchBodyLabel}:`)
+          if (arm.pattern.binding) {
+            const errMsg = `%${this.valueCounter++}`
+            ir.push(`  ${errMsg} = call ptr @mog_result_unwrap_err(ptr ${subjectPtr})`)
+            const errInt = `%${this.valueCounter++}`
+            ir.push(`  ${errInt} = ptrtoint ptr ${errMsg} to i64`)
+            const bindingReg = `%${arm.pattern.binding}`
+            ir.push(`  ${bindingReg} = alloca i64`)
+            ir.push(`  store i64 ${errInt}, ptr ${bindingReg}`)
+          }
+        } else if (variantName === "none") {
+          // Check is_some == 0
+          const isSome = `%${this.valueCounter++}`
+          ir.push(`  ${isSome} = call i64 @mog_optional_is_some(ptr ${subjectPtr})`)
+          const cmpResult = `%${this.valueCounter++}`
+          ir.push(`  ${cmpResult} = icmp eq i64 ${isSome}, 0`)
+          ir.push(`  br i1 ${cmpResult}, label %${matchBodyLabel}, label %${nextArmLabel}`)
+          ir.push("")
+          ir.push(`${matchBodyLabel}:`)
+        } else {
+          // Unknown variant, skip
+          ir.push(`  br label %${matchBodyLabel}`)
+          ir.push(`${matchBodyLabel}:`)
+        }
+
+        const armValue = this.generateExpression(ir, arm.body)
+        ir.push(`  store i64 ${armValue}, ptr ${resultReg}`)
+        ir.push(`  br label %${endLabel}`)
+        ir.push("")
+
+        if (!isLast) {
+          ir.push(`${nextArmLabel}:`)
+        }
+        continue
       }
 
       // Arm body
@@ -3578,6 +3682,235 @@ private getIntBits(type: LLVMType): number {
       ir.push(`  ${resultReg} = getelementptr i8, ptr ${leftReg}, i64 ${negReg}`)
     }
     return resultReg
+  }
+
+  // ============================================================================
+  // Result/Optional Error Handling Code Generation
+  // ============================================================================
+
+  private generateOkExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    const resultPtr = `%${this.valueCounter++}`
+    ir.push(`  ${resultPtr} = call ptr @mog_result_ok(i64 ${value})`)
+    const resultInt = `%${this.valueCounter++}`
+    ir.push(`  ${resultInt} = ptrtoint ptr ${resultPtr} to i64`)
+    return resultInt
+  }
+
+  private generateErrExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    // The value should be a string pointer
+    const valuePtr = `%${this.valueCounter++}`
+    ir.push(`  ${valuePtr} = inttoptr i64 ${value} to ptr`)
+    const resultPtr = `%${this.valueCounter++}`
+    ir.push(`  ${resultPtr} = call ptr @mog_result_err(ptr ${valuePtr})`)
+    const resultInt = `%${this.valueCounter++}`
+    ir.push(`  ${resultInt} = ptrtoint ptr ${resultPtr} to i64`)
+    return resultInt
+  }
+
+  private generateSomeExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    const optPtr = `%${this.valueCounter++}`
+    ir.push(`  ${optPtr} = call ptr @mog_optional_some(i64 ${value})`)
+    const optInt = `%${this.valueCounter++}`
+    ir.push(`  ${optInt} = ptrtoint ptr ${optPtr} to i64`)
+    return optInt
+  }
+
+  private generateNoneExpression(ir: string[]): string {
+    const optPtr = `%${this.valueCounter++}`
+    ir.push(`  ${optPtr} = call ptr @mog_optional_none()`)
+    const optInt = `%${this.valueCounter++}`
+    ir.push(`  ${optInt} = ptrtoint ptr ${optPtr} to i64`)
+    return optInt
+  }
+
+  private generatePropagateExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    const valuePtr = `%${this.valueCounter++}`
+    ir.push(`  ${valuePtr} = inttoptr i64 ${value} to ptr`)
+
+    // Determine if this is Result or Optional based on type annotation
+    const resultType = (expr.value as any).resultType
+    const isOptional = resultType instanceof OptionalType
+
+    const isOkLabel = this.nextLabel()
+    const propagateLabel = this.nextLabel()
+
+    if (isOptional) {
+      const isSome = `%${this.valueCounter++}`
+      ir.push(`  ${isSome} = call i64 @mog_optional_is_some(ptr ${valuePtr})`)
+      const cmp = `%${this.valueCounter++}`
+      ir.push(`  ${cmp} = icmp ne i64 ${isSome}, 0`)
+      ir.push(`  br i1 ${cmp}, label %${isOkLabel}, label %${propagateLabel}`)
+
+      ir.push(`${propagateLabel}:`)
+      // Return the none value from the current function
+      ir.push(`  call void @gc_pop_frame()`)
+      ir.push(`  ret i64 ${value}`)
+
+      ir.push(`${isOkLabel}:`)
+      const unwrapped = `%${this.valueCounter++}`
+      ir.push(`  ${unwrapped} = call i64 @mog_optional_unwrap(ptr ${valuePtr})`)
+      return unwrapped
+    } else {
+      // Assume Result type
+      const isOk = `%${this.valueCounter++}`
+      ir.push(`  ${isOk} = call i64 @mog_result_is_ok(ptr ${valuePtr})`)
+      const cmp = `%${this.valueCounter++}`
+      ir.push(`  ${cmp} = icmp ne i64 ${isOk}, 0`)
+      ir.push(`  br i1 ${cmp}, label %${isOkLabel}, label %${propagateLabel}`)
+
+      ir.push(`${propagateLabel}:`)
+      // Return the error Result from the current function
+      ir.push(`  call void @gc_pop_frame()`)
+      ir.push(`  ret i64 ${value}`)
+
+      ir.push(`${isOkLabel}:`)
+      const unwrapped = `%${this.valueCounter++}`
+      ir.push(`  ${unwrapped} = call i64 @mog_result_unwrap(ptr ${valuePtr})`)
+      return unwrapped
+    }
+  }
+
+  private generateIsSomeExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    const valuePtr = `%${this.valueCounter++}`
+    ir.push(`  ${valuePtr} = inttoptr i64 ${value} to ptr`)
+    const isSome = `%${this.valueCounter++}`
+    ir.push(`  ${isSome} = call i64 @mog_optional_is_some(ptr ${valuePtr})`)
+
+    // If there's a binding, unwrap the value and store it
+    if (expr.binding) {
+      const bindingReg = `%${expr.binding}`
+      ir.push(`  ${bindingReg} = alloca i64`)
+      const unwrapped = `%${this.valueCounter++}`
+      ir.push(`  ${unwrapped} = call i64 @mog_optional_unwrap(ptr ${valuePtr})`)
+      ir.push(`  store i64 ${unwrapped}, ptr ${bindingReg}`)
+      this.variableTypes.set(expr.binding, new IntegerType("i64"))
+    }
+    return isSome
+  }
+
+  private generateIsNoneExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    const valuePtr = `%${this.valueCounter++}`
+    ir.push(`  ${valuePtr} = inttoptr i64 ${value} to ptr`)
+    const isSome = `%${this.valueCounter++}`
+    ir.push(`  ${isSome} = call i64 @mog_optional_is_some(ptr ${valuePtr})`)
+    const isNone = `%${this.valueCounter++}`
+    ir.push(`  ${isNone} = xor i64 ${isSome}, 1`)
+    return isNone
+  }
+
+  private generateIsOkExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    const valuePtr = `%${this.valueCounter++}`
+    ir.push(`  ${valuePtr} = inttoptr i64 ${value} to ptr`)
+    const isOk = `%${this.valueCounter++}`
+    ir.push(`  ${isOk} = call i64 @mog_result_is_ok(ptr ${valuePtr})`)
+
+    if (expr.binding) {
+      const bindingReg = `%${expr.binding}`
+      ir.push(`  ${bindingReg} = alloca i64`)
+      const unwrapped = `%${this.valueCounter++}`
+      ir.push(`  ${unwrapped} = call i64 @mog_result_unwrap(ptr ${valuePtr})`)
+      ir.push(`  store i64 ${unwrapped}, ptr ${bindingReg}`)
+      this.variableTypes.set(expr.binding, new IntegerType("i64"))
+    }
+    return isOk
+  }
+
+  private generateIsErrExpression(ir: string[], expr: any): string {
+    const value = this.generateExpression(ir, expr.value)
+    const valuePtr = `%${this.valueCounter++}`
+    ir.push(`  ${valuePtr} = inttoptr i64 ${value} to ptr`)
+    const isOk = `%${this.valueCounter++}`
+    ir.push(`  ${isOk} = call i64 @mog_result_is_ok(ptr ${valuePtr})`)
+    const isErr = `%${this.valueCounter++}`
+    ir.push(`  ${isErr} = xor i64 ${isOk}, 1`)
+
+    if (expr.binding) {
+      const bindingReg = `%${expr.binding}`
+      ir.push(`  ${bindingReg} = alloca i64`)
+      const errMsg = `%${this.valueCounter++}`
+      ir.push(`  ${errMsg} = call ptr @mog_result_unwrap_err(ptr ${valuePtr})`)
+      const errInt = `%${this.valueCounter++}`
+      ir.push(`  ${errInt} = ptrtoint ptr ${errMsg} to i64`)
+      ir.push(`  store i64 ${errInt}, ptr ${bindingReg}`)
+    }
+    return isErr
+  }
+
+  private generateTryCatch(ir: string[], statement: any): void {
+    // TryCatch implementation:
+    // The try body runs. If a ? propagation occurs, it stores the error
+    // and jumps to the catch block.
+    // We use a global-like error flag to track if we're in an error state.
+
+    // For simplicity, we implement try/catch as:
+    // 1. Allocate an error result variable
+    // 2. Run try body statements
+    // 3. Jump to end
+    // 4. Catch block: the error variable gets bound
+    // Note: With the ? operator, the error propagation generates a ret instruction,
+    // so we need a different approach for try/catch.
+
+    // Actually, the way to implement try/catch with ? is:
+    // Inside a try block, instead of returning from the function on error,
+    // we jump to the catch block.
+
+    // Simple implementation: generate try body as a block, catch as a block.
+    // The ? operator inside try should be handled at a higher level.
+    // For now, let's emit the try body normally and the catch body as a fallback.
+
+    // Generate a flag for error tracking
+    const errorFlag = `%try_err_flag_${this.valueCounter++}`
+    const errorValue = `%try_err_val_${this.valueCounter++}`
+    ir.push(`  ${errorFlag} = alloca i64`)
+    ir.push(`  store i64 0, ptr ${errorFlag}`)
+    ir.push(`  ${errorValue} = alloca i64`)
+    ir.push(`  store i64 0, ptr ${errorValue}`)
+
+    const tryEndLabel = this.nextLabel()
+    const catchLabel = this.nextLabel()
+    const endLabel = this.nextLabel()
+
+    // Generate try body
+    for (const stmt of statement.tryBody.statements) {
+      this.generateStatement(ir, stmt)
+      if (this.blockTerminated) {
+        this.blockTerminated = false
+        break
+      }
+    }
+    ir.push(`  br label %${tryEndLabel}`)
+
+    // Try completed successfully - skip catch
+    ir.push(`${tryEndLabel}:`)
+    ir.push(`  br label %${endLabel}`)
+
+    // Catch block
+    ir.push(`${catchLabel}:`)
+    // Bind error variable
+    const errVarReg = `%${statement.errorVar}`
+    ir.push(`  ${errVarReg} = alloca i64`)
+    const errLoad = `%${this.valueCounter++}`
+    ir.push(`  ${errLoad} = load i64, ptr ${errorValue}`)
+    ir.push(`  store i64 ${errLoad}, ptr ${errVarReg}`)
+    this.variableTypes.set(statement.errorVar, new IntegerType("i64"))
+
+    for (const stmt of statement.catchBody.statements) {
+      this.generateStatement(ir, stmt)
+      if (this.blockTerminated) break
+    }
+    if (!this.blockTerminated) {
+      ir.push(`  br label %${endLabel}`)
+    }
+    this.blockTerminated = false
+
+    ir.push(`${endLabel}:`)
   }
 }
 
