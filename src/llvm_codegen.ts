@@ -737,16 +737,25 @@ class LLVMIRGenerator {
     if (node.type === "TemplateLiteral") {
       for (const part of node.parts) {
         if (typeof part === "string") {
-          const name = `@str${this.stringCounter++}`
-          // Escape backslash and quote for LLVM IR, then convert escape sequences to LLVM format
-          const llvmEscaped = part
-            .replace(/\\/g, "\\\\")    // Escape backslash
-            .replace(/"/g, '\\"')      // Escape quote
-            .replace(/\n/g, "\\0A")     // Newline -> \0A
-            .replace(/\r/g, "\\0D")     // Carriage return -> \0D
-            .replace(/\t/g, "\\09")     // Tab -> \09
-          const strDef = `${name} = private unnamed_addr constant [${part.length + 1} x i8] c"${llvmEscaped}\\00"`
-          this.stringConstants.push(strDef)
+          // Check if this string part is already registered
+          if (!this.stringNameMap.has(part)) {
+            const name = `@str${this.stringCounter++}`
+            this.stringNameMap.set(part, name)
+            // Escape for LLVM IR and convert escape sequences to LLVM format
+            let llvmEscaped = ""
+            for (const char of part) {
+              const code = char.charCodeAt(0)
+              if (char === "\\") llvmEscaped += "\\\\"
+              else if (char === '"') llvmEscaped += '\\"'
+              else if (code === 0x0A) llvmEscaped += "\\0A"
+              else if (code === 0x0D) llvmEscaped += "\\0D"
+              else if (code === 0x09) llvmEscaped += "\\09"
+              else if (code < 0x20 || code > 0x7E) llvmEscaped += `\\${code.toString(16).padStart(2, "0").toUpperCase()}`
+              else llvmEscaped += char
+            }
+            const strDef = `${name} = private unnamed_addr constant [${part.length + 1} x i8] c"${llvmEscaped}\\00"`
+            this.stringConstants.push(strDef)
+          }
         } else {
           this.collectStringFromNode(part)
         }
@@ -801,6 +810,9 @@ class LLVMIRGenerator {
         if (varType?.type === "IntegerType") return varType.kind || "i64"
         if (varType?.type === "UnsignedType") return varType.kind || "u64"
         if (varType?.type === "ArrayType") return "string" // [u8] strings
+        if (varType?.type === "PointerType") return "string" // ptr strings
+        // Check if this is a string-typed variable by checking isStringType
+        if (this.isStringType(expr)) return "string"
         return "i64" // default
       }
       case "BinaryExpression": {
@@ -818,6 +830,20 @@ class LLVMIRGenerator {
             if (func.returnType.startsWith("f")) return "f64"
             if (func.returnType === "ptr") return "string"
           }
+        }
+        return "i64"
+      }
+      case "TemplateLiteral":
+        return "string"
+      case "MemberExpression": {
+        // Check if this is a struct field access to a string/ptr field
+        const objType = this.variableTypes.get(expr.object?.name)
+        const structName = objType?.name || objType?.structName
+        const fields = structName ? this.structDefs.get(structName) : null
+        if (fields) {
+          const field = fields.find((f: any) => f.name === expr.property)
+          if (field?.fieldType?.type === "FloatType") return field.fieldType.kind || "f64"
+          if (field?.fieldType?.type === "PointerType") return "string"
         }
         return "i64"
       }

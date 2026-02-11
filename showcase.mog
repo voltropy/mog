@@ -65,8 +65,7 @@ fn distance_sq(p: Point) -> f64 {
 fn main() -> i64 {
 
   // --- Section: Basic Variables & Arithmetic ---
-  print_string("=== Variables & Arithmetic ===");
-  println();
+  print_string("=== Variables & Arithmetic ===\n");
 
   x: i64 = 42;
   y: i64 = 13;
@@ -76,26 +75,15 @@ fn main() -> i64 {
   quot: i64 = x / y;
   rem: i64 = x % y;
 
-  print_string("  42 + 13 = ");
-  print(sum);
-  println();
-  print_string("  42 - 13 = ");
-  print(diff);
-  println();
-  print_string("  42 * 13 = ");
-  print(prod);
-  println();
-  print_string("  42 / 13 = ");
-  print(quot);
-  println();
-  print_string("  42 % 13 = ");
-  print(rem);
-  println();
-  println();
+  print_string(f"  42 + 13 = {sum}\n");
+  print_string(f"  42 - 13 = {diff}\n");
+  print_string(f"  42 * 13 = {prod}\n");
+  print_string(f"  42 / 13 = {quot}\n");
+  print_string(f"  42 % 13 = {rem}\n");
+  print_string("\n");
 
   // --- Section: Float Arithmetic ---
-  print_string("=== Float Arithmetic ===");
-  println();
+  print_string("=== Float Arithmetic ===\n");
 
   a: f64 = 3.14;
   b: f64 = 2.71;
@@ -104,15 +92,13 @@ fn main() -> i64 {
 
   print_string("  3.14 + 2.71 = ");
   print_f64(fsum);
-  println();
+  print_string("\n");
   print_string("  3.14 * 2.71 = ");
   print_f64(fprod);
-  println();
-  println();
+  print_string("\n\n");
 
   // --- Section: Bitwise Operators ---
-  print_string("=== Bitwise Operators ===");
-  println();
+  print_string("=== Bitwise Operators ===\n");
 
   bw_and: i64 = 255 & 15;
   bw_or: i64 = 240 | 15;
@@ -120,132 +106,85 @@ fn main() -> i64 {
   bw_shl: i64 = 1 << 8;
   bw_shr: i64 = 256 >> 4;
 
-  print_string("  255 & 15 = ");
-  print(bw_and);
-  println();
-  print_string("  240 | 15 = ");
-  print(bw_or);
-  println();
-  print_string("  255 ^ 15 = ");
-  print(bw_xor);
-  println();
-  print_string("  1 << 8 = ");
-  print(bw_shl);
-  println();
-  print_string("  256 >> 4 = ");
-  print(bw_shr);
-  println();
-  println();
+  print_string(f"  255 & 15 = {bw_and}\n");
+  print_string(f"  240 | 15 = {bw_or}\n");
+  print_string(f"  255 ^ 15 = {bw_xor}\n");
+  print_string(f"  1 << 8 = {bw_shl}\n");
+  print_string(f"  256 >> 4 = {bw_shr}\n");
+  print_string("\n");
 
   // --- Section: Functions ---
-  print_string("=== Functions ===");
-  println();
+  print_string("=== Functions ===\n");
 
   r: i64 = add(10, 32);
-  print_string("  add(10, 32) = ");
-  print(r);
-  println();
+  print_string(f"  add(10, 32) = {r}\n");
 
   f5: i64 = factorial(5);
-  print_string("  factorial(5) = ");
-  print(f5);
-  println();
+  print_string(f"  factorial(5) = {f5}\n");
 
   f10: i64 = factorial(10);
-  print_string("  factorial(10) = ");
-  print(f10);
-  println();
+  print_string(f"  factorial(10) = {f10}\n");
 
   fib10: i64 = fibonacci(10);
-  print_string("  fibonacci(10) = ");
-  print(fib10);
-  println();
+  print_string(f"  fibonacci(10) = {fib10}\n");
 
   fib20: i64 = fibonacci(20);
-  print_string("  fibonacci(20) = ");
-  print(fib20);
-  println();
-  println();
+  print_string(f"  fibonacci(20) = {fib20}\n");
+  print_string("\n");
 
   // --- Section: Strings & Interpolation ---
-  print_string("=== Strings & Interpolation ===");
-  println();
+  print_string("=== Strings & Interpolation ===\n");
 
   greeting: [u8] = "Hello, Mog!";
-  print_string("  ");
-  print_string(greeting);
-  println();
+  print_string(f"  {greeting}\n");
 
   name: [u8] = "World";
-  print_string("  Hello, ");
-  print_string(name);
-  print_string("!");
-  println();
+  print_string(f"  Hello, {name}!\n");
 
   val: i64 = 99;
-  print_string("  The answer is ");
-  print(val);
-  println();
-  println();
+  print_string(f"  The answer is {val}\n");
+  print_string("\n");
 
   // --- Section: String Methods ---
-  print_string("=== String Methods ===");
-  println();
+  print_string("=== String Methods ===\n");
 
   s: [u8] = "hello world";
 
   upper: [u8] = s.upper();
-  print_string("  upper: ");
-  print_string(upper);
-  println();
+  print_string(f"  upper: {upper}\n");
 
   lower: [u8] = upper.lower();
-  print_string("  lower: ");
-  print_string(lower);
-  println();
+  print_string(f"  lower: {lower}\n");
 
   padded: [u8] = "  trimmed  ";
   trimmed: [u8] = padded.trim();
-  print_string("  trim: [");
-  print_string(trimmed);
-  print_string("]");
-  println();
+  print_string(f"  trim: [{trimmed}]\n");
 
   replaced: [u8] = s.replace("world", "mog");
-  print_string("  replace: ");
-  print_string(replaced);
-  println();
+  print_string(f"  replace: {replaced}\n");
 
-  print_string("  len('hello world') = ");
-  print(s.len);
-  println();
-  println();
+  print_string(f"  len('hello world') = {s.len}\n");
+  print_string("\n");
 
   // --- Section: If/Else ---
-  print_string("=== If/Else ===");
-  println();
+  print_string("=== If/Else ===\n");
 
   test_val: i64 = 42;
   if (test_val > 0) {
-    print_string("  42 > 0: true");
-    println();
+    print_string("  42 > 0: true\n");
   } else {
-    print_string("  42 > 0: false");
-    println();
+    print_string("  42 > 0: false\n");
   }
 
   if (test_val < 0) {
-    print_string("  42 < 0: true");
-    println();
+    print_string("  42 < 0: true\n");
   } else {
-    print_string("  42 < 0: false");
-    println();
+    print_string("  42 < 0: false\n");
   }
-  println();
+  print_string("\n");
 
   // --- Section: While Loop ---
-  print_string("=== While Loop ===");
-  println();
+  print_string("=== While Loop ===\n");
 
   wsum: i64 = 0;
   wi: i64 = 1;
@@ -253,27 +192,21 @@ fn main() -> i64 {
     wsum := wsum + wi;
     wi := wi + 1;
   }
-  print_string("  sum(1..10) = ");
-  print(wsum);
-  println();
-  println();
+  print_string(f"  sum(1..10) = {wsum}\n");
+  print_string("\n");
 
   // --- Section: For-In Range ---
-  print_string("=== For-In Range ===");
-  println();
+  print_string("=== For-In Range ===\n");
 
   fsum2: i64 = 0;
   for fi in 0..10 {
     fsum2 := fsum2 + fi;
   }
-  print_string("  sum(0..10) = ");
-  print(fsum2);
-  println();
-  println();
+  print_string(f"  sum(0..10) = {fsum2}\n");
+  print_string("\n");
 
   // --- Section: Break & Continue ---
-  print_string("=== Break & Continue ===");
-  println();
+  print_string("=== Break & Continue ===\n");
 
   bsum: i64 = 0;
   for bi in 0..100 {
@@ -282,9 +215,7 @@ fn main() -> i64 {
     }
     bsum := bsum + bi;
   }
-  print_string("  break at 5, sum = ");
-  print(bsum);
-  println();
+  print_string(f"  break at 5, sum = {bsum}\n");
 
   csum: i64 = 0;
   for ci in 0..10 {
@@ -293,32 +224,29 @@ fn main() -> i64 {
     }
     csum := csum + ci;
   }
-  print_string("  skip 5, sum = ");
-  print(csum);
-  println();
-  println();
+  print_string(f"  skip 5, sum = {csum}\n");
+  print_string("\n");
 
   // --- Section: Structs ---
-  print_string("=== Structs ===");
-  println();
+  print_string("=== Structs ===\n");
 
   p1: Point = Point { x: 3.0, y: 4.0 };
   print_string("  Point(3, 4).x = ");
   print_f64(p1.x);
-  println();
+  print_string("\n");
   print_string("  Point(3, 4).y = ");
   print_f64(p1.y);
-  println();
+  print_string("\n");
 
   dsq: f64 = distance_sq(p1);
   print_string("  distance_sq = ");
   print_f64(dsq);
-  println();
+  print_string("\n");
 
   p2: Point = create_point(1.5, 2.5);
   print_string("  create_point(1.5, 2.5).x = ");
   print_f64(p2.x);
-  println();
+  print_string("\n");
 
   particle: Particle = Particle { x: 0.0, y: 0.0, mass: 1.5 };
   particle.x := 10.0;
@@ -329,34 +257,23 @@ fn main() -> i64 {
   print_f64(particle.y);
   print_string(" mass=");
   print_f64(particle.mass);
-  println();
-  println();
+  print_string("\n\n");
 
   // --- Section: Arrays ---
-  print_string("=== Arrays ===");
-  println();
+  print_string("=== Arrays ===\n");
 
   arr: i64[] = [10, 20, 30, 40, 50];
-  print_string("  arr[0] = ");
-  print(arr[0]);
-  println();
-  print_string("  arr[4] = ");
-  print(arr[4]);
-  println();
+  print_string(f"  arr[0] = {arr[0]}\n");
+  print_string(f"  arr[4] = {arr[4]}\n");
 
-  print_string("  arr.len = ");
-  print(arr.len);
-  println();
+  print_string(f"  arr.len = {arr.len}\n");
 
   arr.push(60);
-  print_string("  after push(60), len = ");
-  print(arr.len);
-  println();
-  println();
+  print_string(f"  after push(60), len = {arr.len}\n");
+  print_string("\n");
 
   // --- Section: Match Expression ---
-  print_string("=== Match Expression ===");
-  println();
+  print_string("=== Match Expression ===\n");
 
   mval: i64 = 2;
   mresult: i64 = match mval {
@@ -365,102 +282,80 @@ fn main() -> i64 {
     3 => 30,
     _ => 0
   };
-  print_string("  match 2: ");
-  print(mresult);
-  println();
+  print_string(f"  match 2: {mresult}\n");
 
   mval2: i64 = 99;
   mresult2: i64 = match mval2 {
     1 => 100,
     _ => 999
   };
-  print_string("  match 99 (wildcard): ");
-  print(mresult2);
-  println();
-  println();
+  print_string(f"  match 99 (wildcard): {mresult2}\n");
+  print_string("\n");
 
   // --- Section: If-Expression ---
-  print_string("=== If-Expression ===");
-  println();
+  print_string("=== If-Expression ===\n");
 
   ival: i64 = 10;
   iresult: i64 = if ival > 5 { 1; } else { 0; };
-  print_string("  if 10 > 5: ");
-  print(iresult);
-  println();
+  print_string(f"  if 10 > 5: {iresult}\n");
 
   iresult2: i64 = if ival > 100 { 1; } else { 0; };
-  print_string("  if 10 > 100: ");
-  print(iresult2);
-  println();
-  println();
+  print_string(f"  if 10 > 100: {iresult2}\n");
+  print_string("\n");
 
   // --- Section: Math Builtins ---
-  print_string("=== Math Builtins ===");
-  println();
+  print_string("=== Math Builtins ===\n");
 
   sq: f64 = sqrt(4.0);
   print_string("  sqrt(4.0) = ");
-  print(sq);
-  println();
+  print_f64(sq);
+  print_string("\n");
 
   sn: f64 = sin(0.0);
   print_string("  sin(0.0) = ");
-  print(sn);
-  println();
+  print_f64(sn);
+  print_string("\n");
 
   cs: f64 = cos(0.0);
   print_string("  cos(0.0) = ");
-  print(cs);
-  println();
+  print_f64(cs);
+  print_string("\n");
 
   pi_val: f64 = PI;
   print_string("  PI = ");
-  print(pi_val);
-  println();
+  print_f64(pi_val);
+  print_string("\n");
 
   e_val: f64 = E;
   print_string("  E = ");
-  print(e_val);
-  println();
+  print_f64(e_val);
+  print_string("\n");
 
   sin_pi: f64 = sin(PI);
   print_string("  sin(PI) = ");
-  print(sin_pi);
-  println();
-
-  println();
+  print_f64(sin_pi);
+  print_string("\n\n");
 
   // --- Section: Host Capability (env) ---
-  print_string("=== Host Capability: env ===");
-  println();
+  print_string("=== Host Capability: env ===\n");
 
   env.log("  [env.log] Hello from the host!");
 
   hname: ptr = env.get_name();
-  print_string("  env.get_name() = ");
-  print_string(hname);
-  println();
+  print_string(f"  env.get_name() = {hname}\n");
 
   hver: i64 = env.get_version();
-  print_string("  env.get_version() = ");
-  print(hver);
-  println();
+  print_string(f"  env.get_version() = {hver}\n");
 
   hts: i64 = env.timestamp();
-  print_string("  env.timestamp() = ");
-  print(hts);
-  println();
+  print_string(f"  env.timestamp() = {hts}\n");
 
   rnd: i64 = env.random(1, 100);
-  print_string("  env.random(1, 100) = ");
-  print(rnd);
-  println();
-  println();
+  print_string(f"  env.random(1, 100) = {rnd}\n");
+  print_string("\n");
 
   // --- Section: SoA (Struct of Arrays) ---
-  print_string("=== SoA (Struct of Arrays) ===");
-  println();
+  print_string("=== SoA (Struct of Arrays) ===\n");
 
   struct Datum { id: i64, val: i64 }
   datums := soa Datum[10];
@@ -469,30 +364,21 @@ fn main() -> i64 {
   datums[1].id = 2;
   datums[1].val = 200;
 
-  print_string("  datums[0].id = ");
-  print(datums[0].id);
-  println();
-  print_string("  datums[1].val = ");
-  print(datums[1].val);
-  println();
-  println();
+  print_string(f"  datums[0].id = {datums[0].id}\n");
+  print_string(f"  datums[1].val = {datums[1].val}\n");
+  print_string("\n");
 
   // --- Section: Closures ---
-  print_string("=== Closures ===");
-  println();
+  print_string("=== Closures ===\n");
 
   // Non-capturing lambda
   double := fn(x: i64) -> i64 { x * 2 };
-  print_string("  double(21) = ");
-  print(double(21));
-  println();
+  print_string(f"  double(21) = {double(21)}\n");
 
   // Closure capturing a variable (value capture)
   offset: i64 = 100;
   add_offset := fn(x: i64) -> i64 { x + offset };
-  print_string("  add_offset(42) = ");
-  print(add_offset(42));
-  println();
+  print_string(f"  add_offset(42) = {add_offset(42)}\n");
 
   // make_adder pattern
   fn make_adder(n: i64) -> fn(i64) -> i64 {
@@ -500,27 +386,19 @@ fn main() -> i64 {
   }
   add5 := make_adder(5);
   add10 := make_adder(10);
-  print_string("  add5(3) = ");
-  print(add5(3));
-  println();
-  print_string("  add10(3) = ");
-  print(add10(3));
-  println();
+  print_string(f"  add5(3) = {add5(3)}\n");
+  print_string(f"  add10(3) = {add10(3)}\n");
 
   // Higher-order: passing closure as argument
   fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
     return f(x);
   }
-  print_string("  apply(double, 7) = ");
-  print(apply(double, 7));
-  println();
-  println();
+  print_string(f"  apply(double, 7) = {apply(double, 7)}\n");
+  print_string("\n");
 
   // --- Summary ---
-  print_string("=== Showcase Complete ===");
-  println();
-  print_string("All features demonstrated successfully!");
-  println();
+  print_string("=== Showcase Complete ===\n");
+  print_string("All features demonstrated successfully!\n");
 
   return 0;
 }
