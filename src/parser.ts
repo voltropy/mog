@@ -1,7 +1,7 @@
 import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, ArrayType, MapType, PointerType, VoidType, CustomType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
 // Decode escape sequences in string literals
@@ -89,6 +89,9 @@ class Parser {
     }
     if (this.matchType("soa")) {
       return this.soaDeclaration()
+    }
+    if (this.matchType("type_kw")) {
+      return this.typeAliasDeclaration()
     }
     if (this.matchType("return")) {
       return this.returnStatement()
@@ -214,12 +217,15 @@ if (!this.checkType("RPAREN")) {
       let fieldType: any
       if (this.checkType("LBRACKET")) {
         fieldType = this.parseArrayTypeAnnotation()
-      } else {
+      } else if (this.checkType("TYPE")) {
         const typeName = this.consume("TYPE", "Expected type after :").value
+        fieldType = this.parseType(typeName)
+      } else {
+        const typeName = this.consume("IDENTIFIER", "Expected type after :").value
         fieldType = this.parseType(typeName)
       }
       fields.push({ name: fieldName, fieldType })
-      this.matchType("COMMA")
+      this.matchType("COMMA") || this.matchType("SEMICOLON")
     }
 
     this.consume("RBRACE", "Expected } after struct fields")
@@ -553,6 +559,76 @@ if (!this.checkType("RPAREN")) {
     } as any
   }
 
+  private typeAliasDeclaration(): StatementNode {
+    const startPos = this.lastPosition()
+    const name = this.consume("IDENTIFIER", "Expected type alias name").value
+    this.consume("EQUAL", "Expected = after type alias name")
+
+    // Parse the aliased type
+    let typeName: string
+    if (this.checkType("LBRACE")) {
+      // Map type: type Config = {string: string};
+      this.advance() // consume {
+      let keyTypeName: string
+      if (this.checkType("TYPE")) {
+        keyTypeName = this.consume("TYPE", "Expected key type").value
+      } else {
+        keyTypeName = this.consume("IDENTIFIER", "Expected key type").value
+      }
+      this.consume("COLON", "Expected : after key type")
+      let valueTypeName: string
+      if (this.checkType("TYPE")) {
+        valueTypeName = this.consume("TYPE", "Expected value type").value
+      } else {
+        valueTypeName = this.consume("IDENTIFIER", "Expected value type").value
+      }
+      this.consume("RBRACE", "Expected } after map type")
+      this.matchType("SEMICOLON")
+
+      const keyType = this.parseType(keyTypeName)
+      const valueType = this.parseType(valueTypeName)
+      const mapType = new MapType(keyType, valueType)
+
+      return {
+        type: "TypeAliasDeclaration",
+        name,
+        aliasedType: new TypeAliasType(name, mapType),
+        position: {
+          start: startPos,
+          end: this.lastPosition(),
+        },
+      } as any
+    }
+
+    if (this.checkType("LBRACKET")) {
+      typeName = this.parseArrayTypeAnnotation()
+    } else if (this.checkType("TYPE")) {
+      typeName = this.consume("TYPE", "Expected type").value
+    } else {
+      typeName = this.consume("IDENTIFIER", "Expected type").value
+    }
+
+    while (this.matchType("LBRACKET")) {
+      typeName += "["
+      this.consume("RBRACKET", "Expected ] after array bracket")
+      typeName += "]"
+    }
+
+    this.matchType("SEMICOLON")
+
+    const aliasedType = this.parseType(typeName)
+
+    return {
+      type: "TypeAliasDeclaration",
+      name,
+      aliasedType: new TypeAliasType(name, aliasedType),
+      position: {
+        start: startPos,
+        end: this.lastPosition(),
+      },
+    } as any
+  }
+
   private variableDeclaration(): StatementNode {
     const name = this.consume("IDENTIFIER", "Expected variable name").value
     this.consume("COLON", "Expected : after variable name")
@@ -621,7 +697,12 @@ if (!this.checkType("RPAREN")) {
   private assignment(): ExpressionNode {
     const expr = this.conditional()
 
-    if (this.matchType("ASSIGN")) {
+    // Support both := and = for reassignment
+    const isAssign = this.matchType("ASSIGN")
+    const isEqualAssign = !isAssign && this.checkType("EQUAL") && this.peek().value === "="
+    if (isEqualAssign) this.advance()
+
+    if (isAssign || isEqualAssign) {
       const value = this.assignment()
       if (expr.type === "Identifier") {
         return {
@@ -783,7 +864,8 @@ if (!this.checkType("RPAREN")) {
   private equality(): ExpressionNode {
     let expr = this.comparison()
 
-    while (this.matchType("EQUAL") || this.matchType("NOT_EQUAL")) {
+    while ((this.checkType("EQUAL") && this.peek().value === "==") || this.checkType("NOT_EQUAL")) {
+      this.advance()
       const operator = this.previous()
       const right = this.comparison()
       expr = {
@@ -918,11 +1000,35 @@ private comparison(): ExpressionNode {
       }
     }
 
-    return this.primary()
+    let expr = this.primary()
+
+    // Handle `expr as Type` postfix cast syntax
+    while (this.matchType("as")) {
+      let typeName: string
+      if (this.checkType("TYPE")) {
+        typeName = this.consume("TYPE", "Expected type name after as").value
+      } else {
+        typeName = this.consume("IDENTIFIER", "Expected type name after as").value
+      }
+      while (this.matchType("LBRACKET")) {
+        typeName += "["
+        this.consume("RBRACKET", "Expected ] after array bracket")
+        typeName += "]"
+      }
+      const targetType = this.parseType(typeName)
+      expr = {
+        type: "CastExpression",
+        targetType,
+        value: expr,
+        position: this.combinePositions(expr, expr),
+      }
+    }
+
+    return expr
   }
 
   private primary(): ExpressionNode {
-    if (this.matchType("FALSE")) {
+    if (this.matchType("false")) {
       const token = this.previous()
       return {
         type: "BooleanLiteral",
@@ -931,7 +1037,7 @@ private comparison(): ExpressionNode {
       }
     }
 
-    if (this.matchType("TRUE")) {
+    if (this.matchType("true")) {
       const token = this.previous()
       return {
         type: "BooleanLiteral",
@@ -1205,22 +1311,32 @@ private comparison(): ExpressionNode {
     }
   }
 
+  private isPrimitiveTypeName(name: string): boolean {
+    return name === "int" || name === "float" || name === "bool" || name === "bf16" ||
+           name === "ptr" || name === "string" ||
+           /^(?:i|u|f)(?:8|16|32|64|128|256)$/.test(name)
+  }
+
+  private parsePrimitiveType(name: string): any {
+    if (name === "int") return new IntegerType("i64")
+    if (name === "float") return new FloatType("f64")
+    if (name === "bool") return new BoolType()
+    if (name === "bf16") return new FloatType("bf16")
+    if (name.startsWith("i")) return new IntegerType(name as any)
+    if (name.startsWith("u")) return new UnsignedType(name as any)
+    if (name.startsWith("f")) return new FloatType(name as any)
+    if (name === "ptr") return new PointerType()
+    return null
+  }
+
   private parseType(typeName: string): any {
     // Handle fixed-size array types like [f32; 3], [i64; 10], or [Point; 100]
     const fixedSizeMatch = typeName.match(/^\[(\w+);\s*(\d+)\]$/);
     if (fixedSizeMatch) {
       const innerType = fixedSizeMatch[1];
       const size = parseInt(fixedSizeMatch[2], 10);
-      // Check if it's a primitive type
-      if (innerType.startsWith("i") || innerType.startsWith("u") || innerType.startsWith("f")) {
-        let elementType: Type;
-        if (innerType.startsWith("i")) {
-          elementType = new IntegerType(innerType as any);
-        } else if (innerType.startsWith("u")) {
-          elementType = new UnsignedType(innerType as any);
-        } else {
-          elementType = new FloatType(innerType as any);
-        }
+      const elementType = this.parsePrimitiveType(innerType);
+      if (elementType) {
         return new ArrayType(elementType, [size]);
       } else {
         // AoS type with struct: [Point; 100]
@@ -1233,16 +1349,8 @@ private comparison(): ExpressionNode {
       const match = typeName.match(/^\[(\w+)\]$/);
       if (match) {
         const innerType = match[1];
-        // Check if it's a primitive type
-        if (innerType.startsWith("i") || innerType.startsWith("u") || innerType.startsWith("f")) {
-          let elementType: Type;
-          if (innerType.startsWith("i")) {
-            elementType = new IntegerType(innerType as any);
-          } else if (innerType.startsWith("u")) {
-            elementType = new UnsignedType(innerType as any);
-          } else {
-            elementType = new FloatType(innerType as any);
-          }
+        const elementType = this.parsePrimitiveType(innerType);
+        if (elementType) {
           return new ArrayType(elementType, []);
         } else {
           // AoS type with struct: [Point]
@@ -1256,18 +1364,11 @@ private comparison(): ExpressionNode {
       const baseName = bracketMatch[1];
       const arraySuffix = typeName.slice(baseName.length);
       
-      let elementType: Type;
-      if (baseName.startsWith("i")) {
-        elementType = new IntegerType(baseName as any);
-      } else if (baseName.startsWith("u")) {
-        elementType = new UnsignedType(baseName as any);
-      } else if (baseName.startsWith("f")) {
-        elementType = new FloatType(baseName as any);
-      } else {
+      const elementType = this.parsePrimitiveType(baseName);
+      if (!elementType) {
         return new VoidType();
       }
       
-      const dimensions = [];
       let currentType = elementType;
       const bracketCount = (arraySuffix.match(/\[/g) || []).length;
       for (let i = 0; i < bracketCount; i++) {
@@ -1276,18 +1377,9 @@ private comparison(): ExpressionNode {
       return currentType;
     }
     
-    if (typeName.startsWith("i")) {
-      return new IntegerType(typeName as any)
-    }
-    if (typeName.startsWith("u")) {
-      return new UnsignedType(typeName as any)
-    }
-    if (typeName.startsWith("f")) {
-      return new FloatType(typeName as any)
-    }
-    if (typeName === "ptr") {
-      return new PointerType()
-    }
+    const primitive = this.parsePrimitiveType(typeName);
+    if (primitive) return primitive;
+
     // Handle custom struct types
     return new CustomType(typeName)
   }

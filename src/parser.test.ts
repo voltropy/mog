@@ -257,17 +257,20 @@ describe("parser map literals", () => {
   test("empty map", () => {
     const ast = parse("{ m = {}; }")
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.right.type).toBe("MapLiteral")
-    expect(stmt.expression.right.entries.length).toBe(0)
+    // = is now assignment, so m = {} is AssignmentExpression
+    expect(stmt.expression.type).toBe("AssignmentExpression")
+    expect(stmt.expression.value.type).toBe("MapLiteral")
+    expect(stmt.expression.value.entries.length).toBe(0)
   })
 
   test("map with entries", () => {
     const ast = parse("{ m = { a: 1, b: 2 }; }")
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.right.type).toBe("MapLiteral")
-    expect(stmt.expression.right.entries.length).toBe(2)
-    expect(stmt.expression.right.entries[0].key).toBe("a")
-    expect(stmt.expression.right.entries[1].key).toBe("b")
+    expect(stmt.expression.type).toBe("AssignmentExpression")
+    expect(stmt.expression.value.type).toBe("MapLiteral")
+    expect(stmt.expression.value.entries.length).toBe(2)
+    expect(stmt.expression.value.entries[0].key).toBe("a")
+    expect(stmt.expression.value.entries[1].key).toBe("b")
   })
 })
 
@@ -333,17 +336,20 @@ describe("parser Map operations", () => {
   test("empty Map literal", () => {
     const ast = parse("{ m = {}; }")
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.right.type).toBe("MapLiteral")
-    expect(stmt.expression.right.entries.length).toBe(0)
+    // = is now assignment, so m = {} is AssignmentExpression
+    expect(stmt.expression.type).toBe("AssignmentExpression")
+    expect(stmt.expression.value.type).toBe("MapLiteral")
+    expect(stmt.expression.value.entries.length).toBe(0)
   })
 
   test("Map literal with entries", () => {
     const ast = parse('{ m = { host: "localhost", port: 8080 }; }')
     const stmt = ast.statements[0] as any
-    expect(stmt.expression.right.type).toBe("MapLiteral")
-    expect(stmt.expression.right.entries.length).toBe(2)
-    expect(stmt.expression.right.entries[0].key).toBe("host")
-    expect(stmt.expression.right.entries[1].key).toBe("port")
+    expect(stmt.expression.type).toBe("AssignmentExpression")
+    expect(stmt.expression.value.type).toBe("MapLiteral")
+    expect(stmt.expression.value.entries.length).toBe(2)
+    expect(stmt.expression.value.entries[0].key).toBe("host")
+    expect(stmt.expression.value.entries[1].key).toBe("port")
   })
 
   test("Map dot access", () => {

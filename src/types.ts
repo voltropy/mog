@@ -2,7 +2,7 @@ type IntegerKind = "i8" | "i16" | "i32" | "i64" | "i128" | "i256"
 
 type UnsignedKind = "u8" | "u16" | "u32" | "u64" | "u128" | "u256"
 
-type FloatKind = "f8" | "f16" | "f32" | "f64" | "f128" | "f256"
+type FloatKind = "f8" | "f16" | "f32" | "f64" | "f128" | "f256" | "bf16"
 
 type PrimitiveKind = IntegerKind | UnsignedKind | FloatKind
 
@@ -73,11 +73,39 @@ class FloatType {
   }
 
   get bits(): number {
+    if (this.kind === "bf16") return 16
     return parseInt(this.kind.slice(1))
   }
 
   toString(): string {
     return this.kind
+  }
+}
+
+class BoolType {
+  type = "BoolType"
+
+  get bits(): number {
+    return 1
+  }
+
+  toString(): string {
+    return "bool"
+  }
+}
+
+class TypeAliasType {
+  name: string
+  aliasedType: Type
+  type = "TypeAliasType"
+
+  constructor(name: string, aliasedType: Type) {
+    this.name = name
+    this.aliasedType = aliasedType
+  }
+
+  toString(): string {
+    return this.name
   }
 }
 
@@ -210,7 +238,7 @@ class CustomType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType
+type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -232,6 +260,9 @@ const f32 = new FloatType("f32")
 const f64 = new FloatType("f64")
 const f128 = new FloatType("f128")
 const f256 = new FloatType("f256")
+const bf16 = new FloatType("bf16")
+
+const boolType = new BoolType()
 
 const voidType = new VoidType()
 
@@ -289,6 +320,19 @@ function isSOAType(type: Type): type is SOAType {
   return type instanceof SOAType
 }
 
+function isBoolType(type: Type): type is BoolType {
+  return type instanceof BoolType
+}
+
+function isTypeAliasType(type: Type): type is TypeAliasType {
+  return type instanceof TypeAliasType
+}
+
+function resolveTypeAlias(type: Type): Type {
+  if (type instanceof TypeAliasType) return type.aliasedType
+  return type
+}
+
 function isNumericType(type: Type): boolean {
   return isIntegerType(type) || isUnsignedType(type) || isFloatType(type)
 }
@@ -298,6 +342,12 @@ function isSigned(type: IntegerType | UnsignedType): boolean {
 }
 
 function sameType(a: Type, b: Type): boolean {
+  // Resolve type aliases before comparison
+  if (a instanceof TypeAliasType) a = a.aliasedType
+  if (b instanceof TypeAliasType) b = b.aliasedType
+
+  if (a instanceof BoolType && b instanceof BoolType) return true
+
   if (a instanceof FloatType && b instanceof FloatType) {
     return a.kind === b.kind
   }
@@ -343,6 +393,8 @@ function sameType(a: Type, b: Type): boolean {
 }
 
 function compatibleTypes(from: Type, to: Type): boolean {
+  if (from instanceof TypeAliasType) from = from.aliasedType
+  if (to instanceof TypeAliasType) to = to.aliasedType
   if (sameType(from, to)) return true
 
   if (from instanceof ArrayType && to instanceof ArrayType) {
@@ -382,11 +434,25 @@ function canCoerce(from: Type, to: Type): boolean {
 
 // For literal assignment: allows float widening, array literal/fill element coercion
 function canCoerceWithWidening(from: Type, to: Type): boolean {
+  if (from instanceof TypeAliasType) from = from.aliasedType
+  if (to instanceof TypeAliasType) to = to.aliasedType
   if (compatibleTypes(from, to)) return true
 
-  // Allow float widening (e.g., f32 -> f64)
+  // Allow float coercion for literals (both widening and narrowing)
+  // Literals are typed as f64 by default, but can be assigned to f32, bf16, etc.
   if (isFloatType(from) && isFloatType(to)) {
-    return from.bits <= to.bits
+    return true
+  }
+
+  // Allow integer coercion for literals (both widening and narrowing)
+  // Literals are typed as i64/f64 by default, but can be assigned to smaller types
+  if (isIntegerType(from) && isIntegerType(to)) {
+    return true
+  }
+
+  // Allow unsigned integer coercion for literals
+  if (isUnsignedType(from) && isUnsignedType(to)) {
+    return true
   }
 
   // Allow array literal coercion: [i64[N]] -> [u8] for byte string literals
@@ -552,11 +618,15 @@ export {
   f64,
   f128,
   f256,
+  bf16,
+  boolType,
   voidType,
   stringType,
   IntegerType,
   UnsignedType,
   FloatType,
+  BoolType,
+  TypeAliasType,
   ArrayType,
   MapType,
   TableType,
@@ -574,6 +644,9 @@ export {
   isIntegerType,
   isUnsignedType,
   isFloatType,
+  isBoolType,
+  isTypeAliasType,
+  resolveTypeAlias,
   isArrayType,
   isMapType,
   isTableType,

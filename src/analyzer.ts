@@ -3,6 +3,9 @@ import {
   isIntegerType,
   isUnsignedType,
   isFloatType,
+  isBoolType,
+  isTypeAliasType,
+  resolveTypeAlias,
   isArrayType,
   isMapType,
   isTableType,
@@ -16,12 +19,15 @@ import {
   IntegerType,
   UnsignedType,
   FloatType,
+  BoolType,
+  TypeAliasType,
   ArrayType,
   MapType,
   PointerType,
   VoidType,
   StructType,
   SOAType,
+  boolType,
 } from "./types.js"
 
 interface Position {
@@ -659,6 +665,9 @@ class SemanticAnalyzer {
       case "OptionalDeclaration":
         this.visitOptionalDeclaration(node as any)
         break
+      case "TypeAliasDeclaration":
+        this.visitTypeAliasDeclaration(node as any)
+        break
     }
   }
 
@@ -668,6 +677,11 @@ class SemanticAnalyzer {
       // Register capability name in symbol table so it can be used as an object
       this.symbolTable.declare(cap, "variable", new PointerType())
     }
+  }
+
+  private visitTypeAliasDeclaration(node: any): void {
+    const aliasType = node.aliasedType as TypeAliasType
+    this.symbolTable.declare(node.name, "type", aliasType.aliasedType)
   }
 
   private visitOptionalDeclaration(node: any): void {
@@ -1238,6 +1252,9 @@ class SemanticAnalyzer {
       case "AssignmentExpression":
         result = this.visitAssignmentExpression(node as AssignmentExpressionNode)
         break
+      case "BooleanLiteral":
+        result = boolType
+        break
       default:
         const unknown = node as { type: string; position: { start: Position; end: Position } }
         this.emitError(`Unknown expression type: ${unknown.type}`, unknown.position)
@@ -1690,7 +1707,7 @@ class SemanticAnalyzer {
               switch (funcDecl.returnType) {
                 case "int": return new IntegerType("i64")
                 case "float": return new FloatType("f64")
-                case "bool": return new IntegerType("i32")
+                case "bool": return boolType
                 case "string": return new PointerType()
                 default:
                   if (funcDecl.returnType.startsWith("Result<")) {

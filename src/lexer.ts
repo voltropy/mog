@@ -12,11 +12,15 @@ type TokenType =
   | "break"
   | "continue"
   | "cast"
+  | "as"
   | "not"
   | "struct"
   | "soa"
   | "requires"
   | "optional_kw"
+  | "type_kw"
+  | "true"
+  | "false"
   | "MODULO"
   | "BITWISE_AND"
   | "BITWISE_OR"
@@ -129,12 +133,16 @@ class Lexer {
     const breakRegex = /break\b/y
     const continueRegex = /continue\b/y
     const castRegex = /cast\b/y
+    const asRegex = /as\b/y
     const notRegex = /not\b/y
     const structRegex = /struct\b/y
     const soaRegex = /soa\b/y
     const requiresRegex = /requires\b/y
     const optionalKwRegex = /optional\b/y
     const llmRegex = /LLM\b/y
+    const typeKwRegex = /type\b/y
+    const trueRegex = /true\b/y
+    const falseRegex = /false\b/y
     const notEqualRegex = /!=/y
     const equalEqualRegex = /==/y
     const assignRegex = /:=/y
@@ -170,7 +178,7 @@ class Lexer {
     const doubleStringRegex = /"(?:[^"\\]|\\.)*"/y
     const singleStringRegex = /'(?:[^'\\]|\\.)*'/y
     const numberRegex = /\b\d+(?:\.\d*)?(?:[eE][+-]?\d+)?\b/y
-    const typeRegex = /\b(?:(?:i|u|f)(?:8|16|32|64|128|256)((?:\[\])*)|ptr|string)\b/y
+    const typeRegex = /\b(?:(?:i|u|f)(?:8|16|32|64|128|256)((?:\[\])*)|bf16|int|float|bool|ptr|string)\b/y
     const identifierRegex = /\b[a-zA-Z_][a-zA-Z0-9_]*\b/y
 
     while (this.pos < this.input.length) {
@@ -334,6 +342,18 @@ class Lexer {
         continue
       }
 
+      value = this.match(asRegex)
+      if (value) {
+        type = "as"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
       value = this.match(notRegex)
       if (value) {
         type = "not"
@@ -397,6 +417,42 @@ class Lexer {
       value = this.match(llmRegex)
       if (value) {
         type = "LLM"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(typeKwRegex)
+      if (value) {
+        type = "type_kw"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(trueRegex)
+      if (value) {
+        type = "true"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(falseRegex)
+      if (value) {
+        type = "false"
         this.advance(value.length)
         tokens.push({
           type,
