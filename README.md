@@ -2,6 +2,14 @@
 
 A small, statically-typed, embeddable language for ML workflows and LLM agent scripting. Compiles to native code via LLVM. Think of it as a statically-typed Lua with native tensor support and async I/O.
 
+## Why Mog
+
+Most ML work today lives in Python scripts that are difficult to sandbox, expensive to deploy, and opaque to the LLM agents that increasingly need to write and execute code. Mog exists to give those agents — and the humans supervising them — a language that is small enough to fit entirely in a model's context window, safe enough to run untrusted code without fear, and expressive enough to do real ML work without dropping into a general-purpose language.
+
+Mog is not a standalone systems language. It is always embedded inside a host application. The host decides what the script can do: read a file, call an API, run inference on a model. The script declares what it needs (`requires http, model`) and the host either grants those capabilities or refuses to run it. There is no way for a Mog script to escape its sandbox, access the filesystem behind the host's back, or crash the process. This makes it suitable for running agent-generated code in production, where the alternative is either no code execution at all or an elaborate container-based sandbox around a general-purpose language.
+
+The language compiles to native code through LLVM, so tight numerical loops run at C speed rather than interpreter speed. Tensor operations are first-class — not a library bolted on top, but part of the type system, with hardware-relevant dtypes like `f16` and `bf16`, shape checking, and autograd. The goal is that an ML training loop written in Mog reads as naturally as one written in PyTorch, but compiles to a sandboxed native binary that a host application can load and run with controlled resource limits.
+
 ## Use Cases
 
 - LLM agent tool-use scripts
@@ -9,14 +17,16 @@ A small, statically-typed, embeddable language for ML workflows and LLM agent sc
 - Plugin/extension scripting for host applications
 - Short automation scripts
 
+Mog is explicitly **not** for systems programming, standalone applications, or replacing general-purpose languages. It has no raw pointers, no manual memory management, no threads, no POSIX syscalls, no inheritance, no macros, and no generics beyond tensor dtype parameterization. Each of these omissions is deliberate — they keep the surface area small and the security model tractable.
+
 ## Design Philosophy
 
-1. **Small surface area** — entire language fits in an LLM's context window
-2. **Predictable semantics** — no implicit coercion, no operator precedence puzzles, no hidden control flow
-3. **Familiar syntax** — curly braces, `fn`, `->`, `:=`; blend of Rust/Go/TypeScript
-4. **Safe by default** — GC, bounds-checked, no null, no raw pointers; cannot crash host
-5. **Host provides I/O** — no built-in file/network/system access; capabilities explicitly granted by host
-6. **ML as first-class concern** — tensor types with hardware-relevant dtypes, shape checking
+1. **Small surface area** — the entire language should fit in an LLM's context window. Every feature must justify its existence. When in doubt, leave it out.
+2. **Predictable semantics** — no implicit coercion surprises, no operator precedence puzzles, no hidden control flow. Code reads top-to-bottom, left-to-right.
+3. **Familiar syntax** — curly braces, `fn`, `->`, `:=`. A blend of Rust, Go, and TypeScript that LLMs already generate fluently. No novel syntax without strong justification.
+4. **Safe by default** — garbage collected, bounds-checked, no null, no raw pointers. The language cannot crash the host or escape its sandbox.
+5. **Host provides I/O** — the language has no built-in file, network, or system access. All side effects go through capabilities explicitly granted by the embedding host.
+6. **ML as first-class concern** — tensor types with hardware-relevant dtypes (f16, bf16, f32, f64), shape checking, and operations that map to accelerator hardware.
 
 ## Installation
 
