@@ -78,6 +78,8 @@ type TokenType =
   | "QUESTION_MARK"
   | "UNDERSCORE"
   | "tensor"
+  | "async"
+  | "await"
   | "COMMENT"
 
 interface Position {
@@ -163,6 +165,8 @@ class Lexer {
     const noneRegex = /none\b/y
     const isRegex = /is\b/y
     const tensorRegex = /tensor\b/y
+    const asyncRegex = /async\b/y
+    const awaitRegex = /await\b/y
     const trueRegex = /true\b/y
     const falseRegex = /false\b/y
     const questionMarkRegex = /\?/y
@@ -597,6 +601,30 @@ class Lexer {
       value = this.match(tensorRegex)
       if (value) {
         type = "tensor"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(asyncRegex)
+      if (value) {
+        type = "async"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(awaitRegex)
+      if (value) {
+        type = "await"
         this.advance(value.length)
         tokens.push({
           type,

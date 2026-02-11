@@ -291,6 +291,19 @@ class OptionalType {
   }
 }
 
+class FutureType {
+  innerType: Type
+  type = "FutureType"
+
+  constructor(innerType: Type) {
+    this.innerType = innerType
+  }
+
+  toString(): string {
+    return `Future<${this.innerType}>`
+  }
+}
+
 class FunctionType {
   paramTypes: Type[]
   returnType: Type
@@ -307,7 +320,7 @@ class FunctionType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType | TensorType | ResultType | OptionalType
+type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType | TensorType | ResultType | OptionalType | FutureType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -413,6 +426,10 @@ function isOptionalType(type: Type): type is OptionalType {
   return type instanceof OptionalType
 }
 
+function isFutureType(type: Type): type is FutureType {
+  return type instanceof FutureType
+}
+
 function resolveTypeAlias(type: Type): Type {
   if (type instanceof TypeAliasType) return type.aliasedType
   return type
@@ -492,6 +509,9 @@ function sameType(a: Type, b: Type): boolean {
     return sameType(a.innerType, b.innerType)
   }
   if (a instanceof OptionalType && b instanceof OptionalType) {
+    return sameType(a.innerType, b.innerType)
+  }
+  if (a instanceof FutureType && b instanceof FutureType) {
     return sameType(a.innerType, b.innerType)
   }
   return false
@@ -750,6 +770,7 @@ export {
   TensorType,
   ResultType,
   OptionalType,
+  FutureType,
   TypeVar,
   TypeInferenceContext,
   array,
@@ -764,6 +785,7 @@ export {
   isTensorType,
   isResultType,
   isOptionalType,
+  isFutureType,
   resolveTypeAlias,
   isArrayType,
   isMapType,

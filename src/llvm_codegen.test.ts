@@ -20,7 +20,6 @@ describe("LLVM IR Generator", () => {
         statements: [],
       }
       const ir = generateLLVMIR(ast)
-      expect(ir).toContain("declare ptr @llm_call")
       expect(ir).toContain("declare void @gc_init")
       expect(ir).toContain("declare ptr @array_alloc")
       expect(ir).toContain("declare ptr @map_new")

@@ -1,7 +1,7 @@
 import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType, FunctionType, TensorType, ResultType, OptionalType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType, FunctionType, TensorType, ResultType, OptionalType, FutureType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
 // Decode escape sequences in string literals
@@ -81,6 +81,12 @@ class Parser {
 
     if (this.matchType("LBRACE")) {
       return this.blockStatement()
+    }
+    // async fn name(...) -> T { ... }
+    if (this.checkType("async") && this.peekNext()?.type === "fn") {
+      this.advance() // consume 'async'
+      this.advance() // consume 'fn'
+      return this.asyncFunctionDeclaration()
     }
     if (this.checkType("fn") && this.peekNext()?.type === "IDENTIFIER") {
       this.advance() // consume 'fn'
@@ -202,6 +208,12 @@ class Parser {
       this.consume("GREATER", "Expected > after Result<T>")
       return new ResultType(innerType)
     }
+    // Check for Future<T> type
+    if (returnTypeName === "Future" && this.matchType("LESS")) {
+      const innerType = this.parseReturnType()
+      this.consume("GREATER", "Expected > after Future<T>")
+      return new FutureType(innerType)
+    }
     while (this.matchType("LBRACKET")) {
       returnTypeName += "["
       this.consume("RBRACKET", "Expected ] after array bracket")
@@ -316,6 +328,35 @@ class Parser {
         end: this.lastPosition(),
       },
     }
+  }
+
+  private asyncFunctionDeclaration(): StatementNode {
+    const name = this.consume("IDENTIFIER", "Expected function name").value
+    this.consume("LPAREN", "Expected ( after function name")
+
+    const params = this.parseFunctionParams()
+    this.consume("RPAREN", "Expected ) after parameters")
+
+    // Return type is optional - if no ->, default to void
+    let returnType: any = new VoidType()
+    if (this.matchType("ARROW")) {
+      returnType = this.parseReturnType()
+    }
+
+    const body = this.parseFunctionBody()
+
+    return {
+      type: "AsyncFunctionDeclaration",
+      name,
+      params,
+      returnType,
+      body,
+      isAsync: true,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    } as any
   }
 
   private structDeclaration(): StatementNode {
@@ -451,9 +492,11 @@ class Parser {
   }
 
   private whileStatement(): StatementNode {
-    this.consume("LPAREN", "Expected ( after while")
+    const hasParens = this.matchType("LPAREN")
     const test = this.expression()
-    this.consume("RPAREN", "Expected ) after while condition")
+    if (hasParens) {
+      this.consume("RPAREN", "Expected ) after while condition")
+    }
 
     this.consume("LBRACE", "Expected { after while condition")
 
@@ -1253,6 +1296,17 @@ private comparison(): ExpressionNode {
   }
 
   private unary(): ExpressionNode {
+    // await expr
+    if (this.matchType("await")) {
+      const awaitToken = this.previous()
+      const argument = this.unary()
+      return {
+        type: "AwaitExpression",
+        argument,
+        position: this.combinePositions({ position: awaitToken.position }, argument),
+      } as any
+    }
+
     if (this.matchType("MINUS") || this.matchType("BANG") || this.matchType("not") || this.matchType("BITWISE_NOT")) {
       const operator = this.previous()
       const argument = this.unary()
@@ -1787,13 +1841,20 @@ private comparison(): ExpressionNode {
     const entries: { key: string; value: ExpressionNode }[] = []
 
     while (!this.checkType("RBRACE") && !this.isAtEnd()) {
-      const fieldName = this.consume("IDENTIFIER", "Expected field name in map literal")
+      let key: string
+      if (this.checkType("STRING")) {
+        key = this.advance().value
+      } else if (this.checkType("NUMBER")) {
+        key = this.advance().value
+      } else {
+        key = this.consume("IDENTIFIER", "Expected field name, string, or number in map literal").value
+      }
 
-      this.consume("COLON", "Expected : after field name")
+      this.consume("COLON", "Expected : after key")
 
       const value = this.expression()
 
-      entries.push({ key: fieldName.value, value })
+      entries.push({ key, value })
 
       this.matchType("COMMA")
     }

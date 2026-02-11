@@ -100,7 +100,6 @@ class LLVMIRGenerator {
 
     this.setupDeclarations(ir)
     this.generatePrintDeclarations(ir)
-    this.generateSocketDeclarations(ir)
     if (this.capabilities.size > 0) {
       this.generateCapabilityDeclarations(ir)
     }
@@ -288,6 +287,13 @@ class LLVMIRGenerator {
         if (stmt.body?.statements) {
           functions.push(...this.findFunctionDeclarationsRecursive(stmt.body.statements))
         }
+      } else if (stmt.type === "AsyncFunctionDeclaration") {
+        // TODO: For now, async functions are compiled as regular functions (synchronous fallback).
+        // Future implementation will use coroutine-based state machine transformation.
+        functions.push(stmt)
+        if (stmt.body?.statements) {
+          functions.push(...this.findFunctionDeclarationsRecursive(stmt.body.statements))
+        }
       } else if (stmt.type === "Block") {
         functions.push(...this.findFunctionDeclarationsRecursive(stmt.statements))
       }
@@ -296,10 +302,6 @@ class LLVMIRGenerator {
   }
 
   private setupDeclarations(ir: string[]): void {
-    ir.push("; Declare external LLM function")
-    ir.push("declare ptr @llm_call(ptr %prompt, ptr %options, ptr %return_type)")
-    ir.push("")
-
     ir.push("; Declare GC functions")
     ir.push("declare void @gc_init()")
     ir.push("declare ptr @gc_alloc(i64)")
@@ -337,6 +339,9 @@ class LLVMIRGenerator {
     ir.push("declare ptr @map_new(i64 %initial_capacity)")
     ir.push("declare i64 @map_get(ptr %map, ptr %key, i64 %key_len)")
     ir.push("declare void @map_set(ptr %map, ptr %key, i64 %key_len, i64 %value)")
+    ir.push("declare i64 @map_size(ptr %map)")
+    ir.push("declare ptr @map_key_at(ptr %map, i64 %index)")
+    ir.push("declare i64 @map_value_at(ptr %map, i64 %index)")
     ir.push("")
 
     ir.push("; Declare string functions")
@@ -506,6 +511,9 @@ class LLVMIRGenerator {
         break
       case "FunctionDeclaration":
         break
+      case "AsyncFunctionDeclaration":
+        // TODO: Async functions are hoisted and compiled separately (like regular functions)
+        break
       case "StructDeclaration": {
         // Register struct field definitions for codegen
         const fields = (statement as any).fields?.map((f: any) => ({
@@ -529,6 +537,9 @@ class LLVMIRGenerator {
         break
       case "ForInIndex":
         this.generateForInIndex(ir, statement)
+        break
+      case "ForInMap":
+        this.generateForInMap(ir, statement)
         break
       case "Break":
         this.generateBreak(ir)
@@ -652,8 +663,6 @@ class LLVMIRGenerator {
         return this.generateIndexExpression(ir, expr)
       case "SliceExpression":
         return this.generateSliceExpression(ir, expr)
-      case "LLMCall":
-        return this.generateLLMCall(ir, expr)
       case "MapExpression":
         return this.generateMapExpression(ir, expr)
       case "CastExpression":
@@ -682,6 +691,10 @@ class LLVMIRGenerator {
         return this.generateIsOkExpression(ir, expr)
       case "IsErrExpression":
         return this.generateIsErrExpression(ir, expr)
+      case "AwaitExpression":
+        // TODO: For now, await simply evaluates the inner expression synchronously.
+        // Future implementation will suspend execution and resume via state machine.
+        return this.generateExpression(ir, expr.argument)
       default:
         return ""
     }
@@ -1246,6 +1259,32 @@ class LLVMIRGenerator {
     let positionalArgs = expr.args || expr.arguments || []
     const namedArgs: { name: string; value: any }[] = expr.namedArgs || []
 
+    // Handle all([...]) and race([...]) builtins for structured concurrency
+    // TODO: For now, all() evaluates all elements sequentially and race() evaluates only the first.
+    // Future implementation will use coroutine-based concurrency with the host event loop.
+    if (expr.callee.type === "Identifier" && (expr.callee.name === "all" || expr.callee.name === "race")) {
+      const arg = positionalArgs[0]
+      if (arg && arg.type === "ArrayLiteral") {
+        const elements = arg.elements || []
+        if (expr.callee.name === "race") {
+          // race: return first element's result
+          if (elements.length > 0) {
+            return this.generateExpression(ir, elements[0])
+          }
+          return "0"
+        } else {
+          // all: evaluate all elements sequentially, return the array
+          // For synchronous fallback, build a simple array of results
+          const results: string[] = []
+          for (const elem of elements) {
+            results.push(this.generateExpression(ir, elem))
+          }
+          // Return last result (simplified - full implementation would build array)
+          return results.length > 0 ? results[results.length - 1] : "0"
+        }
+      }
+    }
+
     // If there are named args or default params, resolve the full argument list
     if (expr.callee.type === "Identifier") {
       const funcName = expr.callee.name
@@ -1290,13 +1329,6 @@ class LLVMIRGenerator {
       const inputFunctions = ["input_i64", "input_u64", "input_f64", "input_string"]
       if (inputFunctions.includes(funcName)) {
         return this.generateInputCall(ir, funcName)
-      }
-
-      // Handle socket syscall wrappers
-      const socketFunctions = ["sys_socket", "sys_connect", "sys_send", "sys_recv", 
-                               "sys_close", "sys_fcntl", "sys_inet_addr", "sys_errno"]
-      if (socketFunctions.includes(funcName)) {
-        return this.generateSocketCall(ir, funcName, args)
       }
 
       // Handle dot product function
@@ -1458,6 +1490,9 @@ class LLVMIRGenerator {
         map_new: { params: ["i64"], ret: "ptr" },
         map_get: { params: ["ptr", "ptr", "i64"], ret: "i64" },
         map_set: { params: ["ptr", "ptr", "i64", "i64"], ret: "void" },
+        map_size: { params: ["ptr"], ret: "i64" },
+        map_key_at: { params: ["ptr", "i64"], ret: "ptr" },
+        map_value_at: { params: ["ptr", "i64"], ret: "i64" },
         string_length: { params: ["ptr"], ret: "i64" },
         string_concat: { params: ["ptr", "ptr"], ret: "ptr" },
         string_upper: { params: ["ptr"], ret: "ptr" },
@@ -1799,67 +1834,6 @@ class LLVMIRGenerator {
         return reg
       default:
         return ""
-    }
-  }
-
-  private generateSocketCall(ir: string[], funcName: string, args: string[]): string {
-    // Helper to convert i64 to i32
-    const toI32 = (reg: string): string => {
-      const truncReg = `%${this.valueCounter++}`
-      ir.push(`  ${truncReg} = trunc i64 ${reg} to i32`)
-      return truncReg
-    }
-    
-    // Allocate resultReg AFTER all truncs to maintain sequential numbering
-    const allocateResult = (): string => `%${this.valueCounter++}`
-    
-    switch (funcName) {
-      case "sys_socket": {
-        const a0 = toI32(args[0])
-        const a1 = toI32(args[1])
-        const a2 = toI32(args[2])
-        const resultReg = allocateResult()
-        ir.push(`  ${resultReg} = call i64 @sys_socket(i32 ${a0}, i32 ${a1}, i32 ${a2})`)
-        return resultReg
-      }
-      case "sys_connect": {
-        const a1 = toI32(args[1])
-        const a2 = `%${this.valueCounter++}`
-        ir.push(`  ${a2} = trunc i64 ${args[2]} to i16`)
-        const resultReg = allocateResult()
-        ir.push(`  ${resultReg} = call i64 @sys_connect(i64 ${args[0]}, i32 ${a1}, i16 ${a2})`)
-        return resultReg
-      }
-      case "sys_send":
-      case "sys_recv":
-      case "sys_close":
-      case "sys_errno": {
-        const resultReg = allocateResult()
-        switch (funcName) {
-          case "sys_send":
-            ir.push(`  ${resultReg} = call i64 @sys_send(i64 ${args[0]}, ptr ${args[1]}, i64 ${args[2]}, i32 0)`)
-            break
-          case "sys_recv":
-            ir.push(`  ${resultReg} = call i64 @sys_recv(i64 ${args[0]}, ptr ${args[1]}, i64 ${args[2]}, i32 0)`)
-            break
-          case "sys_close":
-            ir.push(`  ${resultReg} = call i64 @sys_close(i64 ${args[0]})`)
-            break
-          case "sys_errno":
-            ir.push(`  ${resultReg} = call i64 @sys_errno()`)
-            break
-        }
-        return resultReg
-      }
-      case "sys_inet_addr": {
-        const inetResult = `%${this.valueCounter++}`
-        ir.push(`  ${inetResult} = call i32 @sys_inet_addr(ptr ${args[0]})`)
-        const zextReg = allocateResult()
-        ir.push(`  ${zextReg} = zext i32 ${inetResult} to i64`)
-        return zextReg
-      }
-      default:
-        return "0"
     }
   }
 
@@ -2455,7 +2429,7 @@ class LLVMIRGenerator {
     // Regular map literal
     const tableReg = `%${this.valueCounter++}`
     const capacity = entries.length > 0 ? entries.length * 2 : 4
-    ir.push(`  ${tableReg} = call ptr @table_new(i64 ${capacity})`)
+    ir.push(`  ${tableReg} = call ptr @map_new(i64 ${capacity})`)
 
     for (const entry of entries) {
       const key = entry.key || entry.name
@@ -2465,7 +2439,7 @@ class LLVMIRGenerator {
       const keyName = `@map_key_${this.stringCounter++}`
       const keyBytes = key.length + 1
       this.stringConstants.push(`${keyName} = private constant [${keyBytes} x i8] c"${key}\\00"`)
-      ir.push(`  call void @table_set(ptr ${tableReg}, ptr ${keyName}, i64 ${key.length}, i64 ${valueReg})`)
+      ir.push(`  call void @map_set(ptr ${tableReg}, ptr ${keyName}, i64 ${key.length}, i64 ${valueReg})`)
     }
 
     return tableReg
@@ -2983,17 +2957,6 @@ class LLVMIRGenerator {
     return reg
   }
 
-  private generateLLMCall(ir: string[], expr: any): string {
-    const resultReg = `%${this.valueCounter++}`
-
-    const prompt = this.generateStringLiteral(ir, expr.arguments.prompt)
-    const options = this.generateStringLiteral(ir, JSON.stringify(expr.arguments.options || {}))
-    const returnType = this.generateStringLiteral(ir, expr.returnType || "string")
-
-    ir.push(`  ${resultReg} = call ptr @llm_call(ptr ${prompt}, ptr ${options}, ptr ${returnType})`)
-    return resultReg
-  }
-
   private generateMapExpression(ir: string[], expr: any): string {
     const collection = this.generateExpression(ir, expr.collection)
     const func = expr.function
@@ -3401,6 +3364,83 @@ class LLVMIRGenerator {
     const nextIndex = `%${this.valueCounter++}`
     ir.push(`  ${nextIndex} = add i64 ${currentIndex}, 1`)
     ir.push(`  store i64 ${nextIndex}, ptr ${indexReg}`)
+    ir.push(`  br label %${startLabel}`)
+    ir.push("")
+
+    ir.push(`${endLabel}:`)
+
+    // Pop loop context
+    this.loopStack.pop()
+    this.blockTerminated = prevTerminated
+  }
+
+  private generateForInMap(ir: string[], statement: any): void {
+    const startLabel = this.nextLabel()
+    const bodyLabel = this.nextLabel()
+    const incLabel = this.nextLabel()
+    const endLabel = this.nextLabel()
+
+    // Push loop context for break/continue
+    this.loopStack.push({ breakLabel: endLabel, continueLabel: incLabel })
+    const prevTerminated = this.blockTerminated
+    this.blockTerminated = false
+
+    const { keyVariable, valueVariable, map: mapExpr, body } = statement
+
+    // Generate map pointer and get its size
+    const mapPtr = this.generateExpression(ir, mapExpr)
+    const keyReg = `%${keyVariable}`
+    const valueReg = `%${valueVariable}`
+    const idxReg = `%__map_idx_${this.valueCounter++}`
+
+    // Allocate loop index, key variable, and value variable
+    ir.push(`  ${idxReg} = alloca i64`)
+    ir.push(`  store i64 0, ptr ${idxReg}`)
+    ir.push(`  ${keyReg} = alloca i64`)
+    ir.push(`  ${valueReg} = alloca i64`)
+    this.variableTypes.set(keyVariable, { type: "PointerType" })
+    this.variableTypes.set(valueVariable, { type: "IntegerType", kind: "i64" })
+
+    // Get map size
+    const sizeReg = `%${this.valueCounter++}`
+    ir.push(`  ${sizeReg} = call i64 @map_size(ptr ${mapPtr})`)
+
+    ir.push(`  br label %${startLabel}`)
+    ir.push("")
+
+    // Header: check if index < size
+    ir.push(`${startLabel}:`)
+    const currentIdx = `%${this.valueCounter++}`
+    ir.push(`  ${currentIdx} = load i64, ptr ${idxReg}`)
+    const cond = `%${this.valueCounter++}`
+    ir.push(`  ${cond} = icmp slt i64 ${currentIdx}, ${sizeReg}`)
+    ir.push(`  br i1 ${cond}, label %${bodyLabel}, label %${endLabel}`)
+    ir.push("")
+
+    // Body: get key and value at current index
+    ir.push(`${bodyLabel}:`)
+    const keyPtr = `%${this.valueCounter++}`
+    ir.push(`  ${keyPtr} = call ptr @map_key_at(ptr ${mapPtr}, i64 ${currentIdx})`)
+    // Store key pointer as i64 (ptrtoint)
+    const keyAsInt = `%${this.valueCounter++}`
+    ir.push(`  ${keyAsInt} = ptrtoint ptr ${keyPtr} to i64`)
+    ir.push(`  store i64 ${keyAsInt}, ptr ${keyReg}`)
+
+    const valResult = `%${this.valueCounter++}`
+    ir.push(`  ${valResult} = call i64 @map_value_at(ptr ${mapPtr}, i64 ${currentIdx})`)
+    ir.push(`  store i64 ${valResult}, ptr ${valueReg}`)
+
+    this.generateStatement(ir, body)
+    if (!this.blockTerminated) {
+      ir.push(`  br label %${incLabel}`)
+      ir.push("")
+    }
+
+    // Increment
+    ir.push(`${incLabel}:`)
+    const nextIdx = `%${this.valueCounter++}`
+    ir.push(`  ${nextIdx} = add i64 ${currentIdx}, 1`)
+    ir.push(`  store i64 ${nextIdx}, ptr ${idxReg}`)
     ir.push(`  br label %${startLabel}`)
     ir.push("")
 
@@ -4166,27 +4206,6 @@ class LLVMIRGenerator {
     ir.push("")
   }
 
-  private generateSocketDeclarations(ir: string[]): void {
-    ir.push("")
-    ir.push("; Socket syscall declarations")
-    ir.push("declare i64 @sys_socket(i32, i32, i32)")
-    ir.push("declare i64 @sys_connect(i64, i32, i16)")
-    ir.push("declare i64 @sys_send(i64, ptr, i64, i32)")
-    ir.push("declare i64 @sys_recv(i64, ptr, i64, i32)")
-    ir.push("declare i64 @sys_close(i64)")
-    ir.push("declare i64 @sys_fcntl(i64, i32, i64)")
-    ir.push("declare i32 @sys_inet_addr(ptr)")
-    ir.push("declare i64 @sys_select(i64, ptr, ptr, ptr, ptr)")
-    ir.push("declare i64 @sys_errno()")
-    ir.push("")
-    ir.push("; Socket constants (external)")
-    ir.push("@AS_AF_INET = external global i32")
-    ir.push("@AS_SOCK_STREAM = external global i32")
-    ir.push("@AS_SOCK_DGRAM = external global i32")
-    ir.push("@AS_O_NONBLOCK = external global i32")
-    ir.push("")
-  }
-
   private nextLabel(): string {
     return `label${this.labelCounter++}`
   }
@@ -4237,6 +4256,15 @@ class LLVMIRGenerator {
       case "FunctionType":
         // Function types are function pointers
         return "ptr"
+      case "ResultType":
+        // Result types are represented as structs (tag + value)
+        return "i64"
+      case "OptionalType":
+        // Optional types are represented as structs (tag + value)
+        return "i64"
+      case "FutureType":
+        // TODO: Future types use synchronous fallback for now - represented as their inner type
+        return this.toLLVMType(type.innerType)
       case "VoidType":
         return "void"
  default:

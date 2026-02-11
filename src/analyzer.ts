@@ -36,6 +36,8 @@ import {
   TensorType,
   ResultType,
   OptionalType,
+  FutureType,
+  isFutureType,
   boolType,
 } from "./types.js"
 
@@ -68,6 +70,7 @@ type StatementNode =
   | ReturnNode
   | ConditionalNode
   | FunctionDeclarationNode
+  | AsyncFunctionDeclarationNode
   | WhileLoopNode
   | ForLoopNode
   | ForEachLoopNode
@@ -192,6 +195,20 @@ interface FunctionDeclarationNode extends ASTNode {
   body: BlockNode
 }
 
+interface AsyncFunctionDeclarationNode extends ASTNode {
+  type: "AsyncFunctionDeclaration"
+  name: string
+  params: FunctionParam[]
+  returnType: Type
+  body: BlockNode
+  isAsync: true
+}
+
+interface AwaitExpressionNode extends ASTNode {
+  type: "AwaitExpression"
+  argument: ExpressionNode
+}
+
 interface FunctionParam {
   name: string
   paramType: Type
@@ -231,6 +248,7 @@ type ExpressionNode =
   | IsNoneExpressionNode
   | IsOkExpressionNode
   | IsErrExpressionNode
+  | AwaitExpressionNode
 
 interface IdentifierNode extends ASTNode {
   type: "Identifier"
@@ -536,6 +554,8 @@ class SemanticAnalyzer {
   // Closure capture analysis
   private currentCapturedVars: Set<string> | null = null
   private lambdaScopeDepth: number = 0
+  // Async function tracking
+  private inAsyncFunction: boolean = false
 
   constructor() {
     this.symbolTable = new SymbolTable()
@@ -655,18 +675,13 @@ class SemanticAnalyzer {
     // Table/Runtime functions
     const ptrType = new PointerType()
 
-    // Buffer functions
-    const bufferFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
-      print_buffer: { params: [{ name: "buf", type: ptrType }, { name: "len", type: i64Type }], returnType: voidType },
-    }
-
-    for (const [name, func] of Object.entries(bufferFunctions)) {
-      this.symbolTable.declare(name, "function", func.returnType)
-    }
     const tableFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
       table_new: { params: [{ name: "capacity", type: i64Type }], returnType: ptrType },
       table_get: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }], returnType: i64Type },
       table_set: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }, { name: "value", type: i64Type }], returnType: voidType },
+      map_size: { params: [{ name: "map", type: ptrType }], returnType: i64Type },
+      map_key_at: { params: [{ name: "map", type: ptrType }, { name: "index", type: i64Type }], returnType: ptrType },
+      map_value_at: { params: [{ name: "map", type: ptrType }, { name: "index", type: i64Type }], returnType: i64Type },
       gc_alloc: { params: [{ name: "size", type: i64Type }], returnType: ptrType },
     }
 
@@ -692,16 +707,6 @@ class SemanticAnalyzer {
     }
 
     for (const [name, func] of Object.entries(stringFunctions)) {
-      this.symbolTable.declare(name, "function", func.returnType)
-    }
-
-    // GC benchmark functions
-    const gcBenchmarkFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
-      gc_reset_stats: { params: [], returnType: voidType },
-      gc_benchmark_stats: { params: [], returnType: voidType },
-    }
-
-    for (const [name, func] of Object.entries(gcBenchmarkFunctions)) {
       this.symbolTable.declare(name, "function", func.returnType)
     }
 
@@ -736,21 +741,6 @@ class SemanticAnalyzer {
     this.symbolTable.declare("PI", "variable", f64Type)
     this.symbolTable.declare("E", "variable", f64Type)
 
-    // Socket functions
-    const socketFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
-      sys_socket: { params: [{ name: "domain", type: i64Type }, { name: "type", type: i64Type }, { name: "protocol", type: i64Type }], returnType: i64Type },
-      sys_connect: { params: [{ name: "sockfd", type: i64Type }, { name: "addr", type: i64Type }, { name: "port", type: i64Type }], returnType: i64Type },
-      sys_send: { params: [{ name: "sockfd", type: i64Type }, { name: "buf", type: ptrType }, { name: "len", type: i64Type }], returnType: i64Type },
-      sys_recv: { params: [{ name: "sockfd", type: i64Type }, { name: "buf", type: ptrType }, { name: "len", type: i64Type }], returnType: i64Type },
-      sys_close: { params: [{ name: "fd", type: i64Type }], returnType: i64Type },
-      sys_fcntl: { params: [{ name: "fd", type: i64Type }, { name: "cmd", type: i64Type }, { name: "arg", type: i64Type }], returnType: i64Type },
-      sys_inet_addr: { params: [{ name: "cp", type: ptrType }], returnType: i64Type },
-      sys_errno: { params: [], returnType: i64Type },
-    }
-
-    for (const [name, func] of Object.entries(socketFunctions)) {
-      this.symbolTable.declare(name, "function", func.returnType)
-    }
   }
 
   private emitError(message: string, position: { start: Position; end: Position }): void {
@@ -841,6 +831,9 @@ class SemanticAnalyzer {
         break
       case "TryCatch":
         this.visitTryCatch(node as TryCatchNode)
+        break
+      case "AsyncFunctionDeclaration":
+        this.visitAsyncFunctionDeclaration(node as AsyncFunctionDeclarationNode)
         break
     }
   }
@@ -1170,8 +1163,26 @@ class SemanticAnalyzer {
   private visitForInIndex(node: any): void {
     const iterableType = this.visitExpression(node.iterable)
 
+    // If the iterable is a map, rewrite to ForInMap node for codegen
+    if (iterableType && isMapType(iterableType)) {
+      node.type = "ForInMap"
+      node.keyVariable = node.indexVariable
+      node.map = node.iterable
+
+      this.symbolTable.pushScope()
+      const keyType = (iterableType as MapType).keyType || new PointerType()
+      const valueType = (iterableType as MapType).valueType || new IntegerType("i64")
+      this.symbolTable.declare(node.keyVariable, "variable", keyType)
+      this.symbolTable.declare(node.valueVariable, "variable", valueType)
+      this.loopDepth++
+      this.visitBlock(node.body)
+      this.loopDepth--
+      this.symbolTable.popScope()
+      return
+    }
+
     if (iterableType && !isArrayType(iterableType)) {
-      this.emitError(`For-in-index requires array type, got ${iterableType.toString()}`, node.position)
+      this.emitError(`For-in-index requires array or map type, got ${iterableType.toString()}`, node.position)
     }
 
     this.symbolTable.pushScope()
@@ -1274,7 +1285,71 @@ class SemanticAnalyzer {
     this.currentFunction = prevFunction
   }
 
+  private visitAsyncFunctionDeclaration(node: AsyncFunctionDeclarationNode): void {
+    // Resolve CustomType return type to actual type
+    let returnType = node.returnType
+    if (returnType?.type === "CustomType") {
+      const resolved = this.symbolTable.lookup((returnType as any).name)
+      if (resolved?.declaredType) {
+        returnType = resolved.declaredType
+      }
+    }
 
+    // async fn wraps return type in Future<T>
+    const futureReturnType = new FutureType(returnType)
+
+    // Build FunctionType for the function (return type is Future<T>)
+    const paramTypes = node.params.map((p: any) => p.paramType)
+    const funcType = new FunctionType(paramTypes, futureReturnType)
+    this.symbolTable.declare(node.name, "function", funcType)
+
+    const prevFunction = this.currentFunction
+    const prevAsync = this.inAsyncFunction
+    this.currentFunction = node.name
+    this.inAsyncFunction = true
+
+    this.symbolTable.pushScope()
+
+    // Track if we've seen a default value (all subsequent params must also have defaults)
+    let seenDefault = false
+    for (const param of node.params) {
+      let paramType = param.paramType
+      // Resolve CustomType to actual type from symbol table (for struct/SoA types)
+      if (paramType?.type === "CustomType") {
+        const resolved = this.symbolTable.lookup((paramType as any).name)
+        if (resolved?.declaredType) {
+          paramType = resolved.declaredType
+        }
+      }
+
+      // Validate default values
+      if ((param as any).defaultValue) {
+        seenDefault = true
+        const defaultType = this.visitExpression((param as any).defaultValue)
+        if (defaultType && paramType && !compatibleTypes(defaultType, paramType) && !canCoerceWithWidening(defaultType, paramType)) {
+          this.emitError(
+            `Default value type ${defaultType.toString()} is not compatible with parameter type ${paramType.toString()}`,
+            (param as any).defaultValue.position || node.position
+          )
+        }
+      } else if (seenDefault) {
+        this.emitError(
+          `Parameter '${param.name}' must have a default value because it follows a parameter with a default value`,
+          node.position
+        )
+      }
+
+      this.symbolTable.declare(param.name, "parameter", paramType)
+      this.symbolTable.setCurrentType(param.name, paramType)
+    }
+
+    this.visitBlock(node.body)
+
+    this.symbolTable.popScope()
+
+    this.currentFunction = prevFunction
+    this.inAsyncFunction = prevAsync
+  }
 
   private visitStructDefinition(node: StructDefinitionNode): void {
     // Validate that all field types are valid
@@ -1496,6 +1571,9 @@ class SemanticAnalyzer {
         break
       case "IsErrExpression":
         result = this.visitIsErrExpression(node as any)
+        break
+      case "AwaitExpression":
+        result = this.visitAwaitExpression(node as AwaitExpressionNode)
         break
       case "TensorConstruction":
         result = this.visitTensorConstruction(node as any)
@@ -1878,9 +1956,69 @@ class SemanticAnalyzer {
     "mkfifo", "mknod",
   ])
 
+  private visitAwaitExpression(node: AwaitExpressionNode): Type | null {
+    if (!this.inAsyncFunction) {
+      this.emitError("await can only be used inside an async function", node.position)
+    }
+
+    const argType = this.visitExpression(node.argument)
+
+    // await unwraps Future<T> to T
+    if (argType && isFutureType(argType)) {
+      return (argType as FutureType).innerType
+    }
+
+    // If it's not a Future, just return the type as-is (synchronous fallback)
+    return argType
+  }
+
   private visitCallExpression(node: CallExpressionNode): Type | null {
     if (node.callee.type === "Identifier") {
       const identifier = node.callee as IdentifierNode
+
+      // Handle all([...]) and race([...]) builtins for structured concurrency
+      if (identifier.name === "all" || identifier.name === "race") {
+        const args = (node as any).args ?? node.arguments ?? []
+        if (args.length !== 1) {
+          this.emitError(`${identifier.name}() expects exactly 1 argument (an array of futures)`, node.position)
+          return null
+        }
+        const arg = args[0]
+        if (arg.type === "ArrayLiteral") {
+          // Visit all elements and collect their types
+          const elemTypes: (Type | null)[] = []
+          for (const elem of (arg as any).elements) {
+            elemTypes.push(this.visitExpression(elem))
+          }
+          if (identifier.name === "all") {
+            // all([...]) returns Future<[T]> where T is the common element type
+            // For simplicity, use the first element's unwrapped type
+            const firstType = elemTypes[0]
+            if (firstType && isFutureType(firstType)) {
+              const innerType = (firstType as FutureType).innerType
+              return new FutureType(new ArrayType(innerType, []))
+            }
+            if (firstType) {
+              return new FutureType(new ArrayType(firstType, []))
+            }
+            return null
+          } else {
+            // race([...]) returns Future<T> where T is the common element type
+            const firstType = elemTypes[0]
+            if (firstType && isFutureType(firstType)) {
+              return firstType // Already a Future<T>
+            }
+            if (firstType) {
+              return new FutureType(firstType)
+            }
+            return null
+          }
+        }
+        // If not an array literal, visit the argument
+        const argType = this.visitExpression(arg)
+        return argType
+      }
+
       const symbol = this.symbolTable.lookup(identifier.name)
 
       if (!symbol) {
@@ -2705,4 +2843,6 @@ export type {
   IsNoneExpressionNode,
   IsOkExpressionNode,
   IsErrExpressionNode,
+  AsyncFunctionDeclarationNode,
+  AwaitExpressionNode,
 }

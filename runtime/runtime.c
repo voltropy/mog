@@ -945,6 +945,51 @@ void map_set(void* map_ptr, const char* key, uint64_t key_len, uint64_t value) {
   map->count++;
 }
 
+/* Map iteration helpers */
+uint64_t map_size(void* map_ptr) {
+  Map* map = (Map*)map_ptr;
+  if (!map) return 0;
+  return map->count;
+}
+
+void* map_key_at(void* map_ptr, uint64_t index) {
+  Map* map = (Map*)map_ptr;
+  if (!map) return NULL;
+  uint64_t seen = 0;
+  for (uint64_t i = 0; i < map->capacity; i++) {
+    MapEntry* entry = map->buckets[i];
+    while (entry) {
+      if (seen == index) {
+        /* Return key as a null-terminated GC-allocated string */
+        char* key_copy = (char*)gc_alloc(entry->key_len + 1);
+        memcpy(key_copy, entry->key, entry->key_len);
+        key_copy[entry->key_len] = '\0';
+        return key_copy;
+      }
+      seen++;
+      entry = entry->next;
+    }
+  }
+  return NULL;
+}
+
+uint64_t map_value_at(void* map_ptr, uint64_t index) {
+  Map* map = (Map*)map_ptr;
+  if (!map) return 0;
+  uint64_t seen = 0;
+  for (uint64_t i = 0; i < map->capacity; i++) {
+    MapEntry* entry = map->buckets[i];
+    while (entry) {
+      if (seen == index) {
+        return entry->value;
+      }
+      seen++;
+      entry = entry->next;
+    }
+  }
+  return 0;
+}
+
 /* Array dimension access */
 uint64_t array_get_dimension(void* array_ptr, uint64_t dim_index) {
   Array* arr = (Array*)array_ptr;
@@ -1057,19 +1102,6 @@ void* matrix_add(void* a_ptr, void* b_ptr) {
   }
   
   return c;
-}
-
-/* LLM Integration Placeholder */
-
-void* llm_call(const char* prompt, const char* options, const char* return_type) {
-  printf("[LLM Call] Prompt: %s\n", prompt);
-  printf("[LLM Call] Options: %s\n", options);
-  printf("[LLM Call] Return Type: %s\n", return_type);
-  
-  uint64_t len = strlen(prompt);
-  void* result = gc_alloc(len + 1);
-  memcpy(result, prompt, len + 1);
-  return result;
 }
 
 /* Vector Operations */
@@ -1449,129 +1481,6 @@ uint64_t input_u64(void) {
   unsigned long long value;
   scanf("%llu", &value);
   return (uint64_t)value;
-}
-
-/* --- POSIX Socket Support --- */
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <errno.h>
-
-/* Socket constants exposed to Mog */
-const int AS_AF_INET = AF_INET;
-const int AS_SOCK_STREAM = SOCK_STREAM;
-const int AS_SOCK_DGRAM = SOCK_DGRAM;
-const int AS_O_NONBLOCK = O_NONBLOCK;
-
-/* Low-level socket syscalls */
-int64_t sys_socket(int domain, int type, int protocol) {
-  return socket(domain, type, protocol);
-}
-
-int64_t sys_connect(int64_t sockfd, uint32_t addr, uint16_t port) {
-  struct sockaddr_in sa;
-  memset(&sa, 0, sizeof(sa));
-  sa.sin_family = AF_INET;
-  sa.sin_port = htons(port);
-  /* addr is already in network byte order from inet_addr */
-  sa.sin_addr.s_addr = addr;
-  return connect(sockfd, (struct sockaddr*)&sa, sizeof(sa));
-}
-
-int64_t sys_send(int sockfd, const char* buf, size_t len, int flags) {
-  return send(sockfd, buf, len, flags);
-}
-
-int64_t sys_recv(int sockfd, char* buf, size_t len, int flags) {
-  return recv(sockfd, buf, len, flags);
-}
-
-int64_t sys_recv_timeout(int sockfd, char* buf, size_t len, int64_t timeout_ms, int flags) {
-  fd_set readfds;
-  struct timeval tv;
-  
-  FD_ZERO(&readfds);
-  FD_SET(sockfd, &readfds);
-  
-  tv.tv_sec = timeout_ms / 1000;
-  tv.tv_usec = (timeout_ms % 1000) * 1000;
-  
-  int ready = select(sockfd + 1, &readfds, NULL, NULL, &tv);
-  if (ready < 0) {
-    return -1;  /* Error */
-  }
-  if (ready == 0) {
-    return -2;  /* Timeout */
-  }
-  
-  return recv(sockfd, buf, len, flags);
-}
-
-int64_t sys_close(int fd) {
-  return close(fd);
-}
-
-int64_t sys_fcntl(int fd, int cmd, int arg) {
-  return fcntl(fd, cmd, arg);
-}
-
-/* inet_addr wrapper - converts string IP to network byte order */
-uint32_t sys_inet_addr(const char* cp) {
-  /* inet_addr already returns network byte order, use directly */
-  return inet_addr(cp);
-}
-
-/* fd_set management for select() */
-typedef struct {
-  fd_set fds;
-  int max_fd;
-} fd_set_wrapper;
-
-void fd_zero(fd_set_wrapper* set) {
-  if (set) {
-    FD_ZERO(&set->fds);
-    set->max_fd = -1;
-  }
-}
-
-void fd_set_add(fd_set_wrapper* set, int fd) {
-  if (set && fd >= 0) {
-    FD_SET(fd, &set->fds);
-    if (fd > set->max_fd) set->max_fd = fd;
-  }
-}
-
-int fd_is_set(fd_set_wrapper* set, int fd) {
-  return set ? FD_ISSET(fd, &set->fds) : 0;
-}
-
-int64_t sys_select(fd_set_wrapper* readfds, fd_set_wrapper* writefds, 
-                   fd_set_wrapper* exceptfds, int64_t timeout_ms) {
-  struct timeval tv;
-  struct timeval* tv_ptr = NULL;
-  
-  if (timeout_ms >= 0) {
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    tv_ptr = &tv;
-  }
-  
-  int max_fd = -1;
-  if (readfds && readfds->max_fd > max_fd) max_fd = readfds->max_fd;
-  if (writefds && writefds->max_fd > max_fd) max_fd = writefds->max_fd;
-  if (exceptfds && exceptfds->max_fd > max_fd) max_fd = exceptfds->max_fd;
-  
-  fd_set* r = readfds ? &readfds->fds : NULL;
-  fd_set* w = writefds ? &writefds->fds : NULL;
-  fd_set* e = exceptfds ? &exceptfds->fds : NULL;
-  
-  return select(max_fd + 1, r, w, e, tv_ptr);
-}
-
-/* Get errno for error handling */
-int64_t sys_errno(void) {
-  return errno;
 }
 
 /* CLI Argument Access */
