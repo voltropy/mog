@@ -1,7 +1,7 @@
 import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType, FunctionType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
 // Decode escape sequences in string literals
@@ -82,7 +82,8 @@ class Parser {
     if (this.matchType("LBRACE")) {
       return this.blockStatement()
     }
-    if (this.matchType("fn")) {
+    if (this.checkType("fn") && this.peekNext()?.type === "IDENTIFIER") {
+      this.advance() // consume 'fn'
       return this.functionDeclaration()
     }
     if (this.matchType("struct")) {
@@ -129,16 +130,21 @@ class Parser {
     }
   }
 
-  private functionDeclaration(): StatementNode {
-    const name = this.consume("IDENTIFIER", "Expected function name").value
-    this.consume("LPAREN", "Expected ( after function name")
-
+  private parseFunctionParams(): any[] {
     const params: any[] = []
-if (!this.checkType("RPAREN")) {
-        do {
-          const paramName = this.consume("IDENTIFIER", "Expected parameter name").value
-          this.consume("COLON", "Expected : after parameter name")
-          // Accept both TYPE and IDENTIFIER tokens as parameter types (for custom struct types)
+    if (!this.checkType("RPAREN")) {
+      do {
+        const paramName = this.consume("IDENTIFIER", "Expected parameter name").value
+        this.consume("COLON", "Expected : after parameter name")
+        // Accept both TYPE and IDENTIFIER tokens as parameter types (for custom struct types)
+        // Also handle function types: fn(int) -> int
+        let paramType: any
+        if (this.checkType("fn")) {
+          paramType = this.parseFunctionTypeAnnotation()
+        } else if (this.checkType("LBRACKET")) {
+          const arrTypeName = this.parseArrayTypeAnnotation()
+          paramType = this.parseType(arrTypeName)
+        } else {
           let paramToken: any
           if (this.checkType("TYPE")) {
             paramToken = this.consume("TYPE", "Expected parameter type")
@@ -151,28 +157,83 @@ if (!this.checkType("RPAREN")) {
             this.consume("RBRACKET", "Expected ] after array bracket")
             typeName += "]"
           }
-          const paramType = this.parseType(typeName)
-          params.push({ name: paramName, paramType })
-        } while (this.matchType("COMMA"))
-      }
-      this.consume("RPAREN", "Expected ) after parameters")
+          paramType = this.parseType(typeName)
+        }
 
-      this.consume("ARROW", "Expected -> after parameter list")
-      // Accept both TYPE and IDENTIFIER tokens as return types (for custom struct types)
-      let returnToken: any
-      if (this.checkType("TYPE")) {
-        returnToken = this.consume("TYPE", "Expected return type")
-      } else {
-        returnToken = this.consume("IDENTIFIER", "Expected return type")
-      }
-      let returnTypeName = returnToken.value
-      while (this.matchType("LBRACKET")) {
-        returnTypeName += "["
-        this.consume("RBRACKET", "Expected ] after array bracket")
-        returnTypeName += "]"
-      }
-      const returnType = this.parseType(returnTypeName)
+        // Check for default value: param: type = defaultValue
+        let defaultValue: ExpressionNode | null = null
+        if (this.checkType("EQUAL") && this.peek().value === "=") {
+          this.advance() // consume =
+          defaultValue = this.expression()
+        }
 
+        params.push({ name: paramName, paramType, defaultValue })
+      } while (this.matchType("COMMA"))
+    }
+    return params
+  }
+
+  private parseReturnType(): any {
+    // Check for function type return: fn(int) -> int
+    if (this.checkType("fn")) {
+      return this.parseFunctionTypeAnnotation()
+    }
+    // Accept both TYPE and IDENTIFIER tokens as return types (for custom struct types)
+    let returnToken: any
+    if (this.checkType("TYPE")) {
+      returnToken = this.consume("TYPE", "Expected return type")
+    } else {
+      returnToken = this.consume("IDENTIFIER", "Expected return type")
+    }
+    let returnTypeName = returnToken.value
+    while (this.matchType("LBRACKET")) {
+      returnTypeName += "["
+      this.consume("RBRACKET", "Expected ] after array bracket")
+      returnTypeName += "]"
+    }
+    return this.parseType(returnTypeName)
+  }
+
+  private parseFunctionTypeAnnotation(): any {
+    // Parse fn(paramTypes) -> returnType as a FunctionType
+    this.consume("fn", "Expected fn keyword")
+    this.consume("LPAREN", "Expected ( after fn")
+    const paramTypes: any[] = []
+    if (!this.checkType("RPAREN")) {
+      do {
+        // In function type annotations, params are just types (no names)
+        // But we also allow name: type syntax for clarity
+        let paramType: any
+        if (this.checkType("fn")) {
+          paramType = this.parseFunctionTypeAnnotation()
+        } else if (this.checkType("LBRACKET")) {
+          const arrTypeName = this.parseArrayTypeAnnotation()
+          paramType = this.parseType(arrTypeName)
+        } else {
+          let typeToken: any
+          if (this.checkType("TYPE")) {
+            typeToken = this.consume("TYPE", "Expected type")
+          } else {
+            typeToken = this.consume("IDENTIFIER", "Expected type")
+          }
+          let typeName = typeToken.value
+          while (this.matchType("LBRACKET")) {
+            typeName += "["
+            this.consume("RBRACKET", "Expected ] after array bracket")
+            typeName += "]"
+          }
+          paramType = this.parseType(typeName)
+        }
+        paramTypes.push(paramType)
+      } while (this.matchType("COMMA"))
+    }
+    this.consume("RPAREN", "Expected ) after fn param types")
+    this.consume("ARROW", "Expected -> after fn param types")
+    const returnType = this.parseReturnType()
+    return new FunctionType(paramTypes, returnType)
+  }
+
+  private parseFunctionBody(): BlockNode {
     this.consume("LBRACE", "Expected { after function signature")
 
     const bodyStatements: StatementNode[] = []
@@ -184,14 +245,49 @@ if (!this.checkType("RPAREN")) {
     }
     this.consume("RBRACE", "Expected } after function body")
 
-    const body: BlockNode = {
+    // Single-expression body: if there's only one ExpressionStatement,
+    // wrap it as an implicit return
+    if (bodyStatements.length === 1 && bodyStatements[0].type === "ExpressionStatement") {
+      const exprStmt = bodyStatements[0] as any
+      const implicitReturn: StatementNode = {
+        type: "Return",
+        value: exprStmt.expression,
+        position: exprStmt.position,
+      } as any
+      return {
+        type: "Block",
+        statements: [implicitReturn],
+        position: {
+          start: { line: 1, column: 1, index: 0 },
+          end: this.lastPosition(),
+        },
+      } as any
+    }
+
+    return {
       type: "Block",
       statements: bodyStatements,
       position: {
         start: { line: 1, column: 1, index: 0 },
         end: this.lastPosition(),
       },
+    } as any
+  }
+
+  private functionDeclaration(): StatementNode {
+    const name = this.consume("IDENTIFIER", "Expected function name").value
+    this.consume("LPAREN", "Expected ( after function name")
+
+    const params = this.parseFunctionParams()
+    this.consume("RPAREN", "Expected ) after parameters")
+
+    // Return type is optional - if no ->, default to void
+    let returnType: any = new VoidType()
+    if (this.matchType("ARROW")) {
+      returnType = this.parseReturnType()
     }
+
+    const body = this.parseFunctionBody()
 
     return {
       type: "FunctionDeclaration",
@@ -674,6 +770,21 @@ if (!this.checkType("RPAREN")) {
       } as any
     }
 
+    // Handle function type: type Callback = fn(int) -> bool;
+    if (this.checkType("fn")) {
+      const funcType = this.parseFunctionTypeAnnotation()
+      this.matchType("SEMICOLON")
+      return {
+        type: "TypeAliasDeclaration",
+        name,
+        aliasedType: new TypeAliasType(name, funcType),
+        position: {
+          start: startPos,
+          end: this.lastPosition(),
+        },
+      } as any
+    }
+
     if (this.checkType("LBRACKET")) {
       typeName = this.parseArrayTypeAnnotation()
     } else if (this.checkType("TYPE")) {
@@ -710,28 +821,39 @@ if (!this.checkType("RPAREN")) {
     // Handle array types that start with [ (e.g., [u8] or [f32; 3])
     let typeName: string
     let declaredType: { name: string; type: string } | null = null
-    if (this.checkType("LBRACKET")) {
+    let varType: any
+
+    if (this.checkType("fn")) {
+      // Function type annotation: callback: fn(int) -> int = ...
+      varType = this.parseFunctionTypeAnnotation()
+      typeName = varType.toString()
+    } else if (this.checkType("LBRACKET")) {
       // Parse array type like [u8], [i32], [f32; 3], or nested [[f64; 3]; 2], etc.
       typeName = this.parseArrayTypeAnnotation()
+      varType = this.parseType(typeName)
     } else if (this.checkType("TYPE")) {
       let typeToken = this.consume("TYPE", "Expected type annotation")
       typeName = typeToken.value
+      // Handle trailing [] for array of type (e.g., f64[][])
+      while (this.matchType("LBRACKET")) {
+        typeName += "[]"
+        this.consume("RBRACKET", "Expected ] after array bracket")
+      }
+      varType = this.parseType(typeName)
     } else if (this.checkType("IDENTIFIER")) {
       // Handle custom type names (e.g., Point, Particle)
       let typeToken = this.consume("IDENTIFIER", "Expected type annotation")
       typeName = typeToken.value
       declaredType = { name: typeName, type: "CustomType" }
+      // Handle trailing [] for array of type (e.g., f64[][])
+      while (this.matchType("LBRACKET")) {
+        typeName += "[]"
+        this.consume("RBRACKET", "Expected ] after array bracket")
+      }
+      varType = this.parseType(typeName)
     } else {
       throw new Error("Expected type annotation")
     }
-    
-    // Handle trailing [] for array of type (e.g., f64[][])
-    while (this.matchType("LBRACKET")) {
-      typeName += "[]"
-      this.consume("RBRACKET", "Expected ] after array bracket")
-    }
-    
-    const varType = this.parseType(typeName)
     
     // Handle AoS type - if varType is an AoS type object, use it for declaredType
     if (varType && typeof varType === 'object' && varType.type === "AOSType") {
@@ -1112,6 +1234,11 @@ private comparison(): ExpressionNode {
       return this.matchExpression()
     }
 
+    // Anonymous function expression: fn(params) -> type { body }
+    if (this.matchType("fn")) {
+      return this.anonymousFunction()
+    }
+
     if (this.matchType("false")) {
       const token = this.previous()
       return {
@@ -1223,9 +1350,26 @@ private comparison(): ExpressionNode {
           }
         } else if (this.matchType("LPAREN")) {
           const callArgs: ExpressionNode[] = []
+          const namedArgs: { name: string; value: ExpressionNode }[] = []
           if (!this.checkType("RPAREN")) {
             do {
-              callArgs.push(this.expression())
+              // Check for named argument: identifier followed by COLON
+              // But only if the next token after COLON is not a type keyword
+              // (to distinguish from struct literal or type annotations)
+              if (this.checkType("IDENTIFIER") && this.peekNext()?.type === "COLON") {
+                // Could be named arg or just an expression with ternary
+                // Save position and try named arg parse
+                const savedPos = this.current
+                const argName = this.consume("IDENTIFIER", "").value
+                this.consume("COLON", "")
+                // If the next thing is a valid expression start, treat as named arg
+                // But only if we already have some positional args or previous named args
+                // Named args can also be the first args (mixed with positional)
+                const argValue = this.expression()
+                namedArgs.push({ name: argName, value: argValue })
+              } else {
+                callArgs.push(this.expression())
+              }
             } while (this.matchType("COMMA"))
           }
           this.consume("RPAREN", "Expected ) after arguments")
@@ -1234,6 +1378,7 @@ private comparison(): ExpressionNode {
             type: "CallExpression",
             callee: (object.type === "Identifier" || object.type === "MemberExpression") ? object : { type: "Identifier", name: (object as any).name, position: token.position },
             args: callArgs,
+            namedArgs: namedArgs.length > 0 ? namedArgs : undefined,
             position: this.combinePositions(object, this.previous()),
           }
         } else if (this.matchType("DOT")) {
@@ -1268,6 +1413,33 @@ private comparison(): ExpressionNode {
 
     const token = this.peek()
     throw new Error(`Unexpected token: ${token.type} at line ${token.position.start.line}`)
+  }
+
+  private anonymousFunction(): ExpressionNode {
+    // fn(params) -> type { body }
+    // The 'fn' token has already been consumed
+    this.consume("LPAREN", "Expected ( after fn")
+    const params = this.parseFunctionParams()
+    this.consume("RPAREN", "Expected ) after parameters")
+
+    // Return type after ->
+    let returnType: any = new VoidType()
+    if (this.matchType("ARROW")) {
+      returnType = this.parseReturnType()
+    }
+
+    const body = this.parseFunctionBody()
+
+    return {
+      type: "Lambda",
+      params,
+      returnType,
+      body,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    } as any
   }
 
   private arrayLiteral(): ExpressionNode {

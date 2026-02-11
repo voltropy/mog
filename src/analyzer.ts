@@ -5,6 +5,7 @@ import {
   isFloatType,
   isBoolType,
   isTypeAliasType,
+  isFunctionType,
   resolveTypeAlias,
   isArrayType,
   isMapType,
@@ -27,6 +28,7 @@ import {
   VoidType,
   StructType,
   SOAType,
+  FunctionType,
   boolType,
 } from "./types.js"
 
@@ -192,6 +194,7 @@ interface FunctionDeclarationNode extends ASTNode {
 interface FunctionParam {
   name: string
   paramType: Type
+  defaultValue?: ExpressionNode | null
 }
 
 type ExpressionNode =
@@ -835,8 +838,12 @@ class SemanticAnalyzer {
       let symbol = this.symbolTable.lookup(node.name)
 
       if (!symbol) {
-        this.emitError(`Undefined variable '${node.name}'`, node.position)
-        return null
+        // Walrus-style assignment: auto-declare the variable with inferred type
+        this.symbolTable.declare(node.name, "variable", valueType)
+        if (valueType) {
+          this.symbolTable.setCurrentType(node.name, valueType)
+        }
+        return valueType
       }
 
       if (symbol.symbolType !== "variable") {
@@ -1079,13 +1086,21 @@ class SemanticAnalyzer {
         returnType = resolved.declaredType
       }
     }
+
+    // Build FunctionType for the function
+    const paramTypes = node.params.map((p: any) => p.paramType)
+    const funcType = new FunctionType(paramTypes, returnType)
     this.symbolTable.declare(node.name, "function", returnType)
+    // Also store function type for higher-order use
+    this.symbolTable.setCurrentType(node.name, funcType)
 
     const prevFunction = this.currentFunction
     this.currentFunction = node.name
 
     this.symbolTable.pushScope()
 
+    // Track if we've seen a default value (all subsequent params must also have defaults)
+    let seenDefault = false
     for (const param of node.params) {
       let paramType = param.paramType
       // Resolve CustomType to actual type from symbol table (for struct/SoA types)
@@ -1095,6 +1110,25 @@ class SemanticAnalyzer {
           paramType = resolved.declaredType
         }
       }
+
+      // Validate default values
+      if ((param as any).defaultValue) {
+        seenDefault = true
+        const defaultType = this.visitExpression((param as any).defaultValue)
+        // Type check: default value should be compatible with param type
+        if (defaultType && paramType && !compatibleTypes(defaultType, paramType) && !canCoerceWithWidening(defaultType, paramType)) {
+          this.emitError(
+            `Default value type ${defaultType.toString()} is not compatible with parameter type ${paramType.toString()}`,
+            (param as any).defaultValue.position || node.position
+          )
+        }
+      } else if (seenDefault) {
+        this.emitError(
+          `Parameter '${param.name}' must have a default value because it follows a parameter with a default value`,
+          node.position
+        )
+      }
+
       this.symbolTable.declare(param.name, "parameter", paramType)
       this.symbolTable.setCurrentType(param.name, paramType)
     }
@@ -1810,7 +1844,35 @@ class SemanticAnalyzer {
 
       // Handle regular function calls - return the function's return type
       if (symbol && symbol.symbolType === "function") {
+        // Visit named args if present
+        const namedArgs = (node as any).namedArgs
+        if (namedArgs) {
+          for (const namedArg of namedArgs) {
+            this.visitExpression(namedArg.value)
+          }
+        }
         return symbol.declaredType
+      }
+
+      // Handle calling a variable that holds a function (higher-order function)
+      if (symbol && symbol.symbolType === "variable") {
+        const varType = symbol.inferredType || symbol.declaredType
+        if (varType && isFunctionType(varType)) {
+          const funcType = varType as FunctionType
+          // Visit all args
+          const args = (node as any).args ?? node.arguments
+          for (const arg of args) {
+            this.visitExpression(arg)
+          }
+          // Visit named args if present
+          const namedArgs = (node as any).namedArgs
+          if (namedArgs) {
+            for (const namedArg of namedArgs) {
+              this.visitExpression(namedArg.value)
+            }
+          }
+          return funcType.returnType
+        }
       }
     }
 
@@ -2090,7 +2152,35 @@ class SemanticAnalyzer {
   }
 
   private visitLambda(node: LambdaNode): Type | null {
-    return node.returnType
+    // Save and set currentFunction so return statements are allowed
+    const prevFunction = this.currentFunction
+    this.currentFunction = "__lambda__"
+
+    // Push a new scope for the lambda's parameters
+    this.symbolTable.pushScope()
+
+    const paramTypes: Type[] = []
+    for (const param of node.params) {
+      let paramType = param.paramType
+      if (paramType?.type === "CustomType") {
+        const resolved = this.symbolTable.lookup((paramType as any).name)
+        if (resolved?.declaredType) {
+          paramType = resolved.declaredType
+        }
+      }
+      paramTypes.push(paramType)
+      this.symbolTable.declare(param.name, "parameter", paramType)
+      this.symbolTable.setCurrentType(param.name, paramType)
+    }
+
+    // Visit the body (which can reference variables from enclosing scope - closures)
+    this.visitBlock(node.body)
+
+    this.symbolTable.popScope()
+    this.currentFunction = prevFunction
+
+    // Return a FunctionType
+    return new FunctionType(paramTypes, node.returnType)
   }
 
   private visitBlockExpression(node: BlockExpressionNode): Type | null {

@@ -68,6 +68,10 @@ class LLVMIRGenerator {
   private stringConstants: string[] = []
   private stringCounter = 0
   private stringNameMap: Map<string, string> = new Map()
+  private lambdaCounter = 0
+  private lambdaIR: string[] = []
+  // Track function parameter info for named arg / default arg resolution
+  private functionParamInfo: Map<string, { name: string; paramType: any; defaultValue?: any }[]> = new Map()
   // Struct definitions: maps struct name -> ordered list of { name, type } fields
   private structDefs: Map<string, { name: string; fieldType: any }[]> = new Map()
   // Capability tracking for Host FFI
@@ -144,6 +148,10 @@ class LLVMIRGenerator {
     for (const funcDecl of functionDeclarations) {
       this.functionTypes.set(funcDecl.name, funcDecl.returnType)
     }
+    // Register function parameter info for named/default arg handling
+    for (const funcDecl of functionDeclarations) {
+      this.functionParamInfo.set(funcDecl.name === "main" ? "program_user" : funcDecl.name, funcDecl.params)
+    }
     for (const funcDecl of functionDeclarations) {
       // Rename user's main() to @program_user to avoid conflict
       if (funcDecl.name === "main") {
@@ -152,6 +160,13 @@ class LLVMIRGenerator {
       this.generateFunctionDeclaration(ir, funcDecl)
     }
     ir.push("")
+
+    // Emit lifted lambda functions
+    if (this.lambdaIR.length > 0) {
+      ir.push("; Lambda functions")
+      ir.push(...this.lambdaIR)
+      ir.push("")
+    }
 
     if (hasMain) {
       // User defined main() - generate wrapper at @main
@@ -330,7 +345,7 @@ class LLVMIRGenerator {
         const reg = `%${statement.name}`
         const isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType" 
           || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
-          || statement.varType?.type === "SOAType"
+          || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
         const allocaType = isPointerLike ? "ptr" : llvmType
         ir.push(`  ${reg} = alloca ${allocaType}`)
         this.variableTypes.set(statement.name, statement.varType)
@@ -338,7 +353,7 @@ class LLVMIRGenerator {
           const value = this.generateExpression(ir, statement.value)
           const isPointerLike2 = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
             || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
-            || statement.varType?.type === "SOAType"
+            || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
           const storeType = isPointerLike2 ? "ptr" : llvmType
           ir.push(`  store ${storeType} ${value}, ptr ${reg}`)
         }
@@ -468,7 +483,7 @@ class LLVMIRGenerator {
         const varType = this.variableTypes.get(name)
         const isPointerLike = varType?.type === "ArrayType" || varType?.type === "PointerType" || 
                               varType?.type === "StructType" || varType?.type === "CustomType" || 
-                              varType?.type === "SOAType"
+                              varType?.type === "SOAType" || varType?.type === "FunctionType"
 
         // Determine LLVM type for loading
         let llvmLoadType = "i64"
@@ -527,6 +542,8 @@ class LLVMIRGenerator {
         return this.generateIfExpression(ir, expr)
       case "MatchExpression":
         return this.generateMatchExpression(ir, expr)
+      case "Lambda":
+        return this.generateLambda(ir, expr)
       default:
         return ""
     }
@@ -1058,7 +1075,38 @@ class LLVMIRGenerator {
   }
 
   private generateCallExpression(ir: string[], expr: any): string {
-    const args = (expr.args || expr.arguments || []).map((arg: ExpressionNode) => this.generateExpression(ir, arg)).filter(Boolean)
+    let positionalArgs = expr.args || expr.arguments || []
+    const namedArgs: { name: string; value: any }[] = expr.namedArgs || []
+
+    // If there are named args or default params, resolve the full argument list
+    if (expr.callee.type === "Identifier") {
+      const funcName = expr.callee.name
+      const paramInfo = this.functionParamInfo.get(funcName)
+      if (paramInfo && (namedArgs.length > 0 || paramInfo.some((p: any) => p.defaultValue))) {
+        // Build the full resolved argument list
+        const resolvedArgs: any[] = []
+        for (let i = 0; i < paramInfo.length; i++) {
+          const param = paramInfo[i]
+          // Check if this param is covered by a positional arg
+          if (i < positionalArgs.length) {
+            resolvedArgs.push(positionalArgs[i])
+          } else {
+            // Check if it's in named args
+            const namedArg = namedArgs.find((na: any) => na.name === param.name)
+            if (namedArg) {
+              resolvedArgs.push(namedArg.value)
+            } else if (param.defaultValue) {
+              // Use the default value expression
+              resolvedArgs.push(param.defaultValue)
+            }
+            // If no value, skip (will be handled by LLVM with 0/default)
+          }
+        }
+        positionalArgs = resolvedArgs
+      }
+    }
+
+    const args = positionalArgs.map((arg: ExpressionNode) => this.generateExpression(ir, arg)).filter(Boolean)
 
     if (expr.callee.type === "Identifier") {
       const funcName = expr.callee.name
@@ -1218,6 +1266,22 @@ class LLVMIRGenerator {
       if (memberExpr.object.type === "Identifier" && this.capabilities.has(memberExpr.object.name)) {
         return this.generateCapabilityCall(ir, memberExpr.object.name, memberExpr.property, args, expr)
       }
+    }
+
+    // Handle indirect function call (calling a function pointer stored in a variable)
+    if (expr.callee.type === "Identifier") {
+      const funcPtrName = expr.callee.name
+      // Load the function pointer from the variable
+      const ptrReg = `%${this.valueCounter++}`
+      ir.push(`  ${ptrReg} = load ptr, ptr %${funcPtrName}`)
+      
+      // Build typed args - default to i64 for each arg
+      const typedArgs = args.map((arg: string) => `i64 ${arg}`)
+      
+      // Indirect call through function pointer
+      const resultReg = `%${this.valueCounter++}`
+      ir.push(`  ${resultReg} = call i64 ${ptrReg}(${typedArgs.join(", ")})`)
+      return resultReg
     }
 
     return ""
@@ -1666,7 +1730,19 @@ class LLVMIRGenerator {
       this.stringConstants.push(strDef)
       ir.push(`  call void @map_set(ptr ${obj}, ptr ${keyName}, i64 ${target.property.length}, i64 ${valueReg})`)
     } else {
-      const varType = this.variableTypes.get(name)
+      let varType = this.variableTypes.get(name)
+      // If variable doesn't exist yet (walrus-style new variable), allocate it
+      if (!varType && name) {
+        // Determine type from value - function pointer or general
+        const isFuncPtr = valueReg.startsWith("@")
+        const allocaType = isFuncPtr ? "ptr" : "i64"
+        ir.push(`  %${name} = alloca ${allocaType}`)
+        if (isFuncPtr) {
+          // Track as a function type for later loads
+          this.variableTypes.set(name, { type: "FunctionType" })
+        }
+        varType = this.variableTypes.get(name)
+      }
       const llvmType = this.toLLVMType(varType)
       ir.push(`  store ${llvmType} ${valueReg}, ptr %${name}`)
     }
@@ -2704,6 +2780,96 @@ class LLVMIRGenerator {
     return this.generateExpression(ir, block)
   }
 
+  private generateLambda(ir: string[], expr: any): string {
+    // Lift the lambda to a top-level function with a unique name
+    const lambdaName = `__lambda_${this.lambdaCounter++}`
+    const params = expr.params || []
+    const returnType = expr.returnType
+    const body = expr.body
+
+    // Save current state
+    const savedFunction = this.currentFunction
+    const savedBlockTerminated = this.blockTerminated
+    const savedValueCounter = this.valueCounter
+
+    // Generate the lambda function IR into lambdaIR buffer
+    const lambdaIrBuf: string[] = []
+
+    this.resetValueCounter(10)
+
+    const llvmParams = params.map((p: any) => {
+      const llvmType = this.toLLVMType(p.paramType)
+      return { name: p.name, type: llvmType }
+    })
+
+    const llvmReturnType = this.toLLVMType(returnType)
+
+    const func: LLVMFunction = {
+      name: lambdaName,
+      returnType: llvmReturnType,
+      params: llvmParams,
+      body: [],
+    }
+
+    this.functions.set(lambdaName, func)
+    this.functionTypes.set(lambdaName, returnType)
+    this.currentFunction = func
+
+    const paramStr = llvmParams.map((p: LLVMValue) => `${p.type} %${p.name}`).join(", ")
+
+    lambdaIrBuf.push(`define ${llvmReturnType} @${lambdaName}(${paramStr}) nounwind {`)
+    lambdaIrBuf.push("entry:")
+    lambdaIrBuf.push("  call void @gc_push_frame()")
+
+    for (const param of llvmParams) {
+      const localReg = `%${param.name}_local`
+      lambdaIrBuf.push(`  ${localReg} = alloca ${param.type}`)
+      lambdaIrBuf.push(`  store ${param.type} %${param.name}, ptr ${localReg}`)
+      const paramType = params.find((p: any) => p.name === param.name)?.paramType
+      if (paramType) {
+        this.variableTypes.set(param.name, paramType)
+      }
+    }
+    lambdaIrBuf.push("")
+
+    this.blockTerminated = false
+    for (const stmt of body.statements) {
+      this.generateStatement(lambdaIrBuf, stmt)
+      if (this.blockTerminated) break
+    }
+
+    let hasReturn = false
+    for (const stmt of body.statements) {
+      if (stmt.type === "Return") {
+        hasReturn = true
+        break
+      }
+    }
+
+    if (!hasReturn) {
+      lambdaIrBuf.push("  call void @gc_pop_frame()")
+      if (llvmReturnType !== "void") {
+        lambdaIrBuf.push(`  ret ${llvmReturnType} 0`)
+      } else {
+        lambdaIrBuf.push("  ret void")
+      }
+    }
+
+    lambdaIrBuf.push("}")
+    lambdaIrBuf.push("")
+
+    // Add to lambdaIR for later emission
+    this.lambdaIR.push(...lambdaIrBuf)
+
+    // Restore state
+    this.currentFunction = savedFunction
+    this.blockTerminated = savedBlockTerminated
+    this.valueCounter = savedValueCounter
+
+    // Return a function pointer to the lambda
+    return `@${lambdaName}`
+  }
+
   private generateMatchExpression(ir: string[], expr: any): string {
     const subjectValue = this.generateExpression(ir, expr.subject)
 
@@ -3140,6 +3306,9 @@ class LLVMIRGenerator {
         // Custom types (structs) are heap-allocated, represented as pointers
         return "ptr"
       case "PointerType":
+        return "ptr"
+      case "FunctionType":
+        // Function types are function pointers
         return "ptr"
       case "VoidType":
         return "void"

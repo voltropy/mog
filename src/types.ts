@@ -238,7 +238,23 @@ class CustomType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType
+class FunctionType {
+  paramTypes: Type[]
+  returnType: Type
+  type = "FunctionType"
+
+  constructor(paramTypes: Type[], returnType: Type) {
+    this.paramTypes = paramTypes
+    this.returnType = returnType
+  }
+
+  toString(): string {
+    const params = this.paramTypes.map(t => t.toString()).join(", ")
+    return `fn(${params}) -> ${this.returnType.toString()}`
+  }
+}
+
+type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -328,6 +344,10 @@ function isTypeAliasType(type: Type): type is TypeAliasType {
   return type instanceof TypeAliasType
 }
 
+function isFunctionType(type: Type): type is FunctionType {
+  return type instanceof FunctionType
+}
+
 function resolveTypeAlias(type: Type): Type {
   if (type instanceof TypeAliasType) return type.aliasedType
   return type
@@ -389,6 +409,13 @@ function sameType(a: Type, b: Type): boolean {
     }
     return true
   }
+  if (a instanceof FunctionType && b instanceof FunctionType) {
+    if (a.paramTypes.length !== b.paramTypes.length) return false
+    for (let i = 0; i < a.paramTypes.length; i++) {
+      if (!sameType(a.paramTypes[i], b.paramTypes[i])) return false
+    }
+    return sameType(a.returnType, b.returnType)
+  }
   return false
 }
 
@@ -412,6 +439,11 @@ function compatibleTypes(from: Type, to: Type): boolean {
   // String literals ([u8]) can be used where ptr is expected
   if (from instanceof ArrayType && from.isString && to instanceof PointerType) {
     return true
+  }
+
+  // FunctionType compatibility
+  if (from instanceof FunctionType && to instanceof FunctionType) {
+    return sameType(from, to)
   }
 
   // CustomType compatibility: CustomType("Point") is compatible with StructType("Point")
@@ -636,6 +668,7 @@ export {
   AOSType,
   SOAType,
   CustomType,
+  FunctionType,
   TypeVar,
   TypeInferenceContext,
   array,
@@ -646,6 +679,7 @@ export {
   isFloatType,
   isBoolType,
   isTypeAliasType,
+  isFunctionType,
   resolveTypeAlias,
   isArrayType,
   isMapType,
