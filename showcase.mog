@@ -463,7 +463,7 @@ fn main() -> i64 {
   println();
 
   struct Datum { id: i64, val: i64 }
-  soa datums: Datum[10]
+  datums := soa Datum[10];
   datums[0].id = 1;
   datums[0].val = 100;
   datums[1].id = 2;

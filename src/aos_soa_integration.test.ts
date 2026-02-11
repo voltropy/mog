@@ -157,7 +157,7 @@ describe("SoA (Struct of Arrays) integration - new design", () => {
 struct Datum { id: i64, val: i64 }
 
 fn main() -> i64 {
-  soa datums: Datum[10]
+  datums := soa Datum[10];
   datums[0].id = 1;
   datums[0].val = 100;
   datums[1].id = 2;
@@ -181,7 +181,7 @@ fn main() -> i64 {
 struct Point { x: i64, y: i64 }
 
 fn main() -> i64 {
-  soa points: Point[5]
+  points := soa Point[5];
   points[0].x = 10;
   points[0].y = 20;
   points[1].x = 30;
@@ -211,7 +211,7 @@ fn main() -> i64 {
 struct Particle { x: f64, y: f64 }
 
 fn main() -> i64 {
-  soa particles: Particle[10]
+  particles := soa Particle[10];
   particles[0].x = 1.5;
   particles[0].y = 2.5;
   particles[1].x = 3.5;
@@ -235,7 +235,7 @@ fn main() -> i64 {
 struct Data { flag: i64, value: f64 }
 
 fn main() -> i64 {
-  soa data: Data[5]
+  data := soa Data[5];
   data[0].flag = 1;
   data[0].value = 3.14;
   data[1].flag = 0;

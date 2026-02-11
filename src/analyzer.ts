@@ -76,19 +76,11 @@ type StatementNode =
   | ForInMapNode
   | BreakNode
   | ContinueNode
-  | SoADeclarationNode
   | StructDefinitionNode
   | StructDeclarationNode
   | RequiresDeclarationNode
   | OptionalDeclarationNode
   | TryCatchNode
-
-interface SoADeclarationNode extends ASTNode {
-  type: "SoADeclaration"
-  name: string
-  structName: string
-  capacity: number | null
-}
 
 interface StructDefinitionNode extends ASTNode {
   type: "StructDefinition"
@@ -828,9 +820,7 @@ class SemanticAnalyzer {
       case "FunctionDeclaration":
         this.visitFunctionDeclaration(node as FunctionDeclarationNode)
         break
-      case "SoADeclaration":
-        this.visitSoADeclaration(node as SoADeclarationNode)
-        break
+
       case "StructDefinition":
         this.visitStructDefinition(node as StructDefinitionNode)
         break
@@ -884,12 +874,20 @@ class SemanticAnalyzer {
       }
     }
 
+    // Resolve SOAType annotation from parser (has structName string, not resolved type)
+    if (declaredType && (declaredType as any).type === "SOAType" && (declaredType as any).structName) {
+      const resolved = this.symbolTable.lookup((declaredType as any).structName)
+      if (resolved?.declaredType instanceof StructType) {
+        declaredType = new SOAType(resolved.declaredType, (declaredType as any).capacity)
+      }
+    }
+
     if (valueType) {
       if (declaredType) {
         // Allow literal coercion (float widening, array literal element coercion)
         const isLiteral = node.value?.type === "NumberLiteral" || node.value?.type === "ArrayLiteral"
-        // Allow SoA/Struct literal assignment (MapLiteral → SOAType/StructType)
-        const isSoAOrStructAssign = (declaredType.type === "SOAType" || declaredType.type === "StructType") && (valueType.type === "MapType" || node.value?.type === "MapLiteral" || node.value?.type === "StructLiteral")
+        // Allow SoA/Struct literal assignment (MapLiteral → SOAType/StructType, SoAConstructor → SOAType)
+        const isSoAOrStructAssign = (declaredType.type === "SOAType" || declaredType.type === "StructType") && (valueType.type === "MapType" || valueType.type === "SOAType" || node.value?.type === "MapLiteral" || node.value?.type === "StructLiteral" || node.value?.type === "SoAConstructor")
         const typeCheck = isLiteral ? canCoerceWithWidening : compatibleTypes
         if (!isSoAOrStructAssign && !typeCheck(valueType, declaredType)) {
           this.emitError(
@@ -1275,29 +1273,7 @@ class SemanticAnalyzer {
     this.currentFunction = prevFunction
   }
 
-  private visitSoADeclaration(node: SoADeclarationNode): void {
-    // Look up the struct type from the symbol table
-    const structDef = this.symbolTable.lookup(node.structName)
-    if (!structDef) {
-      this.emitError(`Undefined struct type '${node.structName}'`, node.position)
-      return
-    }
 
-    if (!structDef.declaredType || !(structDef.declaredType instanceof StructType)) {
-      this.emitError(`'${node.structName}' is not a struct type`, node.position)
-      return
-    }
-
-    const structType = structDef.declaredType as StructType
-
-    // Create SOAType from the backing struct type
-    const soaType = new SOAType(structType, node.capacity)
-    // @ts-ignore - resultType is set dynamically
-    node.resultType = soaType
-    // Register the SoA variable in symbol table
-    this.symbolTable.declare(node.name, "variable", soaType)
-    this.symbolTable.setCurrentType(node.name, soaType)
-  }
 
   private visitStructDefinition(node: StructDefinitionNode): void {
     // Validate that all field types are valid
@@ -1522,6 +1498,9 @@ class SemanticAnalyzer {
         break
       case "TensorConstruction":
         result = this.visitTensorConstruction(node as any)
+        break
+      case "SoAConstructor":
+        result = this.visitSoAConstructor(node as any)
         break
       case "BooleanLiteral":
         result = boolType
@@ -2272,6 +2251,20 @@ class SemanticAnalyzer {
       }
     }
     return new TensorType(node.dtype)
+  }
+
+  private visitSoAConstructor(node: any): Type | null {
+    const structInfo = this.symbolTable.lookup(node.structName)
+    if (!structInfo || structInfo.symbolType !== "type") {
+      this.emitError(`Undefined struct type '${node.structName}'`, node.position)
+      return null
+    }
+    const structType = structInfo.declaredType
+    if (!(structType instanceof StructType)) {
+      this.emitError(`'${node.structName}' is not a struct type`, node.position)
+      return null
+    }
+    return new SOAType(structType, node.capacity)
   }
 
   private visitIndexExpression(node: IndexExpressionNode): Type | null {

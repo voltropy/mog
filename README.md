@@ -172,11 +172,11 @@ p.x = 3.0;
 
 ```mog
 struct Datum { id: i64, val: i64 }
-soa datums: Datum[100]
+datums := soa Datum[100];
 
-datums[0].id = 1        // writes to contiguous id array
-datums[0].val = 100     // writes to contiguous val array
-print(datums[0].id)     // 1
+datums[0].id = 1;       // writes to contiguous id array
+datums[0].val = 100;    // writes to contiguous val array
+print(datums[0].id);    // 1
 ```
 
 You write natural per-element code (`datums[i].field`) but the compiler stores each

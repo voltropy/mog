@@ -89,9 +89,7 @@ class Parser {
     if (this.matchType("struct")) {
       return this.structDeclaration()
     }
-    if (this.matchType("soa")) {
-      return this.soaDeclaration()
-    }
+
     if (this.matchType("type_kw")) {
       return this.typeAliasDeclaration()
     }
@@ -349,29 +347,6 @@ class Parser {
       type: "StructDeclaration",
       name,
       fields,
-      position: {
-        start: { line: 1, column: 1, index: 0 },
-        end: this.lastPosition(),
-      },
-    }
-  }
-
-  private soaDeclaration(): StatementNode {
-    const name = this.consume("IDENTIFIER", "Expected SoA variable name").value
-    this.consume("COLON", "Expected : after SoA variable name")
-    const structName = this.consume("IDENTIFIER", "Expected struct type name after :").value
-    this.consume("LBRACKET", "Expected [ after struct type name")
-    let capacity: number | null = null
-    if (this.checkType("NUMBER")) {
-      capacity = parseInt(this.advance().value, 10)
-    }
-    this.consume("RBRACKET", "Expected ] after capacity")
-
-    return {
-      type: "SoADeclaration",
-      name,
-      structName,
-      capacity,
       position: {
         start: { line: 1, column: 1, index: 0 },
         end: this.lastPosition(),
@@ -907,6 +882,18 @@ class Parser {
         this.consume("RBRACKET", "Expected ] after array bracket")
       }
       varType = this.parseType(typeName)
+    } else if (this.checkType("soa")) {
+      // SoA type annotation: name: soa Struct[N]
+      this.advance() // consume 'soa'
+      const structName = this.consume("IDENTIFIER", "Expected struct name after soa").value
+      this.consume("LBRACKET", "Expected [ after struct name")
+      let capacity: number | null = null
+      if (this.checkType("NUMBER")) {
+        capacity = parseInt(this.consume("NUMBER", "Expected capacity").value, 10)
+      }
+      this.consume("RBRACKET", "Expected ] after capacity")
+      varType = { type: "SOAType", structName, capacity }
+      typeName = `soa ${structName}[${capacity ?? ''}]`
     } else if (this.checkType("IDENTIFIER")) {
       // Handle custom type names (e.g., Point, Particle)
       let typeToken = this.consume("IDENTIFIER", "Expected type annotation")
@@ -1341,6 +1328,26 @@ private comparison(): ExpressionNode {
   }
 
   private primary(): ExpressionNode {
+    // SoA constructor expression: soa Struct[N]
+    if (this.matchType("soa")) {
+      const structName = this.consume("IDENTIFIER", "Expected struct name after soa").value
+      this.consume("LBRACKET", "Expected [ after struct name")
+      let capacity: number | null = null
+      if (this.checkType("NUMBER")) {
+        capacity = parseInt(this.consume("NUMBER", "Expected capacity").value, 10)
+      }
+      this.consume("RBRACKET", "Expected ] after capacity")
+      return {
+        type: "SoAConstructor",
+        structName,
+        capacity,
+        position: {
+          start: { line: 1, column: 1, index: 0 },
+          end: this.lastPosition(),
+        },
+      } as any
+    }
+
     // If expression: if condition { expr } else { expr }
     if (this.matchType("if")) {
       return this.ifExpression()

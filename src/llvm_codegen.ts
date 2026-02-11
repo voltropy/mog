@@ -119,12 +119,6 @@ class LLVMIRGenerator {
           fieldType: f.fieldType
         })) || []
         this.structDefs.set((stmt as any).name, fields)
-      } else if (stmt.type === "SoADeclaration") {
-        const soaFields = (stmt as any).fields?.map((f: any) => ({
-          name: f.name,
-          fieldType: f.fieldType
-        })) || []
-        this.structDefs.set((stmt as any).name, soaFields)
       }
     }
 
@@ -382,6 +376,23 @@ class LLVMIRGenerator {
         if (isPointerLike && !statement.varType) {
           // For inferred pointer types, register as ArrayType(u8, []) so isStringType works
           this.variableTypes.set(statement.name, new ArrayType(new UnsignedType("u8"), []))
+        } else if (statement.varType?.type === "SOAType" && (statement.varType as any).structName && !(statement.varType instanceof SOAType)) {
+          // Resolve raw SOAType annotation from parser to a real SOAType instance
+          const soaStructName = (statement.varType as any).structName
+          const soaCapacity = (statement.varType as any).capacity || 16
+          const structFields = this.structDefs.get(soaStructName)
+          if (structFields) {
+            const structFieldMap = new Map<string, any>()
+            for (const f of structFields) {
+              structFieldMap.set(f.name, f.fieldType)
+            }
+            const resolvedStructType = new StructType(soaStructName, structFieldMap)
+            const resolvedSoaType = new SOAType(resolvedStructType, soaCapacity)
+            this.variableTypes.set(statement.name, resolvedSoaType)
+            this.structDefs.set(statement.name, structFields)
+          } else {
+            this.variableTypes.set(statement.name, statement.varType)
+          }
         } else {
           this.variableTypes.set(statement.name, statement.varType)
         }
@@ -454,68 +465,6 @@ class LLVMIRGenerator {
           fieldType: f.fieldType
         })) || []
         this.structDefs.set((statement as any).name, fields)
-        break
-      }
-      case "SoADeclaration": {
-        // New SoA design: soa name: StructType[capacity]
-        // Allocate one array per field in the backing struct, store pointers in a gc_alloc'd block
-        const soaStmt = statement as any
-        const soaName = soaStmt.name
-        const soaStructName = soaStmt.structName
-        const soaCapacity = soaStmt.capacity || 0
-        const soaStructFields = this.structDefs.get(soaStructName)
-        
-        if (soaStructFields && soaStructFields.length > 0) {
-          const numFields = soaStructFields.length
-          const storageSize = numFields * 8  // one ptr per field
-          
-          // Allocate the storage block for array pointers
-          const storageReg = `%__soa_storage_${soaName}_${this.valueCounter++}`
-          ir.push(`  ${storageReg} = call ptr @gc_alloc(i64 ${storageSize})`)
-          
-          // Allocate one array per field
-          for (let i = 0; i < numFields; i++) {
-            const field = soaStructFields[i]
-            const fieldName = field.name
-            const isFloat = field.fieldType?.type === "FloatType"
-            const elemSize = 8  // all fields are 8 bytes (i64 or f64)
-            
-            // Create dimensions array for array_alloc
-            const dimsReg = `%__soa_dims_${soaName}_${fieldName}_${this.valueCounter++}`
-            ir.push(`  ${dimsReg} = alloca [1 x i64]`)
-            const dimsPtrReg = `%__soa_dimptr_${soaName}_${fieldName}_${this.valueCounter++}`
-            ir.push(`  ${dimsPtrReg} = getelementptr [1 x i64], ptr ${dimsReg}, i64 0, i64 0`)
-            ir.push(`  store i64 ${soaCapacity}, ptr ${dimsPtrReg}`)
-            
-            // Allocate the column array
-            const arrayReg = `%__soa_col_${soaName}_${fieldName}_${this.valueCounter++}`
-            ir.push(`  ${arrayReg} = call ptr @array_alloc(i64 ${elemSize}, i64 1, ptr ${dimsPtrReg})`)
-            
-            // Store the array pointer in the storage block
-            const fieldPtrReg = `%__soa_fptr_${soaName}_${fieldName}_${this.valueCounter++}`
-            ir.push(`  ${fieldPtrReg} = getelementptr i8, ptr ${storageReg}, i64 ${i * 8}`)
-            ir.push(`  store ptr ${arrayReg}, ptr ${fieldPtrReg}`)
-          }
-          
-          // Alloca for the SoA variable and store the storage pointer
-          ir.push(`  %${soaName} = alloca ptr`)
-          ir.push(`  store ptr ${storageReg}, ptr %${soaName}`)
-          
-          // Track variable type for codegen
-          const soaVarType = this.variableTypes.get(soaName)
-          if (!soaVarType) {
-            // Build an SOAType from the struct fields
-            const structFieldMap = new Map<string, any>()
-            for (const f of soaStructFields) {
-              structFieldMap.set(f.name, f.fieldType)
-            }
-            const structType = new StructType(soaStructName, structFieldMap)
-            this.variableTypes.set(soaName, new SOAType(structType, soaCapacity))
-          }
-          
-          // Also register in structDefs for field lookup
-          this.structDefs.set(soaName, soaStructFields)
-        }
         break
       }
       case "WhileLoop":
@@ -642,6 +591,8 @@ class LLVMIRGenerator {
         return this.generateStructLiteral(ir, expr)
       case "SoALiteral":
         return this.generateSoALiteral(ir, expr)
+      case "SoAConstructor":
+        return this.generateSoAConstructor(ir, expr)
       case "MemberExpression":
         return this.generateMemberExpression(ir, expr)
       case "IndexExpression":
@@ -2165,12 +2116,28 @@ class LLVMIRGenerator {
       let varType = this.variableTypes.get(name)
       // If variable doesn't exist yet (walrus-style new variable), allocate it
       if (!varType && name) {
-        // Determine type from value - function pointer, string, or general
+        // Check if this is a SoAConstructor expression
+        const isSoAConstructor = value?.type === "SoAConstructor"
+        // Determine type from value - function pointer, string, SoA, or general
         const isFuncPtr = valueReg.startsWith("@")
         const isStringExpr = this.isStringProducingExpression(value)
-        const allocaType = (isFuncPtr || isStringExpr) ? "ptr" : "i64"
+        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor) ? "ptr" : "i64"
         ir.push(`  %${name} = alloca ${allocaType}`)
-        if (isFuncPtr) {
+        if (isSoAConstructor) {
+          // Build SOAType from struct fields and register it
+          const structFields = this.structDefs.get(value.structName)
+          if (structFields) {
+            const structFieldMap = new Map<string, any>()
+            for (const f of structFields) {
+              structFieldMap.set(f.name, f.fieldType)
+            }
+            const structType = new StructType(value.structName, structFieldMap)
+            const soaType = new SOAType(structType, value.capacity || 16)
+            this.variableTypes.set(name, soaType)
+            // Also register in structDefs for field lookup
+            this.structDefs.set(name, structFields)
+          }
+        } else if (isFuncPtr) {
           // Track as a function type for later loads
           this.variableTypes.set(name, { type: "FunctionType" })
         } else if (isStringExpr) {
@@ -2403,6 +2370,45 @@ class LLVMIRGenerator {
     // SoA literals are no longer supported in the new design.
     // SoA containers are declared with: soa name: StructType[capacity]
     return "0"
+  }
+
+  private generateSoAConstructor(ir: string[], expr: any): string {
+    const structName = expr.structName
+    const capacity = expr.capacity || 16  // default capacity
+    const structFields = this.structDefs.get(structName)
+
+    if (!structFields || structFields.length === 0) {
+      return "null"
+    }
+
+    const numFields = structFields.length
+
+    // Allocate storage block: one ptr per field
+    const storageReg = `%${this.valueCounter++}`
+    ir.push(`  ${storageReg} = call ptr @gc_alloc(i64 ${numFields * 8})`)
+
+    // Allocate one array per field
+    for (let i = 0; i < numFields; i++) {
+      const field = structFields[i]
+      const elemSize = 8  // all fields are 8 bytes (i64 or f64)
+
+      // Create dimensions array on stack
+      const dimsAlloca = `%${this.valueCounter++}`
+      ir.push(`  ${dimsAlloca} = alloca [1 x i64]`)
+      const dimPtr = `%${this.valueCounter++}`
+      ir.push(`  ${dimPtr} = getelementptr [1 x i64], ptr ${dimsAlloca}, i64 0, i64 0`)
+      ir.push(`  store i64 ${capacity}, ptr ${dimPtr}`)
+
+      const arrayReg = `%${this.valueCounter++}`
+      ir.push(`  ${arrayReg} = call ptr @array_alloc(i64 ${elemSize}, i64 1, ptr ${dimPtr})`)
+
+      // Store array pointer in storage block
+      const fieldPtr = `%${this.valueCounter++}`
+      ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${storageReg}, i64 ${i * 8}`)
+      ir.push(`  store ptr ${arrayReg}, ptr ${fieldPtr}`)
+    }
+
+    return storageReg
   }
 
   private generateMemberExpression(ir: string[], expr: any): string {

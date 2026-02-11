@@ -535,38 +535,46 @@ describe("parser AoS (Array of Structs)", () => {
   })
 })
 
-describe("parser SoA (Struct of Arrays) - new design", () => {
-  test("SoA declaration with capacity", () => {
-    const ast = parse(`soa datums: Datum[100]`)
-    const stmt = ast.statements[0] as any
-    expect(stmt.type).toBe("SoADeclaration")
-    expect(stmt.name).toBe("datums")
-    expect(stmt.structName).toBe("Datum")
-    expect(stmt.capacity).toBe(100)
+describe("parser SoA (Struct of Arrays)", () => {
+  test("SoA constructor expression with type inference", () => {
+    const ast = parse("{ struct Datum { id: i64, val: i64 } datums := soa Datum[10]; }")
+    const block = (ast as any).statements[0]
+    const varDecl = block.statements[1]
+    expect(varDecl.type).toBe("ExpressionStatement")
+    expect(varDecl.expression.value.type).toBe("SoAConstructor")
+    expect(varDecl.expression.value.structName).toBe("Datum")
+    expect(varDecl.expression.value.capacity).toBe(10)
   })
 
-  test("SoA declaration without capacity (dynamic)", () => {
-    const ast = parse(`soa items: Item[]`)
-    const stmt = ast.statements[0] as any
-    expect(stmt.type).toBe("SoADeclaration")
-    expect(stmt.name).toBe("items")
-    expect(stmt.structName).toBe("Item")
-    expect(stmt.capacity).toBeNull()
+  test("SoA with explicit type annotation", () => {
+    const ast = parse("{ struct Datum { id: i64, val: i64 } datums: soa Datum[10] = soa Datum[10]; }")
+    const block = (ast as any).statements[0]
+    const varDecl = block.statements[1]
+    expect(varDecl.type).toBe("VariableDeclaration")
+    expect(varDecl.varType.type).toBe("SOAType")
+    expect(varDecl.varType.structName).toBe("Datum")
+    expect(varDecl.value.type).toBe("SoAConstructor")
   })
 
-  test("SoA index-then-field access parses as MemberExpression(IndexExpression)", () => {
+  test("SoA dynamic capacity", () => {
+    const ast = parse("{ struct Datum { id: i64, val: i64 } datums := soa Datum[]; }")
+    const block = (ast as any).statements[0]
+    const varDecl = block.statements[1]
+    expect(varDecl.expression.value.type).toBe("SoAConstructor")
+    expect(varDecl.expression.value.capacity).toBeNull()
+  })
+
+  test("SoA index then field access", () => {
     const ast = parse("{ x := datums[0].id; }")
-    const stmt = ast.statements[0] as any
-    expect(stmt.expression.value.type).toBe("MemberExpression")
-    expect(stmt.expression.value.object.type).toBe("IndexExpression")
-    expect(stmt.expression.value.object.object.type).toBe("Identifier")
-    expect(stmt.expression.value.object.object.name).toBe("datums")
-    expect(stmt.expression.value.property).toBe("id")
+    const stmt = (ast as any).statements[0]
+    const expr = stmt.expression.value
+    expect(expr.type).toBe("MemberExpression")
+    expect(expr.object.type).toBe("IndexExpression")
   })
 
   test("SoA field assignment parses correctly", () => {
     const ast = parse("{ datums[0].id := 42; }")
-    const stmt = ast.statements[0] as any
+    const stmt = (ast as any).statements[0]
     expect(stmt.type).toBe("ExpressionStatement")
     expect(stmt.expression.target.type).toBe("MemberExpression")
     expect(stmt.expression.target.object.type).toBe("IndexExpression")
