@@ -477,6 +477,45 @@ fn main() -> i64 {
   println();
   println();
 
+  // --- Section: Closures ---
+  print_string("=== Closures ===");
+  println();
+
+  // Non-capturing lambda
+  double := fn(x: i64) -> i64 { x * 2 };
+  print_string("  double(21) = ");
+  print(double(21));
+  println();
+
+  // Closure capturing a variable (value capture)
+  offset: i64 = 100;
+  add_offset := fn(x: i64) -> i64 { x + offset };
+  print_string("  add_offset(42) = ");
+  print(add_offset(42));
+  println();
+
+  // make_adder pattern
+  fn make_adder(n: i64) -> fn(i64) -> i64 {
+    return fn(x: i64) -> i64 { x + n };
+  }
+  add5 := make_adder(5);
+  add10 := make_adder(10);
+  print_string("  add5(3) = ");
+  print(add5(3));
+  println();
+  print_string("  add10(3) = ");
+  print(add10(3));
+  println();
+
+  // Higher-order: passing closure as argument
+  fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    return f(x);
+  }
+  print_string("  apply(double, 7) = ");
+  print(apply(double, 7));
+  println();
+  println();
+
   // --- Summary ---
   print_string("=== Showcase Complete ===");
   println();

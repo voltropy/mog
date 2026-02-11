@@ -533,6 +533,9 @@ class SemanticAnalyzer {
   private requiredCapabilities: string[] = []
   private optionalCapabilities: string[] = []
   private capabilityDecls: Map<string, any> = new Map()
+  // Closure capture analysis
+  private currentCapturedVars: Set<string> | null = null
+  private lambdaScopeDepth: number = 0
 
   constructor() {
     this.symbolTable = new SymbolTable()
@@ -1223,9 +1226,7 @@ class SemanticAnalyzer {
     // Build FunctionType for the function
     const paramTypes = node.params.map((p: any) => p.paramType)
     const funcType = new FunctionType(paramTypes, returnType)
-    this.symbolTable.declare(node.name, "function", returnType)
-    // Also store function type for higher-order use
-    this.symbolTable.setCurrentType(node.name, funcType)
+    this.symbolTable.declare(node.name, "function", funcType)
 
     const prevFunction = this.currentFunction
     this.currentFunction = node.name
@@ -1521,6 +1522,13 @@ class SemanticAnalyzer {
     if (!symbol) {
       this.emitError(`Undefined variable '${node.name}'`, node.position)
       return null
+    }
+
+    // Track captured variables for closure analysis
+    if (this.currentCapturedVars && symbol &&
+        (symbol.symbolType === "variable" || symbol.symbolType === "parameter") &&
+        symbol.depth <= this.lambdaScopeDepth) {
+      this.currentCapturedVars.add(node.name)
     }
 
     return symbol.declaredType ?? symbol.inferredType
@@ -1927,6 +1935,10 @@ class SemanticAnalyzer {
           for (const namedArg of namedArgs) {
             this.visitExpression(namedArg.value)
           }
+        }
+        // If declaredType is a FunctionType, return its returnType
+        if (symbol.declaredType && isFunctionType(symbol.declaredType)) {
+          return (symbol.declaredType as FunctionType).returnType
         }
         return symbol.declaredType
       }
@@ -2402,10 +2414,15 @@ class SemanticAnalyzer {
     const prevFunction = this.currentFunction
     this.currentFunction = "__lambda__"
 
+    // Record the scope depth BEFORE pushing the lambda's scope
+    // Variables declared at depths <= this are "outer" variables
+    const outerScopeDepth = this.symbolTable.getCurrentDepth()
+
     // Push a new scope for the lambda's parameters
     this.symbolTable.pushScope()
 
     const paramTypes: Type[] = []
+    const paramNames = new Set<string>()
     for (const param of node.params) {
       let paramType = param.paramType
       if (paramType?.type === "CustomType") {
@@ -2415,12 +2432,41 @@ class SemanticAnalyzer {
         }
       }
       paramTypes.push(paramType)
+      paramNames.add(param.name)
       this.symbolTable.declare(param.name, "parameter", paramType)
       this.symbolTable.setCurrentType(param.name, paramType)
     }
 
+    // Set up capture tracking for the lambda body
+    const prevCaptured = this.currentCapturedVars
+    const prevLambdaScopeDepth = this.lambdaScopeDepth
+    this.currentCapturedVars = new Set<string>()
+    this.lambdaScopeDepth = outerScopeDepth
+
     // Visit the body (which can reference variables from enclosing scope - closures)
     this.visitBlock(node.body)
+
+    // Collect captured variables (exclude params - they are in the lambda's own scope)
+    const capturedVars: string[] = []
+    const capturedVarTypes: Map<string, Type> = new Map()
+    for (const varName of this.currentCapturedVars) {
+      if (!paramNames.has(varName)) {
+        capturedVars.push(varName)
+        // Look up the type of the captured variable
+        const symbol = this.symbolTable.lookup(varName)
+        if (symbol?.declaredType) {
+          capturedVarTypes.set(varName, symbol.declaredType)
+        } else if (symbol?.inferredType) {
+          capturedVarTypes.set(varName, symbol.inferredType)
+        }
+      }
+    }
+    ;(node as any).capturedVars = capturedVars
+    ;(node as any).capturedVarTypes = Object.fromEntries(capturedVarTypes)
+
+    // Restore capture tracking state
+    this.currentCapturedVars = prevCaptured
+    this.lambdaScopeDepth = prevLambdaScopeDepth
 
     this.symbolTable.popScope()
     this.currentFunction = prevFunction

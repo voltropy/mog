@@ -1,5 +1,5 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
-import { isArrayType, isMapType, isFloatType, IntegerType, UnsignedType, ArrayType, StructType, SOAType, ResultType, OptionalType } from "./types.js"
+import { isArrayType, isMapType, isFloatType, IntegerType, UnsignedType, ArrayType, StructType, SOAType, ResultType, OptionalType, FunctionType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -69,6 +69,9 @@ class LLVMIRGenerator {
   private stringNameMap: Map<string, string> = new Map()
   private lambdaCounter = 0
   private lambdaIR: string[] = []
+  // Closure support: wrappers for named functions used as values
+  private functionWrappers: Set<string> = new Set()
+  private wrapperIR: string[] = []
   // Track function parameter info for named arg / default arg resolution
   private functionParamInfo: Map<string, { name: string; paramType: any; defaultValue?: any }[]> = new Map()
   // Struct definitions: maps struct name -> ordered list of { name, type } fields
@@ -137,13 +140,25 @@ class LLVMIRGenerator {
     ir.push("")
 
     ir.push("; Function declarations")
-    // First pass: register all function types before generating code
+    // First pass: register all function types and signatures before generating code
+    // This is critical because nested functions (e.g., make_adder inside main) need
+    // to be callable before they're fully generated, since main is generated first.
     for (const funcDecl of functionDeclarations) {
+      const funcName = funcDecl.name === "main" ? "program_user" : funcDecl.name
       this.functionTypes.set(funcDecl.name, funcDecl.returnType)
-    }
-    // Register function parameter info for named/default arg handling
-    for (const funcDecl of functionDeclarations) {
-      this.functionParamInfo.set(funcDecl.name === "main" ? "program_user" : funcDecl.name, funcDecl.params)
+      this.functionParamInfo.set(funcName, funcDecl.params)
+      // Pre-register function signature so call sites can type arguments correctly
+      const llvmParams = (funcDecl.params || []).map((p: any) => ({
+        name: p.name,
+        type: this.toLLVMType(p.paramType)
+      }))
+      const llvmReturnType = this.toLLVMType(funcDecl.returnType)
+      this.functions.set(funcName, {
+        name: funcName,
+        returnType: llvmReturnType,
+        params: llvmParams,
+        body: [],
+      })
     }
     for (const funcDecl of functionDeclarations) {
       // Rename user's main() to @program_user to avoid conflict
@@ -158,6 +173,13 @@ class LLVMIRGenerator {
     if (this.lambdaIR.length > 0) {
       ir.push("; Lambda functions")
       ir.push(...this.lambdaIR)
+      ir.push("")
+    }
+
+    // Emit function wrappers (for named functions used as values)
+    if (this.wrapperIR.length > 0) {
+      ir.push("; Function wrappers for closure compatibility")
+      ir.push(...this.wrapperIR)
       ir.push("")
     }
 
@@ -281,6 +303,7 @@ class LLVMIRGenerator {
     ir.push("; Declare GC functions")
     ir.push("declare void @gc_init()")
     ir.push("declare ptr @gc_alloc(i64)")
+    ir.push("declare ptr @gc_alloc_closure(i64)")
     ir.push("declare void @gc_collect()")
     ir.push("declare void @gc_push_frame()")
     ir.push("declare void @gc_pop_frame()")
@@ -371,11 +394,36 @@ class LLVMIRGenerator {
         if (!isPointerLike && statement.value) {
           isPointerLike = this.isStringProducingExpression(statement.value)
         }
+        // Infer closure/function type from call expression returning ptr (function type)
+        if (!isPointerLike && statement.value) {
+          const val = statement.value as any
+          if (val.type === "CallExpression" && val.callee?.type === "Identifier") {
+            const calledFunc = this.functions.get(val.callee.name)
+            if (calledFunc && calledFunc.returnType === "ptr") {
+              isPointerLike = true
+            }
+          }
+        }
+        // Infer closure type from lambda expression
+        if (!isPointerLike && statement.value?.type === "Lambda") {
+          isPointerLike = true
+        }
         const allocaType = isPointerLike ? "ptr" : llvmType
         ir.push(`  ${reg} = alloca ${allocaType}`)
         if (isPointerLike && !statement.varType) {
-          // For inferred pointer types, register as ArrayType(u8, []) so isStringType works
-          this.variableTypes.set(statement.name, new ArrayType(new UnsignedType("u8"), []))
+          // Check if this is a function/closure value — register as FunctionType
+          const isFuncValue = statement.value?.type === "Lambda"
+            || (statement.value?.type === "CallExpression" && statement.value.callee?.type === "Identifier"
+                && this.functionTypes.get(statement.value.callee.name)?.type === "FunctionType")
+            || (statement.value?.type === "Identifier" && this.functions.has(statement.value.name))
+          if (isFuncValue) {
+            // Register as FunctionType so indirect call handler kicks in
+            const funcType = (statement.value as any)?.resultType || new FunctionType([], { type: "VoidType" } as any)
+            this.variableTypes.set(statement.name, funcType)
+          } else {
+            // For inferred pointer types, register as ArrayType(u8, []) so isStringType works
+            this.variableTypes.set(statement.name, new ArrayType(new UnsignedType("u8"), []))
+          }
         } else if (statement.varType?.type === "SOAType" && (statement.varType as any).structName && !(statement.varType instanceof SOAType)) {
           // Resolve raw SOAType annotation from parser to a real SOAType instance
           const soaStructName = (statement.varType as any).structName
@@ -540,6 +588,11 @@ class LLVMIRGenerator {
         }
         if (name === "E") {
           return "0x4005bf0a8b145769" // Math.E as f64 bit pattern
+        }
+
+        // If name is a known function (not a variable), wrap it as a closure value
+        if (this.functions.has(name) && !this.variableTypes.has(name)) {
+          return this.getOrCreateFunctionWrapper(ir, name)
         }
 
         const ptrReg = `%${name}_local`
@@ -1316,6 +1369,13 @@ class LLVMIRGenerator {
         return reg
       }
 
+      // Check if this is a variable holding a closure (not a direct function call)
+      const callerVarType = this.variableTypes.get(funcName)
+      if (callerVarType && (callerVarType.type === "FunctionType" || callerVarType instanceof FunctionType) && !this.functions.has(funcName)) {
+        // This is an indirect call through a closure variable - delegate to the closure call path below
+        // (falls through to the indirect call section at the end of this method)
+      } else {
+
       const funcInfo = this.functions.get(funcName)
 
       // POSIX function signatures for proper argument typing
@@ -1438,6 +1498,7 @@ class LLVMIRGenerator {
       const returnType = funcInfo?.returnType || posixReturnTypes[funcName] || "i64"
       ir.push(`  ${reg} = call ${returnType} @${funcName}(${typedArgs.join(", ")})`)
       return reg
+      } // end of else block for non-closure direct calls
     }
 
     // Handle capability function calls (MemberExpression like fs.read(...))
@@ -1549,19 +1610,56 @@ class LLVMIRGenerator {
       }
     }
 
-    // Handle indirect function call (calling a function pointer stored in a variable)
+    // Handle indirect function call (calling a closure stored in a variable)
     if (expr.callee.type === "Identifier") {
       const funcPtrName = expr.callee.name
-      // Load the function pointer from the variable
-      const ptrReg = `%${this.valueCounter++}`
-      ir.push(`  ${ptrReg} = load ptr, ptr %${funcPtrName}`)
-      
-      // Build typed args - default to i64 for each arg
-      const typedArgs = args.map((arg: string) => `i64 ${arg}`)
-      
-      // Indirect call through function pointer
+
+      // Determine the correct alloca name: parameters use %name_local, variables use %name
+      const isParam = this.currentFunction && this.currentFunction.params.find((p) => p.name === funcPtrName)
+      const allocaName = isParam ? `%${funcPtrName}_local` : `%${funcPtrName}`
+
+      // Load the closure struct pointer from the variable
+      const closureReg = `%${this.valueCounter++}`
+      ir.push(`  ${closureReg} = load ptr, ptr ${allocaName}`)
+
+      // Extract fn_ptr from closure[0]
+      const fnPtrReg = `%${this.valueCounter++}`
+      ir.push(`  ${fnPtrReg} = load ptr, ptr ${closureReg}`)
+
+      // Extract env_ptr from closure[1] (offset 8)
+      const envGep = `%${this.valueCounter++}`
+      ir.push(`  ${envGep} = getelementptr i8, ptr ${closureReg}, i64 8`)
+      const envReg = `%${this.valueCounter++}`
+      ir.push(`  ${envReg} = load ptr, ptr ${envGep}`)
+
+      // Build typed args with env as first arg
+      // Try to get actual param types from FunctionType if available
+      const varType = this.variableTypes.get(funcPtrName)
+      let typedUserArgs: string[]
+      if (varType && varType.paramTypes) {
+        // We have a FunctionType with known param types
+        typedUserArgs = args.map((arg: string, i: number) => {
+          const paramType = varType.paramTypes[i]
+          if (paramType) {
+            const llvmType = this.toLLVMType(paramType)
+            return `${llvmType} ${arg}`
+          }
+          return `i64 ${arg}`
+        })
+      } else {
+        typedUserArgs = args.map((arg: string) => `i64 ${arg}`)
+      }
+
+      const allArgs = [`ptr ${envReg}`, ...typedUserArgs]
+
+      // Determine return type
+      let retType = "i64"
+      if (varType && varType.returnType) {
+        retType = this.toLLVMType(varType.returnType)
+      }
+
       const resultReg = `%${this.valueCounter++}`
-      ir.push(`  ${resultReg} = call i64 ${ptrReg}(${typedArgs.join(", ")})`)
+      ir.push(`  ${resultReg} = call ${retType} ${fnPtrReg}(${allArgs.join(", ")})`)
       return resultReg
     }
 
@@ -2119,7 +2217,13 @@ class LLVMIRGenerator {
         // Check if this is a SoAConstructor expression
         const isSoAConstructor = value?.type === "SoAConstructor"
         // Determine type from value - function pointer, string, SoA, or general
-        const isFuncPtr = valueReg.startsWith("@")
+        // Lambda expressions now return closure pointers (ptr), not @name
+        // Also detect named functions used as values (Identifier that resolves to a known function)
+        const isNamedFuncRef = value?.type === "Identifier" && this.functions.has(value.name) && !this.variableTypes.has(value.name)
+        // Check if the value is a function call that returns ptr (e.g., make_adder(5) returning a closure)
+        const isClosureCall = value?.type === "CallExpression" && value.callee?.type === "Identifier"
+          && this.functions.get(value.callee.name)?.returnType === "ptr"
+        const isFuncPtr = valueReg.startsWith("@") || value?.type === "Lambda" || isNamedFuncRef || isClosureCall
         const isStringExpr = this.isStringProducingExpression(value)
         const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor) ? "ptr" : "i64"
         ir.push(`  %${name} = alloca ${allocaType}`)
@@ -2139,7 +2243,37 @@ class LLVMIRGenerator {
           }
         } else if (isFuncPtr) {
           // Track as a function type for later loads
-          this.variableTypes.set(name, { type: "FunctionType" })
+          // Try to extract actual FunctionType from Lambda or named function
+          if (value?.type === "Lambda") {
+            const paramTypes = (value.params || []).map((p: any) => p.paramType)
+            const retType = value.returnType
+            this.variableTypes.set(name, new FunctionType(paramTypes, retType))
+          } else if (isNamedFuncRef && this.functionTypes.has(value.name)) {
+            // Named function reference - get its FunctionType
+            const funcInfo = this.functions.get(value.name)
+            if (funcInfo) {
+              const paramTypes = funcInfo.params.map((p: any) => {
+                // Try to reverse-lookup param types from functionParamInfo
+                const paramInfo = this.functionParamInfo.get(value.name)
+                const pInfo = paramInfo?.find((pi: any) => pi.name === p.name)
+                return pInfo?.paramType || new IntegerType("i64")
+              })
+              const retType = this.functionTypes.get(value.name) || new IntegerType("i64")
+              this.variableTypes.set(name, new FunctionType(paramTypes, retType))
+            } else {
+              this.variableTypes.set(name, { type: "FunctionType" })
+            }
+          } else if (isClosureCall) {
+            // Function call returning a closure — extract the FunctionType from the called function's return type
+            const calledRetType = this.functionTypes.get(value.callee.name)
+            if (calledRetType && calledRetType.type === "FunctionType") {
+              this.variableTypes.set(name, calledRetType)
+            } else {
+              this.variableTypes.set(name, { type: "FunctionType" })
+            }
+          } else {
+            this.variableTypes.set(name, { type: "FunctionType" })
+          }
         } else if (isStringExpr) {
           // Track as string type for later isStringType checks
           this.variableTypes.set(name, new ArrayType(new UnsignedType("u8"), []))
@@ -3320,21 +3454,26 @@ class LLVMIRGenerator {
     const params = expr.params || []
     const returnType = expr.returnType
     const body = expr.body
+    const capturedVars: string[] = expr.capturedVars || []
+    const capturedVarTypes: Record<string, any> = expr.capturedVarTypes || {}
 
     // Save current state
     const savedFunction = this.currentFunction
     const savedBlockTerminated = this.blockTerminated
     const savedValueCounter = this.valueCounter
+    const savedVariableTypes = new Map(this.variableTypes)
 
     // Generate the lambda function IR into lambdaIR buffer
     const lambdaIrBuf: string[] = []
 
     this.resetValueCounter(10)
 
-    const llvmParams = params.map((p: any) => {
+    // Build param list WITH env as first param
+    const llvmParams: LLVMValue[] = [{ name: "__env", type: "ptr" as LLVMType }]
+    for (const p of params) {
       const llvmType = this.toLLVMType(p.paramType)
-      return { name: p.name, type: llvmType }
-    })
+      llvmParams.push({ name: p.name, type: llvmType })
+    }
 
     const llvmReturnType = this.toLLVMType(returnType)
 
@@ -3355,13 +3494,40 @@ class LLVMIRGenerator {
     lambdaIrBuf.push("entry:")
     lambdaIrBuf.push("  call void @gc_push_frame()")
 
+    // Copy user params to local allocas (skip __env)
     for (const param of llvmParams) {
+      if (param.name === "__env") continue
       const localReg = `%${param.name}_local`
       lambdaIrBuf.push(`  ${localReg} = alloca ${param.type}`)
       lambdaIrBuf.push(`  store ${param.type} %${param.name}, ptr ${localReg}`)
       const paramType = params.find((p: any) => p.name === param.name)?.paramType
       if (paramType) {
         this.variableTypes.set(param.name, paramType)
+      }
+    }
+
+    // Load captured variables from env struct
+    for (let i = 0; i < capturedVars.length; i++) {
+      const varName = capturedVars[i]
+      const offset = i * 8
+      const capturedType = capturedVarTypes[varName]
+      const isFloat = capturedType?.type === "FloatType"
+      const isPtr = capturedType?.type === "ArrayType" || capturedType?.type === "PointerType" ||
+                    capturedType?.type === "StructType" || capturedType?.type === "CustomType" ||
+                    capturedType?.type === "SOAType" || capturedType?.type === "FunctionType" ||
+                    capturedType?.type === "MapType"
+      const llvmType = isFloat ? "double" : (isPtr ? "ptr" : "i64")
+
+      const gepReg = `%__env_gep_${i}`
+      lambdaIrBuf.push(`  ${gepReg} = getelementptr i8, ptr %__env, i64 ${offset}`)
+      const loadReg = `%__env_load_${i}`
+      lambdaIrBuf.push(`  ${loadReg} = load ${llvmType}, ptr ${gepReg}`)
+      // Create a local alloca so the rest of the body can use %varName as before
+      lambdaIrBuf.push(`  %${varName} = alloca ${llvmType}`)
+      lambdaIrBuf.push(`  store ${llvmType} ${loadReg}, ptr %${varName}`)
+      // Register the variable type so codegen works correctly
+      if (capturedType) {
+        this.variableTypes.set(varName, capturedType)
       }
     }
     lambdaIrBuf.push("")
@@ -3399,9 +3565,114 @@ class LLVMIRGenerator {
     this.currentFunction = savedFunction
     this.blockTerminated = savedBlockTerminated
     this.valueCounter = savedValueCounter
+    this.variableTypes = savedVariableTypes
 
-    // Return a function pointer to the lambda
-    return `@${lambdaName}`
+    // Create closure struct in the CALLER's IR context
+    if (capturedVars.length > 0) {
+      // Allocate environment with gc_alloc_closure
+      const envReg = `%${this.valueCounter++}`
+      ir.push(`  ${envReg} = call ptr @gc_alloc_closure(i64 ${capturedVars.length})`)
+
+      // Store captured values into environment
+      for (let i = 0; i < capturedVars.length; i++) {
+        const varName = capturedVars[i]
+        const capturedType = capturedVarTypes[varName]
+        const isFloat = capturedType?.type === "FloatType"
+        const isPtr = capturedType?.type === "ArrayType" || capturedType?.type === "PointerType" ||
+                      capturedType?.type === "StructType" || capturedType?.type === "CustomType" ||
+                      capturedType?.type === "SOAType" || capturedType?.type === "FunctionType" ||
+                      capturedType?.type === "MapType"
+        const llvmType = isFloat ? "double" : (isPtr ? "ptr" : "i64")
+
+        // Determine the correct alloca name: parameters use %name_local, variables use %name
+        const isParamInCaller = this.currentFunction && this.currentFunction.params.find((p) => p.name === varName)
+        const loadFrom = isParamInCaller ? `%${varName}_local` : `%${varName}`
+
+        const varReg = `%${this.valueCounter++}`
+        ir.push(`  ${varReg} = load ${llvmType}, ptr ${loadFrom}`)
+
+        const slotPtr = `%${this.valueCounter++}`
+        ir.push(`  ${slotPtr} = getelementptr i8, ptr ${envReg}, i64 ${i * 8}`)
+
+        if (isFloat) {
+          // Bitcast double to i64 for uniform 8-byte storage
+          const intReg = `%${this.valueCounter++}`
+          ir.push(`  ${intReg} = bitcast double ${varReg} to i64`)
+          ir.push(`  store i64 ${intReg}, ptr ${slotPtr}`)
+        } else {
+          ir.push(`  store ${llvmType} ${varReg}, ptr ${slotPtr}`)
+        }
+      }
+
+      // Allocate closure pair (fn_ptr + env_ptr)
+      const closureReg = `%${this.valueCounter++}`
+      ir.push(`  ${closureReg} = call ptr @gc_alloc(i64 16)`)
+      ir.push(`  store ptr @${lambdaName}, ptr ${closureReg}`)
+      const envSlot = `%${this.valueCounter++}`
+      ir.push(`  ${envSlot} = getelementptr i8, ptr ${closureReg}, i64 8`)
+      ir.push(`  store ptr ${envReg}, ptr ${envSlot}`)
+
+      return closureReg
+    } else {
+      // No captures — still create closure pair but with null env
+      const closureReg = `%${this.valueCounter++}`
+      ir.push(`  ${closureReg} = call ptr @gc_alloc(i64 16)`)
+      ir.push(`  store ptr @${lambdaName}, ptr ${closureReg}`)
+      const envSlot = `%${this.valueCounter++}`
+      ir.push(`  ${envSlot} = getelementptr i8, ptr ${closureReg}, i64 8`)
+      ir.push(`  store ptr null, ptr ${envSlot}`)
+
+      return closureReg
+    }
+  }
+
+  /**
+   * Generate a wrapper function for a named function so it can be used as a closure value.
+   * Named functions don't have the `ptr %__env` first parameter, so we generate a thin
+   * wrapper that accepts __env (and ignores it) and forwards the call.
+   */
+  private getOrCreateFunctionWrapper(ir: string[], funcName: string): string {
+    const wrapperName = `__wrap_${funcName}`
+    
+    if (!this.functionWrappers.has(funcName)) {
+      this.functionWrappers.add(funcName)
+      
+      const funcInfo = this.functions.get(funcName)
+      if (funcInfo) {
+        const wrapperParams: string[] = ["ptr %__env"]
+        const forwardArgs: string[] = []
+        
+        for (let i = 0; i < funcInfo.params.length; i++) {
+          const p = funcInfo.params[i]
+          wrapperParams.push(`${p.type} %__p${i}`)
+          forwardArgs.push(`${p.type} %__p${i}`)
+        }
+        
+        const retType = funcInfo.returnType
+        
+        this.wrapperIR.push(`define ${retType} @${wrapperName}(${wrapperParams.join(", ")}) nounwind {`)
+        this.wrapperIR.push("entry:")
+        if (retType === "void") {
+          this.wrapperIR.push(`  call void @${funcName}(${forwardArgs.join(", ")})`)
+          this.wrapperIR.push("  ret void")
+        } else {
+          this.wrapperIR.push(`  %__result = call ${retType} @${funcName}(${forwardArgs.join(", ")})`)
+          this.wrapperIR.push(`  ret ${retType} %__result`)
+        }
+        this.wrapperIR.push("}")
+        this.wrapperIR.push("")
+      }
+    }
+    
+    // Create a closure pair with the wrapper and null env
+    const closureReg = `%${this.valueCounter++}`
+    ir.push(`  ${closureReg} = call ptr @gc_alloc(i64 16)`)
+    ir.push(`  store ptr @${wrapperName}, ptr ${closureReg}`)
+    const envSlot = `%${this.valueCounter++}`
+    ir.push(`  ${envSlot} = getelementptr i8, ptr ${closureReg}, i64 8`)
+    ir.push(`  store ptr null, ptr ${envSlot}`)
+    
+    return closureReg
   }
 
   private generateMatchExpression(ir: string[], expr: any): string {

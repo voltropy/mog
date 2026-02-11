@@ -33,7 +33,8 @@ typedef enum {
   OBJ_ARRAY,    /* Array with dimensions/strides/data */
   OBJ_MAP,      /* Hash map with buckets/entries */
   OBJ_STRING,   /* String buffer */
-  OBJ_ENTRY     /* Map entry with key/value */
+  OBJ_ENTRY,    /* Map entry with key/value */
+  OBJ_CLOSURE   /* Closure environment — slots that may be GC pointers */
 } ObjectKind;
 
 /* --- GC Block Header --- */
@@ -331,6 +332,10 @@ void* gc_alloc(size_t size) {
   return gc_alloc_kind(size, OBJ_RAW);
 }
 
+void* gc_alloc_closure(size_t num_slots) {
+  return gc_alloc_kind(num_slots * 8, OBJ_CLOSURE);
+}
+
 void* gc_alloc_kind(size_t size, ObjectKind kind) {
   void* result;
   
@@ -384,6 +389,7 @@ typedef struct Map {
 void gc_trace_array(Array* arr);
 void gc_trace_map(Map* map);
 void gc_trace_map_entry(MapEntry* entry);
+void gc_trace_closure(void* env, size_t size);
 
 void gc_mark(Block* ptr) {
   if (!ptr || ptr->marked) return;
@@ -404,6 +410,9 @@ void gc_mark(Block* ptr) {
         break;
       case OBJ_ENTRY:
         gc_trace_map_entry((MapEntry*)((uintptr_t)block + sizeof(Block)));
+        break;
+      case OBJ_CLOSURE:
+        gc_trace_closure((void*)((uintptr_t)block + sizeof(Block)), block->size);
         break;
       case OBJ_RAW:
       case OBJ_STRING:
@@ -474,6 +483,24 @@ void gc_trace_map_entry(MapEntry* entry) {
   /* Note: entry->value could be a pointer to another heap object.
      For now we assume values are primitives (i64).
      If values can be references, we'd need to trace them here. */
+}
+
+void gc_trace_closure(void* env, size_t size) {
+  if (!env) return;
+  
+  /* Closure environments contain slots that may be pointers to GC objects.
+     Each slot is 8 bytes. Scan all slots conservatively. */
+  size_t num_slots = size / 8;
+  int64_t* slots = (int64_t*)env;
+  for (size_t i = 0; i < num_slots; i++) {
+    void* maybe_ptr = (void*)slots[i];
+    if (maybe_ptr) {
+      Block* child = ptr_to_block(maybe_ptr);
+      if (child && !child->marked) {
+        mark_stack_push(child);
+      }
+    }
+  }
 }
 
 /* --- Shadow Stack Implementation --- */
