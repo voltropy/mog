@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 if [ $# -lt 1 ]; then
-  echo "Usage: ./algb <file.algol> [args...]"
+  echo "Usage: ./algb <file.mog> [args...]"
   exit 1
 fi
 
-ALGOL_FILE="$1"
+MOG_FILE="$1"
 shift
 
 BUN_EXE=$(command -v bun)
@@ -12,19 +12,19 @@ LLC="/opt/homebrew/opt/llvm/bin/llc"
 CLANG=$(command -v clang)
 RUNTIME="./build/runtime.a"
 
-if [ ! -f "$ALGOL_FILE" ]; then
-  echo "Error: File not found: $ALGOL_FILE"
+if [ ! -f "$MOG_FILE" ]; then
+  echo "Error: File not found: $MOG_FILE"
   exit 1
 fi
 
-BASENAME=$(basename "$ALGOL_FILE" .algol)
+BASENAME=$(basename "$MOG_FILE" .mog)
 BUILD_DIR="./build"
 LL_FILE="$BUILD_DIR/temp.ll"
 O_FILE="$BUILD_DIR/temp.o"
 EXE_FILE="$BASENAME"
 
-echo "Compiling $ALGOL_FILE..."
-$BUN_EXE ./compile "$ALGOL_FILE" > /dev/null 2>&1
+echo "Compiling $MOG_FILE..."
+$BUN_EXE ./compile "$MOG_FILE" > /dev/null 2>&1
 if [ $? -ne 0 ]; then
   exit 1
 fi

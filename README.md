@@ -1,17 +1,22 @@
 # Mog
 
-A compiled programming language with an LLVM backend, designed for clean syntax and predictable behavior. Mog compiles to native executables with strong static typing, structs, n-dimensional arrays, and direct POSIX access.
+A small, statically-typed, embeddable language for ML workflows and LLM agent scripting. Compiles to native code via LLVM. Think of it as a statically-typed Lua with native tensor support and async I/O.
 
-## Features
+## Use Cases
 
-- **Compiled to native code** - LLVM backend produces optimized executables
-- **Strong static typing** - Explicit types with no implicit coercion (`i8`-`i64`, `u8`-`u64`, `f32`/`f64`, `ptr`, `string`)
-- **Structs with named fields** - Heap-allocated structs with field access and assignment
-- **N-dimensional arrays** - Fixed-size and dynamic arrays with element-wise operations
-- **Maps** - Lua-like key-value stores with dot and bracket access
-- **POSIX bindings** - Direct access to filesystem operations and BSD sockets
-- **Automatic memory management** - Mark-and-sweep garbage collector with large object support
-- **467 tests** passing across 10 test files
+- LLM agent tool-use scripts
+- ML training and inference workflows
+- Plugin/extension scripting for host applications
+- Short automation scripts
+
+## Design Philosophy
+
+1. **Small surface area** — entire language fits in an LLM's context window
+2. **Predictable semantics** — no implicit coercion, no operator precedence puzzles, no hidden control flow
+3. **Familiar syntax** — curly braces, `fn`, `->`, `:=`; blend of Rust/Go/TypeScript
+4. **Safe by default** — GC, bounds-checked, no null, no raw pointers; cannot crash host
+5. **Host provides I/O** — no built-in file/network/system access; capabilities explicitly granted by host
+6. **ML as first-class concern** — tensor types with hardware-relevant dtypes, shape checking
 
 ## Installation
 
@@ -21,476 +26,346 @@ bun install
 
 ## Usage
 
-Compile an Mog program:
-
 ```bash
-bun run src/index.ts input.mog
+# Compile a Mog program
+bun run src/index.ts program.mog
+
+# Run the executable
+./program
 ```
 
-Run the compiled executable:
+## Language Overview
 
-```bash
-./input  # (if your file was named input.mog)
-```
-
-## Language Syntax
-
-### Program Structure
-
-Mog programs can be written in two styles:
-
-**Style 1: Script-style (no main function)**
+### Hello World
 
 ```mog
-// Script-style - runs top-level statements
-x: i64 = 10;
-y: i64 = 20;
-result: i64 = x + y;
-```
-
-**Style 2: main() function (with exit code)**
-
-```mog
-// main() function style - returns exit code
-fn main() -> i64 {
-  x: i64 = 10;
-  y: i64 = 20;
-  result: i64 = x + y;
-  return result;
+fn main() {
+  print("hello, world");
 }
 ```
 
-When using `main()`, the return value becomes the program's exit code (truncated from i64 to i32).
+### Variables
 
-### Variable Declaration
+`:=` for initial binding, `=` for reassignment. Type inference or explicit annotation:
 
 ```mog
-name: type = value;
+x := 42;             // inferred as int
+name: string = "hi"; // explicit type
+x = x + 1;           // reassignment
 ```
 
-Supported types:
-- **Signed integers**: `i8`, `i16`, `i32`, `i64`, `i128`, `i256`
-- **Unsigned integers**: `u8`, `u16`, `u32`, `u64`, `u128`, `u256`
-- **Floats**: `f8`, `f16`, `f32`, `f64`, `f128`, `f256`
-- **Other**: `ptr` (pointer), `string` (byte array)
+### Types
+
+| Type | Description |
+|------|-------------|
+| `int` | 64-bit signed integer (default) |
+| `float` | 64-bit floating point (default) |
+| `bool` | `true` or `false` |
+| `string` | UTF-8, immutable, GC-managed |
+
+**Numeric precision types** (primarily for tensor element types):
+
+- Integers: `i8`, `i16`, `i32`, `i64`
+- Unsigned: `u8`, `u16`, `u32`, `u64`
+- Floating point: `f16`, `bf16`, `f32`, `f64`
+
+Widening conversions are implicit (`i32` → `int`, `f32` → `float`). Narrowing requires explicit `as` cast.
 
 ### Functions
 
 ```mog
-fn name(param: type) -> return_type {
-  return value;
-}
-```
-
-Example with multiple parameters:
-
-```mog
-fn add(a: i64, b: i64) -> i64 {
+fn add(a: int, b: int) -> int {
   return a + b;
 }
+
+// Single-expression body
+fn double(x: int) -> int { x * 2 }
+
+// No return value
+fn greet(name: string) {
+  print("hello " + name);
+}
 ```
 
-Nested functions are supported - define functions inside other functions:
+**Closures** — functions are first-class values:
 
 ```mog
-fn outer() -> i64 {
-  fn inner() -> i64 {
-    return 42;
-  }
-  return inner();
+fn make_adder(n: int) -> fn(int) -> int {
+  return fn(x: int) -> int { x + n };
 }
+```
+
+**Named arguments with defaults:**
+
+```mog
+fn train(model: Model, data: tensor<f32>, epochs: int = 10, lr: float = 0.001) -> Model {
+  // ...
+}
+trained := train(model, data, epochs: 50, lr: 0.0001);
 ```
 
 ### Control Flow
 
-#### If Statement
-
 ```mog
-if (condition) {
-  statements;
-} else {
-  statements;
+// If/else (also works as expression)
+sign := if x > 0 { 1 } else if x < 0 { -1 } else { 0 };
+
+// While
+while condition {
+  // ...
+}
+
+// For loop — ranges, arrays, maps
+for i in 0..10 { ... }
+for item in items { ... }
+for i, item in items { ... }
+for key, value in config { ... }
+
+// Break and continue
+while true {
+  if done { break; }
+  if skip { continue; }
 }
 ```
 
-#### While Loop
+### Composite Types
+
+**Arrays** — dynamically-sized, homogeneous, GC-managed:
 
 ```mog
-while (condition) {
-  statements;
-}
+scores := [95.5, 88.0, 72.3];
+scores.push(91.0);
+first := scores[0];
+slice := scores[1:3];
+length := scores.len;
 ```
 
-#### For Loop
+**Maps** — key-value dictionaries:
 
 ```mog
-for variable := start to end {
-  statements;
-}
+ages := {"alice": 30, "bob": 25};
+ages["charlie"] = 28;
+if ages.has("alice") { ... }
+for key, value in ages { ... }
 ```
 
-#### Break and Continue
+**Structs** — named product types, no methods, no inheritance:
 
 ```mog
-while (condition) {
-  if (some_condition) {
-    break;     // Exit the loop immediately
+struct Point { x: float, y: float }
+
+p := Point { x: 1.0, y: 2.0 };
+p.x = 3.0;
+```
+
+**Optional type** — no null, use `?T`:
+
+```mog
+fn find(items: [string], target: string) -> ?int {
+  for i, item in items {
+    if item == target { return some(i); }
   }
-  if (other_condition) {
-    continue;  // Skip to next iteration
-  }
+  return none;
+}
+
+result := find(names, "alice");
+if result is some(idx) {
+  print("found at {idx}");
 }
 ```
+
+### Tensors
+
+N-dimensional arrays with fixed element dtype. The core ML primitive:
+
+```mog
+// Creation
+t := tensor([1.0, 2.0, 3.0]);
+m := tensor<f16>([[1, 2], [3, 4]]);
+z := tensor.zeros([3, 224, 224]);
+
+// Elementwise ops
+c := a + b;
+d := a * b;
+e := a ** 2;
+
+// Reductions
+total := t.sum();
+avg := t.mean(dim: 0);
+
+// Linear algebra
+result := matmul(weights, input);
+d := dot(a, b);
+
+// ML operations
+out := relu(linear_out);
+loss := cross_entropy(logits, labels);
+attn := scaled_dot_product_attention(q, k, v);
+
+// Autograd
+w := tensor([1.0, 2.0]).requires_grad();
+loss.backward();
+gradient := w.grad;
+
+with no_grad() {
+  w = w - lr * w.grad;
+}
+
+// Dtype conversion
+half := t.to(f16);
+```
+
+### Error Handling
+
+Errors are values, not exceptions. `Result<T>` with `?` propagation:
+
+```mog
+fn load_config(path: string) -> Result<Config> {
+  content := fs.read(path)?;  // returns early on error
+  return ok(parse(content));
+}
+
+match load_config("settings.json") {
+  ok(config) => use(config),
+  err(msg) => print("failed: {msg}"),
+}
+```
+
+### Async/Await
+
+For external operations (API calls, model inference, file I/O):
+
+```mog
+async fn fetch_all(urls: [string]) -> [Result<string>] {
+  tasks := urls.map(fn(url) { http.get(url) });
+  return await all(tasks);
+}
+
+result := await http.get("https://example.com");
+```
+
+### Host Capabilities
+
+Mog has **no built-in I/O**. All side effects come through capability objects provided by the host:
+
+```mog
+requires fs, http, model;
+optional log, env;
+
+fn main() {
+  data := fs.read("input.txt")?;
+  result := await model.predict(data);
+  fs.write("output.txt", result)?;
+}
+```
+
+Standard capabilities: `fs`, `http`, `model`, `log`, `env`, `db`. The compiler rejects undeclared capability usage. The host rejects scripts needing capabilities it doesn't provide.
+
+### String Operations
+
+```mog
+name := "world";
+greeting := "hello {name}";        // interpolation
+upper := greeting.upper();
+parts := "a,b,c".split(",");
+sub := greeting[0:5];              // slicing
+n := str(42);                      // conversion
+```
+
+### Math Builtins
+
+Available without import: `abs`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `exp`, `log`, `log2`, `floor`, `ceil`, `round`, `min`, `max`, `PI`, `E`.
 
 ### Operators
 
-- **Arithmetic**: `+`, `-`, `*`, `/`, `%`
-- **Bitwise**: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `<<` (left shift), `>>` (right shift)
-- **Comparison**: `<`, `>`, `==`, `!=`, `<=`, `>=`
-- **Logical**: `not`, `!` (logical NOT)
-- **Assignment**: `:=`
-
-All operators have clear, explicit precedence—no surprises.
-
-### I/O Functions
-
-#### Print Functions
-
-```mog
-print(value);          # Print any type without newline (auto-detects type)
-println(value);        # Print any type with newline
-println();             # Print just a newline
-
-// Type-specific variants (for explicit control):
-print_i64(value);      # Print i64 without newline
-println_i64(value);    # Print i64 with newline
-print_f64(value);      # Print f64 without newline
-println_f64(value);    # Print f64 with newline
-```
-
-Type-specific variants:
-- `print_i64`, `print_u64`, `print_f64` - Print without newline
-- `println_i64`, `println_u64`, `println_f64` - Print with newline
-
-#### Input Functions
-
-```mog
-value: i64 = input_i64();  # Read integer from stdin
-```
-
-Type-specific variants:
-- `input_i64` - Read signed 64-bit integer
-- `input_u64` - Read unsigned 64-bit integer  
-- `input_f64` - Read 64-bit float
-- `input_string` - Read string (returns pointer)
-
-### Arrays and N-Dimensional Arrays
-
-```mog
-// 1D arrays
-arr: i64[] = [1, 2, 3];
-element: i64 = arr[0];
-arr[0] := 100;  // Modify element
-
-// 2D arrays (matrices)
-mat: i64[][] = [[1, 2], [3, 4]];
-val: i64 = mat[0][1];  // Returns 2
-
-// Array fill syntax - create array with repeated value
-zeros: [i64; 5] = [0; 5];      // [0, 0, 0, 0, 0]
-fives: [f64; 3] = [5.0; 3];    // [5.0, 5.0, 5.0]
-
-// N-dimensional arrays for ML workloads (future)
-// tensor: f64[3][224][224] = ...;  // For image processing
-```
-
-### Maps
-
-Key-value stores with string keys, created using `table_new` and accessed with bracket notation:
-
-```mog
-// Create a map
-tbl: ptr = table_new(4);
-
-// Set values using bracket notation
-tbl["host"] := 42;           // String key
-tbl["port"] := 8080;         // String key
-
-// Set values using function call (key, key_length, value)
-table_set(tbl, "key", 3, 42);
-
-// Get values
-val: i64 = table_get(tbl, "key", 3);
-```
-
-Map literals with member access:
-```mog
-person = {name: "Alice", age: 30};
-print(person.age);
-println();
-```
-
-### Structs
-
-Structs group related data with named, typed fields. Fields are separated by commas. Structs are heap-allocated and accessed via pointer.
-
-```mog
-struct Point { x: f64, y: f64 }
-
-// Create with explicit type prefix
-p: Point = Point { x: 1.0, y: 2.0 };
-
-// Field access
-print(p.x);
-println();
-
-// Field assignment
-p.x := 5.0;
-```
-
-Structs work as function parameters and return types:
-```mog
-struct Point { x: f64, y: f64 }
-
-fn create_point(x: f64, y: f64) -> Point {
-  return Point { x: x, y: y };
-}
-
-fn move_point(p: Point, dx: f64, dy: f64) -> Point {
-  p.x := p.x + dx;
-  p.y := p.y + dy;
-  return p;
-}
-
-fn main() -> i64 {
-  p: Point = create_point(1.0, 2.0);
-  p := move_point(p, 5.0, 10.0);
-  print(p.x);   // 6.0
-  println();
-  return 0;
-}
-```
-
-### SoA (Struct of Arrays)
-
-SoA declarations store each field as a separate array. Access pattern is `soa.field[i]`:
-
-```mog
-soa Particles {
-  x: [f64],
-  y: [f64]
-}
-
-particles: Particles = Particles {
-  x: [1.0, 2.0, 3.0],
-  y: [4.0, 5.0, 6.0]
-};
-
-// Access: field then index
-first_x: f64 = particles.x[0];
-particles.x[0] := 10.0;
-```
-
-### Strings
-
-Strings are arrays of unsigned bytes (`u8`) with special syntax support:
-
-```mog
-// String literals use double quotes
-msg: string = "Hello, World!";
-greeting: string = "Hi";
-
-// String indexing - get character at position
-first: u8 = msg[0];         // 'H' (ASCII 72)
-
-// String slicing - extract substring
-sub: string = msg[0:5];     // "Hello" (positions 0-4)
-world: string = msg[7:12];  // "World" (positions 7-11)
-
-// String length
-len: i64 = string_length(msg);
-
-// String concatenation
-combined: string = string_concat(greeting, " there!");
-```
-
-### POSIX Filesystem Operations
-
-Mog provides direct access to POSIX filesystem functions for low-level file operations.
-
-**Note:** On macOS ARM64, `open()` with `O_CREAT` has calling convention issues. Use `creat()` instead for creating files.
-
-#### Basic File Operations
-
-```mog
-# Open, write, and close a file
-fd: i64 = open("output.txt", O_CREAT | O_WRONLY, 0644);
-if (fd == -1) {
-  return 1;  # Error handling
-}
-write(fd, "Hello World\n", 12);
-close(fd);
-
-# Read from a file
-fd = open("output.txt", O_RDONLY, 0);
-buf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];  # Buffer array
-bytes_read: i64 = read(fd, buf, 12);
-close(fd);
-
-# Alternative: Use creat() on macOS instead of open() with O_CREAT
-fd = creat("newfile.txt", 0644);
-write(fd, "data", 4);
-close(fd);
-```
-
-Common open flags: `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`, `O_APPEND`
-
-#### Directory Operations
-
-```mog
-# Create and remove directories
-result: i64 = mkdir("mydir", 0755);
-if (result == -1) {
-  return 1;
-}
-rmdir("mydir");
-
-# Open and read directory entries
-dir: ptr = opendir("mydir");
-if (dir != 0) {
-  # Process directory entries...
-  rewinddir(dir);  # Reset to beginning
-  closedir(dir);
-}
-```
-
-#### File Metadata
-
-```mog
-# stat - get file information
-statbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                  0, 0, 0];
-result: i64 = stat("file.txt", statbuf);
-
-# lstat - get symlink info (not target)
-lstatbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0];
-result = lstat("symlink.txt", lstatbuf);
-
-# fstat - get info from file descriptor
-fd: i64 = open("file.txt", O_RDONLY, 0);
-fstatbuf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0];
-result = fstat(fd, fstatbuf);
-close(fd);
-
-# Change permissions
-chmod("file.txt", 0644);       # By path
-fchmod(fd, 0755);              # By file descriptor
-```
-
-#### Working with Buffers
-
-Buffers for POSIX functions are created as i64 arrays. Pass the array directly (no cast needed):
-
-```mog
-# Small buffer for string operations
-small_buf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-
-# Large buffer for file reading
-read_buf: i64[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0, 0];
-bytes: i64 = read(fd, read_buf, 512);
-```
-
-#### Common Patterns and Best Practices
-
-```mog
-# Pattern 1: Always check for errors
-fd: i64 = open("file.txt", O_RDONLY, 0);
-if (fd == -1) {
-  return 1;  # Handle error
-}
-
-# Pattern 2: Cleanup on error
-dir_result: i64 = mkdir("test_dir", 0755);
-if (dir_result == -1) {
-  return 1;
-}
-fd = open("test_dir/file.txt", O_CREAT | O_WRONLY, 0644);
-if (fd == -1) {
-  rmdir("test_dir");  # Cleanup
-  return 2;
-}
-
-# Pattern 3: Close files before unlinking
-write(fd, "data", 4);
-close(fd);  # Close first
-unlink("file.txt");  # Then remove
-
-# Pattern 4: Cleanup files after tests
-unlink("temp_file.txt");
-rmdir("temp_dir");
-```
-
-### POSIX Sockets
-
-Mog provides BSD socket wrappers for network programming:
-
-```mog
-fn main() -> i64 {
-  // Create a TCP socket
-  sockfd: i64 = sys_socket(2, 1, 0);  // AF_INET, SOCK_STREAM
-
-  // Resolve IP address
-  ip_addr: i64 = sys_inet_addr("93.184.216.34");
-
-  // Connect to remote host on port 80
-  result: i64 = sys_connect(sockfd, ip_addr, 80);
-  if (result < 0) {
-    sys_close(sockfd);
-    return 1;
-  }
-
-  // Send HTTP request
-  request: ptr = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n";
-  sys_send(sockfd, request, 40);
-
-  // Receive response
-  buf: ptr = gc_alloc(4096);
-  bytes: i64 = sys_recv(sockfd, buf, 4096);
-
-  // Print and clean up
-  print_string(buf);
-  sys_close(sockfd);
-  return 0;
-}
-```
-
-Available socket functions: `sys_socket`, `sys_connect`, `sys_send`, `sys_recv`, `sys_close`, `sys_fcntl`, `sys_inet_addr`, `sys_errno`.
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%`, `**`
+- **Comparison**: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- **Logical**: `and`, `or`, `not`
+- **Bitwise**: `&`, `|`, `~`
+- **Assignment**: `:=` (bind), `=` (reassign)
+- **Other**: `?` (error propagation), `..` (range), `as` (cast)
 
 ## Examples
 
-The repository includes HTTP client examples demonstrating socket programming:
+### Agent Tool Script
 
-- `http_client.mog` - Full HTTP client with connection, request, and response handling
-- `minimal_http.mog` - Minimal HTTP GET request
-- `clean_http.mog` - Clean HTTP client with error handling
+```mog
+requires http, model, log;
 
-Try compiling one:
+struct SearchResult { title: string, url: string, score: float }
 
-```bash
-bun run src/index.ts http_client.mog
-./http_client
+async fn search(query: string) -> Result<[SearchResult]> {
+  response := await http.get("https://api.search.com?q={query}")?;
+  results := parse_results(response);
+  log.info("found {results.len} results for '{query}'");
+  return ok(results);
+}
+
+async fn main() {
+  results := await search("machine learning")?;
+  top := results.filter(fn(r) { r.score > 0.8 });
+  for r in top {
+    print("{r.title}: {r.url}");
+  }
+}
 ```
+
+### ML Training Loop
+
+```mog
+requires model, log;
+
+fn main() {
+  x := tensor.randn([64, 784]);
+  w := tensor.randn([784, 10]).requires_grad();
+  target := tensor.zeros([64, 10]);
+  lr := 0.01;
+
+  for epoch in 0..100 {
+    logits := matmul(x, w);
+    loss := cross_entropy(logits, target);
+    loss.backward();
+
+    with no_grad() {
+      w = w - lr * w.grad;
+    }
+
+    if epoch % 10 == 0 {
+      log.info("epoch {epoch}: loss = {loss}");
+    }
+  }
+}
+```
+
+### Plugin Script
+
+```mog
+optional log;
+
+struct Input { text: string, max_length: int }
+struct Output { result: string, truncated: bool }
+
+fn process(input: Input) -> Output {
+  text := input.text;
+  truncated := false;
+  if text.len > input.max_length {
+    text = text[0:input.max_length];
+    truncated = true;
+  }
+  return Output { result: text, truncated: truncated };
+}
+```
+
+## What Mog Is Not
+
+- No raw pointers or manual memory management
+- No POSIX syscalls or direct OS access
+- No threads or locks
+- No inheritance or OOP
+- No macros
+- No generics (beyond tensor dtype parameterization)
+- No exceptions with stack unwinding
+- No operator overloading (beyond tensor ops)
 
 ## Testing
 
@@ -498,50 +373,48 @@ bun run src/index.ts http_client.mog
 bun test
 ```
 
-## Formatting
-
-Use the included formatter to ensure consistent indentation:
-
-```bash
-python3 format_mog.py
-```
-
-This formats all `.mog` files with 2-space indentation based on brace nesting.
+504 tests passing across 11 test files.
 
 ## Architecture
 
-- `src/lexer.ts` - Lexical analysis (tokenization)
-- `src/parser.ts` - Parsing (AST generation)
-- `src/analyzer.ts` - Semantic analysis (type checking)
-- `src/compiler.ts` - Compiler orchestration
-- `src/llvm_codegen.ts` - LLVM IR code generation
-- `src/linker.ts` - Links LLVM IR to executable
-- `src/stdlib.ts` - Standard library functions
-- `src/types.ts` - Type definitions
-- `runtime/` - C runtime library (GC, I/O, POSIX bindings)
+```
+src/
+  lexer.ts          Tokenization
+  parser.ts         AST generation
+  analyzer.ts       Type checking, capability checking, scope resolution
+  compiler.ts       Compiler orchestration
+  llvm_codegen.ts   LLVM IR generation
+  linker.ts         Links IR to native executable
+  capability.ts     .mogdecl parser for host FFI declarations
+  types.ts          Type system definitions
+  stdlib.ts         Standard library functions
 
-## POSIX
+runtime/
+  runtime.c         C runtime (GC, I/O primitives)
+  mog.h             Public C API for host embedding
+  mog_vm.c          VM for host FFI capability dispatch
 
-### Platform Notes
-
-#### macOS ARM64 Variadic Function Limitation
-
-On macOS ARM64, the `open()` system call with the `O_CREAT` flag may fail due to variadic calling convention differences. The `open()` function is variadic (takes variable arguments), and the extra arguments required by `O_CREAT` (file mode/permissions) may not be passed correctly.
-
-**Workaround**: Use `creat()` instead when creating files:
-
-```mog
-// This may fail on macOS ARM64
-// fd: i32 = open("file.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
-// Use creat() instead for file creation
-fd: i32 = creat("file.txt", 0644);
-
-// Later, re-open with open() if you need different flags
-// fd = open("file.txt", O_RDONLY);
+capabilities/
+  *.mogdecl         Capability declaration files
 ```
 
-This limitation affects any variadic C library function when called from Mog on macOS ARM64.
+## Embedding
+
+Mog is designed to be embedded in a host application. The host provides capabilities and resource limits:
+
+```c
+#include "mog.h"
+
+MogVM *vm = mog_vm_new();
+mog_register_capability(vm, "math", math_functions, 3);
+mog_register_capability(vm, "log", log_functions, 2);
+
+// Validate script requirements
+mog_validate_capabilities(vm, script_requires, script_optionals);
+
+// Call into Mog
+MogValue result = mog_cap_call(vm, "math", "add", args);
+```
 
 ## License
 

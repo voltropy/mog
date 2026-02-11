@@ -4,7 +4,7 @@ import { readFileSync } from "fs"
 
 const inputFile = process.argv[2]
 if (!inputFile) {
-  console.error("Usage: ./compile <file.algol>")
+  console.error("Usage: ./compile <file.mog>")
   process.exit(1)
 }
 

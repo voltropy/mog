@@ -1,23 +1,23 @@
 #!/bin/bash
-# Build script for compiling AlgolScript programs with Cosmopolitan Libc
-# Usage: ./build_cosmo.sh input.algol [output.com]
+# Build script for compiling Mog programs with Cosmopolitan Libc
+# Usage: ./build_cosmo.sh input.mog [output.com]
 
 set -e
 
 # Check if input file is provided
 if [ -z "$1" ]; then
-	echo "Usage: $0 input.algol [output.com]"
-	echo "Example: $0 test.algol test.com"
+	echo "Usage: $0 input.mog [output.com]"
+	echo "Example: $0 test.mog test.com"
 	exit 1
 fi
 
 INPUT="$1"
-BASENAME="${INPUT%.algol}"
+BASENAME="${INPUT%.mog}"
 OUTPUT="${2:-$BASENAME.com}"
 
 echo "Compiling $INPUT to $OUTPUT with Cosmopolitan Libc..."
 
-# Compile AlgolScript to LLVM IR
+# Compile Mog to LLVM IR
 echo "Step 1: Generating LLVM IR..."
 bun run src/index.ts "$INPUT" >"$BASENAME.ll"
 
@@ -41,7 +41,7 @@ if [ ! -d "$COSMO_DIR/build/bootstrap" ]; then
 	echo "Warning: Cosmopolitan not found at $COSMO_DIR"
 	echo "Attempting to compile with system clang with POSIX support..."
 	# Fallback to system compilation with POSIX support
-	clang "$BASENAME.o" -L./runtime -lalgol_runtime -o "$OUTPUT"
+	clang "$BASENAME.o" -L./runtime -lmog_runtime -o "$OUTPUT"
 else
 	echo "Step 4: Linking with Cosmopolitan Libc..."
 	# Link with Cosmopolitan using lld
@@ -55,9 +55,9 @@ else
 		"$COSMO_DIR/build/bootstrap/ape-no-modify-self.o" \
 		"$BASENAME.o" \
 		"$COSMO_DIR/build/bootstrap/cosmopolitan.a" \
-		-L./runtime -lalgol_runtime || {
+		-L./runtime -lmog_runtime || {
 		echo "Note: Cosmopolitan linking failed, trying system linker with fallback..."
-		clang "$BASENAME.o" -L./runtime -lalgol_runtime -o "$OUTPUT"
+		clang "$BASENAME.o" -L./runtime -lmog_runtime -o "$OUTPUT"
 	}
 fi
 
