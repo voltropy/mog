@@ -410,8 +410,8 @@ class LLVMIRGenerator {
       case "VariableDeclaration": {
         const llvmType = this.toLLVMType(statement.varType)
         const reg = `%${statement.name}`
-        let isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType" 
-          || statement.varType?.type === "StringType"
+         let isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType" 
+          || statement.varType?.type === "StringType" || statement.varType?.type === "MapType"
           || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
           || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
           || statement.varType?.type === "TensorType"
@@ -440,8 +440,12 @@ class LLVMIRGenerator {
             }
           }
         }
-        // Infer closure type from lambda expression
+         // Infer closure type from lambda expression
         if (!isPointerLike && statement.value?.type === "Lambda") {
+          isPointerLike = true
+        }
+        // Infer map type from MapLiteral value
+        if (!isPointerLike && statement.value?.type === "MapLiteral") {
           isPointerLike = true
         }
         const allocaType = isPointerLike ? "ptr" : llvmType
@@ -460,6 +464,9 @@ class LLVMIRGenerator {
             // Register as FunctionType so indirect call handler kicks in
             const funcType = (statement.value as any)?.resultType || new FunctionType([], { type: "VoidType" } as any)
             this.variableTypes.set(statement.name, funcType)
+           } else if (statement.value?.type === "MapLiteral") {
+            // Register as MapType
+            this.variableTypes.set(statement.name, { type: "MapType" } as any)
           } else if (this.isStringProducingExpression(statement.value)) {
             // For inferred string types, register as StringType
             this.variableTypes.set(statement.name, { type: "StringType" } as any)
@@ -489,8 +496,8 @@ class LLVMIRGenerator {
         }
         if (statement.value) {
           const value = this.generateExpression(ir, statement.value)
-          let isPointerLike2 = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
-            || statement.varType?.type === "StringType"
+           let isPointerLike2 = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
+            || statement.varType?.type === "StringType" || statement.varType?.type === "MapType"
             || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
             || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
             || statement.varType?.type === "TensorType"
@@ -647,9 +654,9 @@ class LLVMIRGenerator {
         const ptrReg = `%${name}_local`
         const valReg = `%${this.valueCounter++}`
 
-        const varType = this.variableTypes.get(name)
+         const varType = this.variableTypes.get(name)
         const isPointerLike = varType?.type === "ArrayType" || varType?.type === "PointerType" || 
-                              varType?.type === "StringType" ||
+                              varType?.type === "StringType" || varType?.type === "MapType" ||
                               varType?.type === "StructType" || varType?.type === "CustomType" || 
                               varType?.type === "SOAType" || varType?.type === "FunctionType" ||
                               varType?.type === "TensorType"
@@ -814,6 +821,25 @@ class LLVMIRGenerator {
         } else {
           this.collectStringFromNode(part)
         }
+      }
+      return
+    }
+
+     // Collect map literal key strings
+    if (node.type === "MapLiteral") {
+      const entries = node.entries || node.columns || []
+      for (const entry of entries) {
+        const key = entry.key || entry.name
+        if (key && typeof key === "string") {
+          const keyName = `@map_key_${this.stringCounter++}`
+          this.stringNameMap.set(`__map_key_${key}`, keyName)
+          const strDef = `${keyName} = private constant [${key.length + 1} x i8] c"${key}\\00"`
+          this.stringConstants.push(strDef)
+        }
+      }
+      // Still recurse into values
+      for (const entry of entries) {
+        if (entry.value) this.collectStringFromNode(entry.value)
       }
       return
     }
@@ -2548,10 +2574,11 @@ class LLVMIRGenerator {
         const isClosureCall = value?.type === "CallExpression" && value.callee?.type === "Identifier"
           && this.functions.get(value.callee.name)?.returnType === "ptr"
         const isFuncPtr = valueReg.startsWith("@") || value?.type === "Lambda" || isNamedFuncRef || isClosureCall
-        const isStringExpr = this.isStringProducingExpression(value)
+         const isStringExpr = this.isStringProducingExpression(value)
         const isTensorExpr = this.isTensorProducingExpression(value)
         const isFloatExpr = this.isFloatProducingExpression(value)
-        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor || isTensorExpr) ? "ptr" : isFloatExpr ? "double" : "i64"
+        const isMapExpr = value?.type === "MapLiteral"
+        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor || isTensorExpr || isMapExpr) ? "ptr" : isFloatExpr ? "double" : "i64"
         ir.push(`  %${name} = alloca ${allocaType}`)
         if (isTensorExpr) {
           // Register as TensorType for later method/operator dispatch
@@ -2604,6 +2631,9 @@ class LLVMIRGenerator {
           } else {
             this.variableTypes.set(name, { type: "FunctionType" })
           }
+         } else if (isMapExpr) {
+          // Track as map type for later map operations
+          this.variableTypes.set(name, { type: "MapType" } as any)
         } else if (isStringExpr) {
           // Track as string type for later isStringType checks
           this.variableTypes.set(name, new ArrayType(new UnsignedType("u8"), []))
@@ -2764,14 +2794,13 @@ class LLVMIRGenerator {
     const capacity = entries.length > 0 ? entries.length * 2 : 4
     ir.push(`  ${tableReg} = call ptr @map_new(i64 ${capacity})`)
 
-    for (const entry of entries) {
+     for (const entry of entries) {
       const key = entry.key || entry.name
       const value = entry.value || (entry.values && entry.values[0])
       if (!value) continue
       const valueReg = this.generateExpression(ir, value)
-      const keyName = `@map_key_${this.stringCounter++}`
-      const keyBytes = key.length + 1
-      this.stringConstants.push(`${keyName} = private constant [${keyBytes} x i8] c"${key}\\00"`)
+      // Use pre-registered map key constant from collection pass
+      const keyName = this.stringNameMap.get(`__map_key_${key}`) || `@map_key_${this.stringCounter++}`
       ir.push(`  call void @map_set(ptr ${tableReg}, ptr ${keyName}, i64 ${key.length}, i64 ${valueReg})`)
     }
 

@@ -1831,8 +1831,10 @@ private comparison(): ExpressionNode {
 
     while (!this.checkType("RBRACE") && !this.isAtEnd()) {
       let key: string
-      if (this.checkType("STRING")) {
-        key = this.advance().value
+       if (this.checkType("STRING")) {
+        const raw = this.advance().value
+        // Strip surrounding quotes from string token
+        key = raw.startsWith('"') || raw.startsWith("'") ? raw.slice(1, -1) : raw
       } else if (this.checkType("NUMBER")) {
         key = this.advance().value
       } else {
