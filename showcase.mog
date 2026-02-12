@@ -4,6 +4,8 @@
  * ============================================================ */
 
 requires env;
+requires fs;
+requires process;
 
 // ============================================================
 // 1. FUNCTIONS - basic, recursive, nested
@@ -433,10 +435,65 @@ fn main() -> i64 {
   tensor_print(m3);
   print_string("\n");
 
+  // --- Section: File System Capability ---
+  print_string("=== File System (fs capability) ===\n");
+  // Write a file
+  fs.write_file("/tmp/mog_test.txt", "Hello from Mog!");
+  print_string("  Wrote /tmp/mog_test.txt\n");
+
+  // Check if it exists
+  exists_val: bool = fs.exists("/tmp/mog_test.txt");
+  print_string("  File exists: ");
+  if exists_val {
+    print_string("true");
+  } else {
+    print_string("false");
+  }
+  print_string("\n");
+
+  // Read it back
+  contents: string = fs.read_file("/tmp/mog_test.txt");
+  print_string("  Contents: ");
+  print_string(contents);
+  print_string("\n");
+
+  // Get file size
+  sz: int = fs.file_size("/tmp/mog_test.txt");
+  print_string("  File size: ");
+  print(sz);
+  print_string(" bytes\n");
+
+  // Clean up
+  fs.remove("/tmp/mog_test.txt");
+  print_string("  Cleaned up test file\n");
+  print_string("\n");
+
+  // --- Section: Process Capability ---
+  print_string("=== Process (process capability) ===\n");
+  // Get current working directory
+  cwd_val: string = process.cwd();
+  print_string("  CWD: ");
+  print_string(cwd_val);
+  print_string("\n");
+
+  // Get timestamp
+  ts_val: int = process.timestamp();
+  print_string("  Timestamp: ");
+  print(ts_val);
+  print_string(" ms\n");
+
+  // Get environment variable
+  home_val: string = process.getenv("HOME");
+  print_string("  HOME: ");
+  print_string(home_val);
+  print_string("\n");
+  print_string("\n");
+
   // --- Section: Async/Await ---
   print_string("=== Async/Await ===\n");
-  // Note: async currently uses synchronous fallback
-  print_string("  (async support ready, uses sync fallback)\n");
+  print_string("  Async functions use LLVM coroutine intrinsics\n");
+  print_string("  Host provides event loop for timer/IO scheduling\n");
+  print_string("  (see async_integration.test.ts for full examples)\n");
   print_string("\n");
 
   // --- Summary ---

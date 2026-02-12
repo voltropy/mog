@@ -215,10 +215,19 @@ class LLVMIRGenerator {
         ir.push("  call void @gc_push_frame()")
         if (this.capabilities.size > 0) {
           ir.push("")
-          ir.push("  ; Initialize VM with capabilities")
-          ir.push("  %vm = call ptr @mog_vm_new()")
-          ir.push("  call void @mog_vm_set_global(ptr %vm)")
-          ir.push("  call void @mog_register_posix_host(ptr %vm)")
+          ir.push("  ; Initialize VM with capabilities (reuse host VM if available)")
+          ir.push("  %existing_vm = call ptr @mog_vm_get_global()")
+          ir.push("  %vm_is_null = icmp eq ptr %existing_vm, null")
+          ir.push("  br i1 %vm_is_null, label %create_vm, label %have_vm")
+          ir.push("")
+          ir.push("create_vm:")
+          ir.push("  %new_vm = call ptr @mog_vm_new()")
+          ir.push("  call void @mog_vm_set_global(ptr %new_vm)")
+          ir.push("  call void @mog_register_posix_host(ptr %new_vm)")
+          ir.push("  br label %have_vm")
+          ir.push("")
+          ir.push("have_vm:")
+          ir.push("  %vm = phi ptr [ %existing_vm, %entry ], [ %new_vm, %create_vm ]")
         }
         ir.push("")
         ir.push("  ; Create and set global event loop")
@@ -254,9 +263,17 @@ class LLVMIRGenerator {
           ir.push("  call void @gc_init()")
           ir.push("  call void @gc_push_frame()")
           if (this.capabilities.size > 0) {
-            ir.push("  %vm = call ptr @mog_vm_new()")
-            ir.push("  call void @mog_vm_set_global(ptr %vm)")
-            ir.push("  call void @mog_register_posix_host(ptr %vm)")
+            ir.push("  ; Reuse host VM if available, create new one otherwise")
+            ir.push("  %existing_vm = call ptr @mog_vm_get_global()")
+            ir.push("  %vm_is_null = icmp eq ptr %existing_vm, null")
+            ir.push("  br i1 %vm_is_null, label %create_vm, label %have_vm")
+            ir.push("create_vm:")
+            ir.push("  %new_vm = call ptr @mog_vm_new()")
+            ir.push("  call void @mog_vm_set_global(ptr %new_vm)")
+            ir.push("  call void @mog_register_posix_host(ptr %new_vm)")
+            ir.push("  br label %have_vm")
+            ir.push("have_vm:")
+            ir.push("  %vm = phi ptr [ %existing_vm, %entry ], [ %new_vm, %create_vm ]")
           }
           
           // Build array of length argc with argv pointers
@@ -302,9 +319,17 @@ class LLVMIRGenerator {
           ir.push("  call void @gc_init()")
           ir.push("  call void @gc_push_frame()")
           if (this.capabilities.size > 0) {
-            ir.push("  %vm = call ptr @mog_vm_new()")
-            ir.push("  call void @mog_vm_set_global(ptr %vm)")
-            ir.push("  call void @mog_register_posix_host(ptr %vm)")
+            ir.push("  ; Reuse host VM if available, create new one otherwise")
+            ir.push("  %existing_vm = call ptr @mog_vm_get_global()")
+            ir.push("  %vm_is_null = icmp eq ptr %existing_vm, null")
+            ir.push("  br i1 %vm_is_null, label %create_vm, label %have_vm")
+            ir.push("create_vm:")
+            ir.push("  %new_vm = call ptr @mog_vm_new()")
+            ir.push("  call void @mog_vm_set_global(ptr %new_vm)")
+            ir.push("  call void @mog_register_posix_host(ptr %new_vm)")
+            ir.push("  br label %have_vm")
+            ir.push("have_vm:")
+            ir.push("  %vm = phi ptr [ %existing_vm, %entry ], [ %new_vm, %create_vm ]")
           }
           ir.push("  %result = call i64 @program_user()")
         }
@@ -2229,6 +2254,7 @@ class LLVMIRGenerator {
     ir.push("declare void @mog_cap_call_out(ptr, ptr, ptr, ptr, ptr, i32)")
     // VM lifecycle — needed to initialize capabilities before use
     ir.push("declare ptr @mog_vm_new()")
+    ir.push("declare ptr @mog_vm_get_global()")
     ir.push("declare void @mog_vm_set_global(ptr)")
     ir.push("declare void @mog_register_posix_host(ptr)")
     ir.push("declare void @mog_vm_free(ptr)")
