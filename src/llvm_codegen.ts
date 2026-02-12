@@ -213,6 +213,13 @@ class LLVMIRGenerator {
         ir.push("entry:")
         ir.push("  call void @gc_init()")
         ir.push("  call void @gc_push_frame()")
+        if (this.capabilities.size > 0) {
+          ir.push("")
+          ir.push("  ; Initialize VM with capabilities")
+          ir.push("  %vm = call ptr @mog_vm_new()")
+          ir.push("  call void @mog_vm_set_global(ptr %vm)")
+          ir.push("  call void @mog_register_posix_host(ptr %vm)")
+        }
         ir.push("")
         ir.push("  ; Create and set global event loop")
         ir.push("  %loop = call ptr @mog_loop_new()")
@@ -231,6 +238,9 @@ class LLVMIRGenerator {
         ir.push("")
         ir.push("  ; Cleanup")
         ir.push("  call void @mog_loop_free(ptr %loop)")
+        if (this.capabilities.size > 0) {
+          ir.push("  call void @mog_vm_free(ptr %vm)")
+        }
         ir.push("  call void @gc_pop_frame()")
         ir.push("  ret i32 %truncated")
         ir.push("}")
@@ -243,6 +253,11 @@ class LLVMIRGenerator {
           ir.push("entry:")
           ir.push("  call void @gc_init()")
           ir.push("  call void @gc_push_frame()")
+          if (this.capabilities.size > 0) {
+            ir.push("  %vm = call ptr @mog_vm_new()")
+            ir.push("  call void @mog_vm_set_global(ptr %vm)")
+            ir.push("  call void @mog_register_posix_host(ptr %vm)")
+          }
           
           // Build array of length argc with argv pointers
           ir.push("  %args_array = call ptr @array_alloc(i64 8, i64 1, i64 %argc)")
@@ -286,10 +301,18 @@ class LLVMIRGenerator {
           ir.push("entry:")
           ir.push("  call void @gc_init()")
           ir.push("  call void @gc_push_frame()")
+          if (this.capabilities.size > 0) {
+            ir.push("  %vm = call ptr @mog_vm_new()")
+            ir.push("  call void @mog_vm_set_global(ptr %vm)")
+            ir.push("  call void @mog_register_posix_host(ptr %vm)")
+          }
           ir.push("  %result = call i64 @program_user()")
         }
         
         ir.push("  %truncated = trunc i64 %result to i32")
+        if (this.capabilities.size > 0) {
+          ir.push("  call void @mog_vm_free(ptr %vm)")
+        }
         ir.push("  call void @gc_pop_frame()")
         ir.push("  ret i32 %truncated")
         ir.push("}")
@@ -2197,13 +2220,18 @@ class LLVMIRGenerator {
     }
   }
 
-  private generateCapabilityDeclarations(ir: string[]): void {
+   private generateCapabilityDeclarations(ir: string[]): void {
     ir.push("")
     ir.push("; Host FFI declarations")
     ir.push("%MogValue = type { i32, { { ptr, ptr } } }")  // tag(4) + pad(4) + union{handle{ptr,ptr}}(16) = 24 bytes
     // Use explicit output pointer to avoid ABI issues with large struct returns on ARM64.
     // mog_cap_call_out(MogValue *out, MogVM *vm, const char *cap, const char *func, MogValue *args, int nargs)
     ir.push("declare void @mog_cap_call_out(ptr, ptr, ptr, ptr, ptr, i32)")
+    // VM lifecycle — needed to initialize capabilities before use
+    ir.push("declare ptr @mog_vm_new()")
+    ir.push("declare void @mog_vm_set_global(ptr)")
+    ir.push("declare void @mog_register_posix_host(ptr)")
+    ir.push("declare void @mog_vm_free(ptr)")
     ir.push("")
     this.capCallDeclared = true
   }

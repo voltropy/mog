@@ -127,6 +127,7 @@ MogValue mog_cap_call(MogVM *vm, const char *cap_name, const char *func_name, Mo
 
 MogValue mog_int(int64_t value) {
     MogValue v;
+    memset(&v, 0, sizeof(v));
     v.tag = MOG_INT;
     v.data.i = value;
     return v;
@@ -134,6 +135,7 @@ MogValue mog_int(int64_t value) {
 
 MogValue mog_float(double value) {
     MogValue v;
+    memset(&v, 0, sizeof(v));
     v.tag = MOG_FLOAT;
     v.data.f = value;
     return v;
@@ -141,6 +143,7 @@ MogValue mog_float(double value) {
 
 MogValue mog_bool(bool value) {
     MogValue v;
+    memset(&v, 0, sizeof(v));
     v.tag = MOG_BOOL;
     v.data.b = value;
     return v;
@@ -148,6 +151,7 @@ MogValue mog_bool(bool value) {
 
 MogValue mog_string(const char *s) {
     MogValue v;
+    memset(&v, 0, sizeof(v));
     v.tag = MOG_STRING;
     v.data.s = s;
     return v;
@@ -155,6 +159,7 @@ MogValue mog_string(const char *s) {
 
 MogValue mog_none(void) {
     MogValue v;
+    memset(&v, 0, sizeof(v));
     v.tag = MOG_NONE;
     v.data.i = 0;
     return v;
@@ -162,6 +167,7 @@ MogValue mog_none(void) {
 
 MogValue mog_error(const char *message) {
     MogValue v;
+    memset(&v, 0, sizeof(v));
     v.tag = MOG_ERROR;
     v.data.error = message;
     return v;
@@ -169,6 +175,7 @@ MogValue mog_error(const char *message) {
 
 MogValue mog_handle(void *ptr, const char *type_name) {
     MogValue v;
+    memset(&v, 0, sizeof(v));
     v.tag = MOG_HANDLE;
     v.data.handle.ptr = ptr;
     v.data.handle.type_name = type_name;
