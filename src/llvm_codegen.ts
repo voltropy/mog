@@ -750,10 +750,15 @@ class LLVMIRGenerator {
           const storeType = isPointerLike2 ? "ptr" : llvmType
           // Capability calls return i64 (raw data from MogValue union).
           // If storing into a ptr variable, convert i64 -> ptr.
+          // Also handle await wrapping a capability call (await cap.fn()).
           const exprVal = statement.value as any
-          const isCapCall = exprVal?.type === "CallExpression" 
+          const isCapCall = (exprVal?.type === "CallExpression" 
             && exprVal?.callee?.type === "MemberExpression"
-            && this.capabilities.has(exprVal?.callee?.object?.name)
+            && this.capabilities.has(exprVal?.callee?.object?.name))
+            || (exprVal?.type === "AwaitExpression"
+              && exprVal?.argument?.type === "CallExpression"
+              && exprVal?.argument?.callee?.type === "MemberExpression"
+              && this.capabilities.has(exprVal?.argument?.callee?.object?.name))
           if (storeType === "ptr" && isCapCall) {
             const ptrConv = `%${this.valueCounter++}`
             ir.push(`  ${ptrConv} = inttoptr i64 ${value} to ptr`)
@@ -4188,11 +4193,23 @@ class LLVMIRGenerator {
     const capturedVars: string[] = expr.capturedVars || []
     const capturedVarTypes: Record<string, any> = expr.capturedVarTypes || {}
 
-    // Save current state
+    // Save current state (including async state to prevent coroutine-style returns in non-async lambdas)
     const savedFunction = this.currentFunction
     const savedBlockTerminated = this.blockTerminated
     const savedValueCounter = this.valueCounter
     const savedVariableTypes = new Map(this.variableTypes)
+    const savedIsInAsyncFunction = this.isInAsyncFunction
+    const savedCoroHandle = this.coroHandle
+    const savedCoroFuture = this.coroFuture
+    const savedCoroId = this.coroId
+    const savedAwaitCounter = this.awaitCounter
+
+    // Lambdas are NOT async (even when defined inside async functions)
+    this.isInAsyncFunction = false
+    this.coroHandle = ""
+    this.coroFuture = ""
+    this.coroId = ""
+    this.awaitCounter = 0
 
     // Generate the lambda function IR into lambdaIR buffer
     const lambdaIrBuf: string[] = []
@@ -4292,11 +4309,16 @@ class LLVMIRGenerator {
     // Add to lambdaIR for later emission
     this.lambdaIR.push(...lambdaIrBuf)
 
-    // Restore state
+    // Restore state (including async state)
     this.currentFunction = savedFunction
     this.blockTerminated = savedBlockTerminated
     this.valueCounter = savedValueCounter
     this.variableTypes = savedVariableTypes
+    this.isInAsyncFunction = savedIsInAsyncFunction
+    this.coroHandle = savedCoroHandle
+    this.coroFuture = savedCoroFuture
+    this.coroId = savedCoroId
+    this.awaitCounter = savedAwaitCounter
 
     // Create closure struct in the CALLER's IR context
     if (capturedVars.length > 0) {

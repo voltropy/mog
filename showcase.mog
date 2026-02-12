@@ -61,10 +61,108 @@ fn distance_sq(p: Point) -> f64 {
 }
 
 // ============================================================
-// 3. MAIN - entry point
+// 3. ASYNC FUNCTIONS - for the async/await showcase section
 // ============================================================
 
-fn main() -> i64 {
+// Simulate an async computation (runs eagerly, completes inline)
+async fn async_add(a: i64, b: i64) -> i64 {
+  return a + b;
+}
+
+// Chain of async calls: double a value
+async fn async_double(x: i64) -> i64 {
+  return x * 2;
+}
+
+// Nested async: adds then doubles
+async fn add_then_double(a: i64, b: i64) -> i64 {
+  sum: i64 = await async_add(a, b);
+  result: i64 = await async_double(sum);
+  return result;
+}
+
+// Async factorial (recursive async is interesting because each
+// level returns a Future that the caller awaits)
+async fn async_factorial(n: i64) -> i64 {
+  if (n <= 1) {
+    return 1;
+  }
+  sub: i64 = await async_factorial(n - 1);
+  return n * sub;
+}
+
+// Async fibonacci (iterative, but uses await for each step)
+async fn async_fib_step(a: i64, b: i64) -> i64 {
+  return a + b;
+}
+
+async fn async_fibonacci(n: i64) -> i64 {
+  if (n <= 1) {
+    return n;
+  }
+  a: i64 = 0;
+  b: i64 = 1;
+  i: i64 = 2;
+  while (i <= n) {
+    next: i64 = await async_fib_step(a, b);
+    a = b;
+    b = next;
+    i = i + 1;
+  }
+  return b;
+}
+
+// Tasks for parallel execution with all()
+async fn task_alpha() -> i64 {
+  return 100;
+}
+
+async fn task_beta() -> i64 {
+  return 200;
+}
+
+async fn task_gamma() -> i64 {
+  return 300;
+}
+
+// Tasks for race() - first to complete wins
+async fn fast_path() -> i64 {
+  return 1;
+}
+
+async fn slow_path() -> i64 {
+  return 999;
+}
+
+// Async pipeline: fetch -> transform -> validate
+async fn fetch_value() -> i64 {
+  return 21;
+}
+
+async fn transform(x: i64) -> i64 {
+  doubled: i64 = await async_double(x);
+  return doubled;
+}
+
+async fn validate(x: i64) -> i64 {
+  if (x > 0) {
+    return x;
+  }
+  return 0;
+}
+
+async fn pipeline() -> i64 {
+  raw: i64 = await fetch_value();
+  transformed: i64 = await transform(raw);
+  validated: i64 = await validate(transformed);
+  return validated;
+}
+
+// ============================================================
+// 4. MAIN - entry point (async to support await)
+// ============================================================
+
+async fn main() -> i64 {
 
   // --- Section: Basic Variables & Arithmetic ---
   print_string("=== Variables & Arithmetic ===\n");
@@ -341,18 +439,18 @@ fn main() -> i64 {
   // --- Section: Host Capability (env) ---
   print_string("=== Host Capability: env ===\n");
 
-  env.log("  [env.log] Hello from the host!");
+  await env.log("  [env.log] Hello from the host!");
 
-  hname: ptr = env.get_name();
+  hname: ptr = await env.get_name();
   print_string(f"  env.get_name() = {hname}\n");
 
-  hver: i64 = env.get_version();
+  hver: i64 = await env.get_version();
   print_string(f"  env.get_version() = {hver}\n");
 
-  hts: i64 = env.timestamp();
+  hts: i64 = await env.timestamp();
   print_string(f"  env.timestamp() = {hts}\n");
 
-  rnd: i64 = env.random(1, 100);
+  rnd: i64 = await env.random(1, 100);
   print_string(f"  env.random(1, 100) = {rnd}\n");
   print_string("\n");
 
@@ -438,11 +536,11 @@ fn main() -> i64 {
   // --- Section: File System Capability ---
   print_string("=== File System (fs capability) ===\n");
   // Write a file
-  fs.write_file("/tmp/mog_test.txt", "Hello from Mog!");
+  await fs.write_file("/tmp/mog_test.txt", "Hello from Mog!");
   print_string("  Wrote /tmp/mog_test.txt\n");
 
   // Check if it exists
-  exists_val: bool = fs.exists("/tmp/mog_test.txt");
+  exists_val: bool = await fs.exists("/tmp/mog_test.txt");
   print_string("  File exists: ");
   if exists_val {
     print_string("true");
@@ -452,38 +550,38 @@ fn main() -> i64 {
   print_string("\n");
 
   // Read it back
-  contents: string = fs.read_file("/tmp/mog_test.txt");
+  contents: string = await fs.read_file("/tmp/mog_test.txt");
   print_string("  Contents: ");
   print_string(contents);
   print_string("\n");
 
   // Get file size
-  sz: int = fs.file_size("/tmp/mog_test.txt");
+  sz: int = await fs.file_size("/tmp/mog_test.txt");
   print_string("  File size: ");
   print(sz);
   print_string(" bytes\n");
 
   // Clean up
-  fs.remove("/tmp/mog_test.txt");
+  await fs.remove("/tmp/mog_test.txt");
   print_string("  Cleaned up test file\n");
   print_string("\n");
 
   // --- Section: Process Capability ---
   print_string("=== Process (process capability) ===\n");
   // Get current working directory
-  cwd_val: string = process.cwd();
+  cwd_val: string = await process.cwd();
   print_string("  CWD: ");
   print_string(cwd_val);
   print_string("\n");
 
   // Get timestamp
-  ts_val: int = process.timestamp();
+  ts_val: int = await process.timestamp();
   print_string("  Timestamp: ");
   print(ts_val);
   print_string(" ms\n");
 
   // Get environment variable
-  home_val: string = process.getenv("HOME");
+  home_val: string = await process.getenv("HOME");
   print_string("  HOME: ");
   print_string(home_val);
   print_string("\n");
@@ -491,9 +589,49 @@ fn main() -> i64 {
 
   // --- Section: Async/Await ---
   print_string("=== Async/Await ===\n");
-  print_string("  Async functions use LLVM coroutine intrinsics\n");
-  print_string("  Host provides event loop for timer/IO scheduling\n");
-  print_string("  (see async_integration.test.ts for full examples)\n");
+  print_string("  (powered by LLVM coroutine intrinsics + host event loop)\n");
+  print_string("\n");
+
+  // 1. Basic await - call an async function and get the result
+  r1: i64 = await async_add(20, 22);
+  print_string(f"  await async_add(20, 22) = {r1}\n");
+
+  // 2. Nested async - add_then_double calls async_add then async_double
+  r2: i64 = await add_then_double(10, 11);
+  print_string(f"  await add_then_double(10, 11) = {r2}\n");
+
+  // 3. Recursive async - factorial with each level returning a Future
+  r3: i64 = await async_factorial(7);
+  print_string(f"  await async_factorial(7) = {r3}\n");
+
+  // 4. Sequential awaits in a loop - async fibonacci
+  r4: i64 = await async_fibonacci(15);
+  print_string(f"  await async_fibonacci(15) = {r4}\n");
+
+  // 5. Pipeline pattern: fetch -> transform -> validate
+  r5: i64 = await pipeline();
+  print_string(f"  await pipeline() = {r5}\n");
+
+  // 6. Parallel execution with all() - run tasks concurrently
+  await all([task_alpha(), task_beta(), task_gamma()]);
+  print_string("  all([alpha, beta, gamma]) completed\n");
+
+  // 7. Race - first future to complete wins
+  winner: i64 = await race([fast_path(), slow_path()]);
+  print_string(f"  race([fast, slow]) winner = {winner}\n");
+
+  // 8. Async file I/O - write, read, verify, clean up
+  await fs.write_file("/tmp/mog_async_test.txt", "async file I/O works!");
+  async_contents: string = await fs.read_file("/tmp/mog_async_test.txt");
+  print_string(f"  async fs round-trip: {async_contents}\n");
+  await fs.remove("/tmp/mog_async_test.txt");
+
+  // 9. Timed operation with process.sleep
+  t_before: i64 = await process.timestamp();
+  await process.sleep(25);
+  t_after: i64 = await process.timestamp();
+  elapsed: i64 = t_after - t_before;
+  print_string(f"  process.sleep(25ms): elapsed = {elapsed}ms\n");
   print_string("\n");
 
   // --- Summary ---
