@@ -1,12 +1,12 @@
 # Build outputs
 build/
+dist/
 *.o
+*.ll
+showcase
 fib
 loop
-test_arithmetic
-test_complex
-test_comprehensive
-test_ultimate
+http_client
 basic_features
 combined_features
 counter_loop
@@ -16,11 +16,18 @@ main_example
 nested_operations
 simple_loop
 while_loop
+bench_gc_*
+test_arithmetic
+test_complex
+test_comprehensive
+test_ultimate
+test_nested
+test_continue
+test_matrix
 
 # Debug files
 debug_*.ts
 test_*.txt
-*.ll
 
 # Node
 node_modules/
@@ -37,4 +44,4 @@ test_str.mjs
 temp.*
 
 # Images
-*.pngshowcase
+*.png

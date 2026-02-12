@@ -620,8 +620,6 @@ class LLVMIRGenerator {
         }
         return `${intVal}`
       }
-      case "POSIXConstant":
-        return `${expr.value}`
       case "StringLiteral": {
         const name = this.generateStringLiteral(ir, expr.value)
         const ptrReg = `%${this.valueCounter++}`

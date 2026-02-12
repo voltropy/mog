@@ -2,8 +2,6 @@ import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
 import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, StringType, CustomType, FunctionType, TensorType, ResultType, OptionalType, FutureType } from "./types.js"
-import { getPOSIXConstant } from "./posix_constants.js"
-
 // Decode escape sequences in string literals
 function decodeEscapeSequences(str: string): string {
   return str.replace(/\\(.)|\\x([0-9a-fA-F]{2})/g, (match, char, hex) => {
@@ -1506,15 +1504,6 @@ private comparison(): ExpressionNode {
     // Template string: f"Hello, {name}!"
     if (this.checkType("TEMPLATE_STRING_START")) {
       return this.parseTemplateString()
-    }
-
-    if (this.matchType("POSIX_CONSTANT")) {
-      const token = this.previous()
-      return {
-        type: "POSIXConstant",
-        value: getPOSIXConstant(token.value),
-        position: token.position,
-      }
     }
 
     // tensor<dtype>(shape) construction expression

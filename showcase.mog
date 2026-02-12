@@ -396,6 +396,49 @@ fn main() -> i64 {
   print_string(f"  apply(double, 7) = {apply(double, 7)}\n");
   print_string("\n");
 
+  // --- Section: String Type ---
+  print_string("=== String Type ===\n");
+  name2: string = "Mog";
+  greeting2: string = f"Hello, {name2}!";
+  print_string(f"  greeting: {greeting2}\n");
+  num_str: string = str(42);
+  print_string(f"  str(42) = {num_str}\n");
+  print_string("\n");
+
+  // --- Section: Map Iteration ---
+  print_string("=== Map Iteration ===\n");
+  scores := {"alice": 95, "bob": 87, "carol": 92};
+  for key, value in scores {
+    print_string(f"  {key}: {value}\n");
+  }
+  print_string("\n");
+
+  // --- Section: Tensors ---
+  print_string("=== Tensors ===\n");
+  ta := tensor<f32>([3], [1.0, 2.0, 3.0]);
+  tb := tensor<f32>([3], [4.0, 5.0, 6.0]);
+  tc := ta + tb;
+  print_string("  a + b = ");
+  tensor_print(tc);
+  ts: f64 = ta.sum();
+  print_string("  a.sum() = ");
+  print_f64(ts);
+  print_string("\n");
+
+  // Matrix multiply
+  m1 := tensor<f32>([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+  m2 := tensor<f32>([3, 2], [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+  m3 := matmul(m1, m2);
+  print_string("  matmul = ");
+  tensor_print(m3);
+  print_string("\n");
+
+  // --- Section: Async/Await ---
+  print_string("=== Async/Await ===\n");
+  // Note: async currently uses synchronous fallback
+  print_string("  (async support ready, uses sync fallback)\n");
+  print_string("\n");
+
   // --- Summary ---
   print_string("=== Showcase Complete ===\n");
   print_string("All features demonstrated successfully!\n");

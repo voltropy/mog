@@ -1,5 +1,3 @@
-import { isPOSIXConstant } from "./posix_constants.js"
-
 type TokenType =
   | "fn"
   | "return"
@@ -62,7 +60,6 @@ type TokenType =
   | "TEMPLATE_INTERP_START"
   | "TEMPLATE_INTERP_END"
   | "TYPE"
-  | "POSIX_CONSTANT"
   | "UNKNOWN"
   | "WHITESPACE"
   | "RANGE"
@@ -1336,8 +1333,6 @@ class Lexer {
       if (value) {
         if (value === "_") {
           type = "UNDERSCORE"
-        } else if (isPOSIXConstant(value)) {
-          type = "POSIX_CONSTANT"
         } else {
           type = "IDENTIFIER"
         }
