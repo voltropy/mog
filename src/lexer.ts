@@ -77,6 +77,7 @@ type TokenType =
   | "tensor"
   | "async"
   | "await"
+  | "spawn"
   | "COMMENT"
 
 interface Position {
@@ -164,6 +165,7 @@ class Lexer {
     const tensorRegex = /tensor\b/y
     const asyncRegex = /async\b/y
     const awaitRegex = /await\b/y
+    const spawnRegex = /spawn\b/y
     const trueRegex = /true\b/y
     const falseRegex = /false\b/y
     const questionMarkRegex = /\?/y
@@ -622,6 +624,18 @@ class Lexer {
       value = this.match(awaitRegex)
       if (value) {
         type = "await"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(spawnRegex)
+      if (value) {
+        type = "spawn"
         this.advance(value.length)
         tokens.push({
           type,

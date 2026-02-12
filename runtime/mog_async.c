@@ -10,6 +10,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <sys/select.h>
+#include <unistd.h>
+#include <errno.h>
 
 #ifdef __APPLE__
 #include <mach/mach_time.h>
@@ -146,6 +149,13 @@ void mog_loop_free(MogEventLoop *loop) {
         free(t);
         t = next;
     }
+    /* Free remaining fd watchers */
+    MogFdWatcher *w = loop->watchers;
+    while (w) {
+        MogFdWatcher *next = w->next;
+        free(w);
+        w = next;
+    }
     free(loop);
 }
 
@@ -181,6 +191,19 @@ void mog_loop_add_timer(MogEventLoop *loop, uint64_t delay_ms, MogFuture *future
     }
 }
 
+/* ---- FD Watcher ---- */
+
+void mog_loop_add_fd_watcher(MogEventLoop *loop, int fd, int events, MogFuture *future) {
+    if (!loop || !future) return;
+    MogFdWatcher *w = (MogFdWatcher *)calloc(1, sizeof(MogFdWatcher));
+    if (!w) { fprintf(stderr, "mog: out of memory (fd watcher)\n"); exit(1); }
+    w->fd = fd;
+    w->events = events;
+    w->future = future;
+    w->next = loop->watchers;
+    loop->watchers = w;
+}
+
 void mog_loop_run(MogEventLoop *loop) {
     if (!loop) return;
     loop->running = 1;
@@ -212,25 +235,130 @@ void mog_loop_run(MogEventLoop *loop) {
         }
 
         /* 3. Check if anything remains */
-        if (!loop->timers && !loop->ready_head && loop->pending_count <= 0) {
+        if (!loop->timers && !loop->ready_head && !loop->watchers && loop->pending_count <= 0) {
             break;  /* All work done */
         }
 
-        /* 4. If no ready work but timers exist, sleep until next timer */
-        if (!loop->ready_head && loop->timers) {
-            uint64_t tnow = now_ns();
-            if (loop->timers->deadline_ns > tnow) {
-                sleep_ns(loop->timers->deadline_ns - tnow);
+        /* 4. Use select() to wait for fd events AND/OR timer deadlines */
+        if (!loop->ready_head && (loop->timers || loop->watchers)) {
+            fd_set read_fds, write_fds;
+            FD_ZERO(&read_fds);
+            FD_ZERO(&write_fds);
+            int max_fd = -1;
+
+            /* Add all fd watchers */
+            for (MogFdWatcher *w = loop->watchers; w; w = w->next) {
+                if (w->events & MOG_FD_READ) FD_SET(w->fd, &read_fds);
+                if (w->events & MOG_FD_WRITE) FD_SET(w->fd, &write_fds);
+                if (w->fd > max_fd) max_fd = w->fd;
+            }
+
+            /* Calculate timeout from next timer */
+            struct timeval tv;
+            struct timeval *tv_ptr = NULL;
+            if (loop->timers) {
+                uint64_t tnow = now_ns();
+                if (loop->timers->deadline_ns > tnow) {
+                    uint64_t wait_ns = loop->timers->deadline_ns - tnow;
+                    tv.tv_sec = (long)(wait_ns / 1000000000ULL);
+                    tv.tv_usec = (long)((wait_ns % 1000000000ULL) / 1000ULL);
+                } else {
+                    tv.tv_sec = 0;
+                    tv.tv_usec = 0;
+                }
+                tv_ptr = &tv;
+            } else if (loop->watchers && max_fd >= 0) {
+                /* No timers but have fd watchers — block indefinitely on select */
+                tv_ptr = NULL;
+            } else {
+                /* Nothing to wait on — poll */
+                tv.tv_sec = 0;
+                tv.tv_usec = 10000; /* 10ms poll */
+                tv_ptr = &tv;
+            }
+
+            if (max_fd >= 0) {
+                int nready = select(max_fd + 1, &read_fds, &write_fds, NULL, tv_ptr);
+                if (nready > 0) {
+                    /* Check which fd watchers fired */
+                    MogFdWatcher **prev_ptr = &loop->watchers;
+                    MogFdWatcher *w = loop->watchers;
+                    while (w) {
+                        MogFdWatcher *next = w->next;
+                        int fired = 0;
+                        if ((w->events & MOG_FD_READ) && FD_ISSET(w->fd, &read_fds)) fired = 1;
+                        if ((w->events & MOG_FD_WRITE) && FD_ISSET(w->fd, &write_fds)) fired = 1;
+
+                        if (fired) {
+                            /* Remove from list and complete future */
+                            *prev_ptr = next;
+                            /* Read the data for stdin watchers */
+                            if (w->fd == STDIN_FILENO && (w->events & MOG_FD_READ)) {
+                                /* Read a line from stdin */
+                                char buf[4096];
+                                if (fgets(buf, sizeof(buf), stdin)) {
+                                    /* Remove trailing newline */
+                                    size_t len = strlen(buf);
+                                    if (len > 0 && buf[len-1] == '\n') buf[--len] = '\0';
+                                    /* Allocate result string via gc_alloc */
+                                    extern int64_t gc_alloc(int64_t);
+                                    char *result = (char *)(intptr_t)gc_alloc((int64_t)(len + 1));
+                                    memcpy(result, buf, len + 1);
+                                    mog_future_complete(w->future, (int64_t)(intptr_t)result);
+                                } else {
+                                    /* EOF or error */
+                                    mog_future_complete(w->future, 0);
+                                }
+                            } else {
+                                /* Generic fd ready — complete with fd number */
+                                mog_future_complete(w->future, (int64_t)w->fd);
+                            }
+                            free(w);
+                        } else {
+                            prev_ptr = &w->next;
+                        }
+                        w = next;
+                    }
+                }
+            } else if (tv_ptr) {
+                /* No fd watchers, just sleep for the timeout */
+                sleep_ns((uint64_t)tv_ptr->tv_sec * 1000000000ULL +
+                         (uint64_t)tv_ptr->tv_usec * 1000ULL);
             }
         }
 
         /* Safety: if nothing happened and nothing is pending, exit */
-        if (!processed && !loop->timers && !loop->ready_head) {
+        if (!processed && !loop->timers && !loop->ready_head && !loop->watchers) {
             break;
         }
     }
 
     loop->running = 0;
+}
+
+/* ---- Async I/O ---- */
+
+MogFuture *async_read_line(void) {
+    MogFuture *future = mog_future_new();
+    MogEventLoop *loop = mog_loop_get_global();
+    if (!loop) {
+        /* Fallback: synchronous read */
+        char buf[4096];
+        if (fgets(buf, sizeof(buf), stdin)) {
+            size_t len = strlen(buf);
+            if (len > 0 && buf[len-1] == '\n') buf[--len] = '\0';
+            extern int64_t gc_alloc(int64_t);
+            char *result = (char *)(intptr_t)gc_alloc((int64_t)(len + 1));
+            memcpy(result, buf, len + 1);
+            mog_future_complete(future, (int64_t)(intptr_t)result);
+        } else {
+            mog_future_complete(future, 0);
+        }
+    } else {
+        /* Register stdin fd watcher — future will be completed when stdin is ready */
+        mog_loop_add_fd_watcher(loop, STDIN_FILENO, MOG_FD_READ, future);
+    }
+    return future;
 }
 
 /* ---- Await helper ---- */

@@ -90,6 +90,8 @@ class LLVMIRGenerator {
   private asyncFunctions: Set<string> = new Set()
   // Track whether the program has any async functions
   private hasAsyncFunctions = false
+  // Runtime async functions that return MogFuture* directly (not coroutines)
+  private runtimeAsyncFunctions: Set<string> = new Set(["async_read_line"])
   private resetStringCounter(): void {
     this.stringCounter = 0
     this.stringNameMap.clear()
@@ -563,6 +565,8 @@ class LLVMIRGenerator {
     ir.push("declare ptr @mog_future_get_coro_handle(ptr)")
     ir.push("declare void @mog_coro_resume(ptr)")
     ir.push("declare void @mog_future_set_coro_frame(ptr, ptr)")
+    ir.push("declare ptr @async_read_line()")
+    ir.push("declare void @mog_loop_add_fd_watcher(ptr, i32, i32, ptr)")
     ir.push("")
   }
 
@@ -609,13 +613,21 @@ class LLVMIRGenerator {
       const futureVal = this.generateExpression(ir, innerExpr)
       innerFuture = futureVal
 
-      // The called async function is suspended at its initial suspend point.
-      // We need to resume it so it can start executing.
-      // Extract the coroutine handle from the returned future and resume it.
-      const childHandle = `%await_child_hdl_${awaitIdx}`
-      ir.push(`  ${childHandle} = call ptr @mog_future_get_coro_handle(ptr ${innerFuture})`)
-      // Resume the child coroutine (it will run until it completes or suspends at an await)
-      ir.push(`  call void @mog_coro_resume(ptr ${childHandle})`)
+      // Check if this is a runtime async builtin (like async_read_line) that returns
+      // a future directly without being a coroutine — no need to resume a coro handle.
+      const isRuntimeAsync = innerExpr?.type === "CallExpression" &&
+        innerExpr?.callee?.type === "Identifier" &&
+        this.runtimeAsyncFunctions.has(innerExpr?.callee?.name)
+
+      if (!isRuntimeAsync) {
+        // The called async function is suspended at its initial suspend point.
+        // We need to resume it so it can start executing.
+        // Extract the coroutine handle from the returned future and resume it.
+        const childHandle = `%await_child_hdl_${awaitIdx}`
+        ir.push(`  ${childHandle} = call ptr @mog_future_get_coro_handle(ptr ${innerFuture})`)
+        // Resume the child coroutine (it will run until it completes or suspends at an await)
+        ir.push(`  call void @mog_coro_resume(ptr ${childHandle})`)
+      }
     }
 
     // Call mog_await
@@ -646,10 +658,32 @@ class LLVMIRGenerator {
 
     // Ready path - get the result
     ir.push(`await${awaitIdx}.ready:`)
-    const resultReg = `%await_val_${awaitIdx}`
-    ir.push(`  ${resultReg} = call i64 @mog_future_get_result(ptr ${innerFuture})`)
+    const rawResult = `%await_raw_${awaitIdx}`
+    ir.push(`  ${rawResult} = call i64 @mog_future_get_result(ptr ${innerFuture})`)
 
-    return resultReg
+    // Check if the result should be a pointer (e.g., async_read_line returns a string pointer)
+    const resultType = expr?.resultType
+    const needsPtrConversion = resultType?.type === "PointerType" || resultType?.type === "StringType"
+      || (innerExpr?.type === "CallExpression" && innerExpr?.callee?.name === "async_read_line")
+
+    if (needsPtrConversion) {
+      const ptrResult = `%await_val_${awaitIdx}`
+      ir.push(`  ${ptrResult} = inttoptr i64 ${rawResult} to ptr`)
+      return ptrResult
+    }
+
+    return rawResult
+  }
+
+  private generateSpawnExpression(ir: string[], expr: any): string {
+    // spawn <async_call> — call the async function, which returns a MogFuture*,
+    // then resume its coroutine eagerly. The future is returned as a ptr (can be ignored).
+    const innerExpr = expr.argument
+    const futureReg = this.generateExpression(ir, innerExpr)
+
+    // The async function ran eagerly to its first suspension point.
+    // The event loop will handle the rest. Return the future pointer.
+    return futureReg
   }
 
   private generateStatement(ir: string[], statement: StatementNode): void {
@@ -1009,6 +1043,8 @@ class LLVMIRGenerator {
         }
         // Fallback: non-async context, just evaluate synchronously
         return this.generateExpression(ir, expr.argument)
+      case "SpawnExpression":
+        return this.generateSpawnExpression(ir, expr)
       case "TensorConstruction":
         return this.generateTensorConstruction(ir, expr)
       default:
@@ -1896,6 +1932,7 @@ class LLVMIRGenerator {
         string_eq: { params: ["ptr", "ptr"], ret: "i64" },
         flush_stdout: { params: [], ret: "void" },
         parse_int: { params: ["ptr"], ret: "i64" },
+        async_read_line: { params: [], ret: "ptr" },
       }
 
       const sig = posixSignatures[funcName]

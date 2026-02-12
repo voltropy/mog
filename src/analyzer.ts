@@ -211,6 +211,11 @@ interface AwaitExpressionNode extends ASTNode {
   argument: ExpressionNode
 }
 
+interface SpawnExpressionNode extends ASTNode {
+  type: "SpawnExpression"
+  argument: ExpressionNode
+}
+
 interface FunctionParam {
   name: string
   paramType: Type
@@ -251,6 +256,7 @@ type ExpressionNode =
   | IsOkExpressionNode
   | IsErrExpressionNode
   | AwaitExpressionNode
+  | SpawnExpressionNode
 
 interface IdentifierNode extends ASTNode {
   type: "Identifier"
@@ -720,6 +726,7 @@ class SemanticAnalyzer {
       string_eq: { params: [{ name: "a", type: ptrType }, { name: "b", type: ptrType }], returnType: i64Type },
       flush_stdout: { params: [], returnType: voidType },
       parse_int: { params: [{ name: "s", type: ptrType }], returnType: i64Type },
+      async_read_line: { params: [], returnType: new FutureType(ptrType) },
     }
 
     for (const [name, func] of Object.entries(termioFunctions)) {
@@ -1595,6 +1602,9 @@ class SemanticAnalyzer {
       case "AwaitExpression":
         result = this.visitAwaitExpression(node as AwaitExpressionNode)
         break
+      case "SpawnExpression":
+        result = this.visitSpawnExpression(node as SpawnExpressionNode)
+        break
       case "TensorConstruction":
         result = this.visitTensorConstruction(node as any)
         break
@@ -1829,6 +1839,11 @@ class SemanticAnalyzer {
         return leftType
       }
 
+      // Allow pointer arithmetic: ptr + int or ptr - int
+      if ((operator === "+" || operator === "-") && isPointerType(leftType) && isNumericType(rightType)) {
+        return leftType
+      }
+
       if (!isNumericType(leftType) || !isNumericType(rightType)) {
         this.emitError(`Operator '${operator}' requires numeric types`, node.position)
         return leftType
@@ -2005,6 +2020,17 @@ class SemanticAnalyzer {
 
     // If it's not a Future, just return the type as-is (synchronous fallback)
     return argType
+  }
+
+  private visitSpawnExpression(node: SpawnExpressionNode): Type | null {
+    if (!this.inAsyncFunction) {
+      this.emitError("spawn can only be used inside an async function", node.position)
+    }
+
+    // spawn runs the async function without awaiting — returns the Future itself (as ptr)
+    const argType = this.visitExpression(node.argument)
+    // spawn returns a ptr (the MogFuture pointer) that can be ignored
+    return new PointerType()
   }
 
   private visitCallExpression(node: CallExpressionNode): Type | null {

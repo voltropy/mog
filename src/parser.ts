@@ -491,7 +491,11 @@ class Parser {
 
   private whileStatement(): StatementNode {
     const hasParens = this.matchType("LPAREN")
+    // Disable struct literal parsing so { starts the loop body, not a struct
+    const prevAllow = this.allowStructLiteral
+    this.allowStructLiteral = false
     const test = this.expression()
+    this.allowStructLiteral = prevAllow
     if (hasParens) {
       this.consume("RPAREN", "Expected ) after while condition")
     }
@@ -1302,6 +1306,17 @@ private comparison(): ExpressionNode {
         type: "AwaitExpression",
         argument,
         position: this.combinePositions({ position: awaitToken.position }, argument),
+      } as any
+    }
+
+    // spawn expr — fire-and-forget async call
+    if (this.matchType("spawn")) {
+      const spawnToken = this.previous()
+      const argument = this.unary()
+      return {
+        type: "SpawnExpression",
+        argument,
+        position: this.combinePositions({ position: spawnToken.position }, argument),
       } as any
     }
 
