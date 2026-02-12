@@ -38,6 +38,8 @@ import {
   OptionalType,
   FutureType,
   isFutureType,
+  isStringType,
+  StringType,
   boolType,
 } from "./types.js"
 
@@ -648,12 +650,12 @@ class SemanticAnalyzer {
       print_i64: { params: [{ name: "value", type: i64Type }], returnType: voidType },
       print_u64: { params: [{ name: "value", type: u64Type }], returnType: voidType },
       print_f64: { params: [{ name: "value", type: f64Type }], returnType: voidType },
-      print_string: { params: [{ name: "value", type: i64Type }], returnType: voidType },
+      print_string: { params: [{ name: "value", type: new StringType() }], returnType: voidType },
       println: { params: [], returnType: voidType },
       println_i64: { params: [{ name: "value", type: i64Type }], returnType: voidType },
       println_u64: { params: [{ name: "value", type: u64Type }], returnType: voidType },
       println_f64: { params: [{ name: "value", type: f64Type }], returnType: voidType },
-      println_string: { params: [{ name: "value", type: i64Type }], returnType: voidType },
+      println_string: { params: [{ name: "value", type: new StringType() }], returnType: voidType },
     }
 
     for (const [name, func] of Object.entries(printFunctions)) {
@@ -703,7 +705,7 @@ class SemanticAnalyzer {
       string_replace: { params: [{ name: "str", type: ptrType }, { name: "old", type: ptrType }, { name: "new", type: ptrType }], returnType: ptrType },
       int_from_string: { params: [{ name: "str", type: ptrType }], returnType: ptrType },
       float_from_string: { params: [{ name: "str", type: ptrType }], returnType: ptrType },
-      str: { params: [{ name: "value", type: i64Type }], returnType: ptrType },
+      str: { params: [{ name: "value", type: i64Type }], returnType: new StringType() },
     }
 
     for (const [name, func] of Object.entries(stringFunctions)) {
@@ -740,6 +742,10 @@ class SemanticAnalyzer {
     // Math constants (available without import)
     this.symbolTable.declare("PI", "variable", f64Type)
     this.symbolTable.declare("E", "variable", f64Type)
+
+    // Tensor builtin functions
+    this.symbolTable.declare("matmul", "function", new TensorType(new FloatType("f32")))
+    this.symbolTable.declare("tensor_print", "function", voidType)
 
   }
 
@@ -1628,7 +1634,7 @@ class SemanticAnalyzer {
   }
 
   private visitStringLiteral(node: StringLiteralNode): Type | null {
-    return new ArrayType(new UnsignedType("u8"), [node.value.length])
+    return new StringType()
   }
 
   private visitTemplateLiteral(node: TemplateLiteralNode): Type | null {
@@ -1638,8 +1644,8 @@ class SemanticAnalyzer {
         this.visitExpression(part)
       }
     }
-    // Template literals always return strings ([u8])
-    return new ArrayType(new UnsignedType("u8"), [])
+    // Template literals always return strings
+    return new StringType()
   }
 
   private visitArrayLiteral(node: ArrayLiteralNode): Type | null {
@@ -1754,6 +1760,16 @@ class SemanticAnalyzer {
     const logicalOperators = ["&&", "||", "and", "or", "AND", "OR"]
 
     if (arithmeticOperators.includes(operator)) {
+      // Handle tensor operations
+      if (isTensorType(leftType) && isTensorType(rightType)) {
+        // Tensor binary ops: +, -, * are elementwise, return TensorType
+        return leftType
+      }
+      if (isTensorType(leftType) || isTensorType(rightType)) {
+        // Mixed tensor/scalar - return tensor type
+        return isTensorType(leftType) ? leftType : rightType
+      }
+
       // Handle vector/array operations
       if (isArrayType(leftType) && isArrayType(rightType)) {
         // Both operands are arrays - check dimensions match
@@ -1792,6 +1808,11 @@ class SemanticAnalyzer {
           return rightType
         }
         return rightType
+      }
+
+      // Handle tensor binary operations (+, -, *)
+      if (isTensorType(leftType) && isTensorType(rightType)) {
+        return leftType
       }
 
       if (!isNumericType(leftType) || !isNumericType(rightType)) {
@@ -2174,15 +2195,15 @@ class SemanticAnalyzer {
         for (const arg of args) {
           this.visitExpression(arg)
         }
-        const stringType = new ArrayType(new UnsignedType("u8"), [])
+        const strType = new StringType()
         switch (method) {
           case "upper":
           case "lower":
           case "trim":
           case "replace":
-            return stringType
+            return strType
           case "split":
-            return new ArrayType(stringType, [0])
+            return new ArrayType(strType, [0])
           case "contains":
           case "starts_with":
           case "ends_with":
@@ -2273,12 +2294,12 @@ class SemanticAnalyzer {
           case "max":
           case "min":
           case "prod":
-            return new FloatType(tensorType.dtype instanceof FloatType ? tensorType.dtype.kind : "f32")
+            return new FloatType("f64")
           case "argmax":
           case "argmin":
             return new IntegerType("i64")
           case "dot":
-            return new FloatType(tensorType.dtype instanceof FloatType ? tensorType.dtype.kind : "f32")
+            return new FloatType("f64")
           case "backward":
           case "requires_grad":
             return tensorType
@@ -2780,6 +2801,9 @@ class SemanticAnalyzer {
   }
 
   private isStringLikeType(type: Type): boolean {
+    if (type instanceof StringType) {
+      return true
+    }
     if (type instanceof ArrayType) {
       return type.elementType instanceof UnsignedType &&
              (type.elementType as UnsignedType).kind === "u8" &&

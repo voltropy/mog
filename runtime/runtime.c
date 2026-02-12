@@ -34,7 +34,8 @@ typedef enum {
   OBJ_MAP,      /* Hash map with buckets/entries */
   OBJ_STRING,   /* String buffer */
   OBJ_ENTRY,    /* Map entry with key/value */
-  OBJ_CLOSURE   /* Closure environment — slots that may be GC pointers */
+  OBJ_CLOSURE,  /* Closure environment — slots that may be GC pointers */
+  OBJ_TENSOR = 7 /* Tensor object */
 } ObjectKind;
 
 /* --- GC Block Header --- */
@@ -384,12 +385,23 @@ typedef struct Map {
   uint64_t count;
 } Map;
 
+/* --- Tensor Struct (forward definition for GC tracing) --- */
+typedef struct {
+  int64_t ndim;
+  int64_t* shape;
+  int64_t* strides;
+  float* data;      // f32 data
+  int64_t size;     // total elements
+  int8_t dtype;     // 0=f32, 1=f64, 2=f16, 3=bf16, 4=i32, 5=i64
+} MogTensor;
+
 /* --- Tracing Functions --- */
 
 void gc_trace_array(Array* arr);
 void gc_trace_map(Map* map);
 void gc_trace_map_entry(MapEntry* entry);
 void gc_trace_closure(void* env, size_t size);
+void gc_trace_tensor(MogTensor* t);
 
 void gc_mark(Block* ptr) {
   if (!ptr || ptr->marked) return;
@@ -413,6 +425,9 @@ void gc_mark(Block* ptr) {
         break;
       case OBJ_CLOSURE:
         gc_trace_closure((void*)((uintptr_t)block + sizeof(Block)), block->size);
+        break;
+      case OBJ_TENSOR:
+        gc_trace_tensor((void*)((uintptr_t)block + sizeof(Block)));
         break;
       case OBJ_RAW:
       case OBJ_STRING:
@@ -500,6 +515,28 @@ void gc_trace_closure(void* env, size_t size) {
         mark_stack_push(child);
       }
     }
+  }
+}
+
+void gc_trace_tensor(MogTensor* t) {
+  if (!t) return;
+  
+  /* Mark shape array */
+  if (t->shape) {
+    Block* shape_block = ptr_to_block(t->shape);
+    if (shape_block) mark_stack_push(shape_block);
+  }
+  
+  /* Mark strides array */
+  if (t->strides) {
+    Block* strides_block = ptr_to_block(t->strides);
+    if (strides_block) mark_stack_push(strides_block);
+  }
+  
+  /* Mark data buffer */
+  if (t->data) {
+    Block* data_block = ptr_to_block(t->data);
+    if (data_block) mark_stack_push(data_block);
   }
 }
 
@@ -1567,4 +1604,117 @@ uint64_t mog_optional_unwrap(void* optional) {
   if (!optional) return 0;
   uint64_t* o = (uint64_t*)optional;
   return o[1];
+}
+
+/* --- Tensor Runtime --- */
+
+MogTensor* tensor_create(int64_t ndim, int64_t* shape_ptr, int64_t dtype) {
+  MogTensor* t = (MogTensor*)gc_alloc_kind(sizeof(MogTensor), OBJ_TENSOR);
+  t->ndim = ndim;
+  t->dtype = (int8_t)dtype;
+  t->shape = (int64_t*)gc_alloc(ndim * sizeof(int64_t));
+  t->strides = (int64_t*)gc_alloc(ndim * sizeof(int64_t));
+  int64_t size = 1;
+  for (int64_t i = ndim - 1; i >= 0; i--) {
+    t->shape[i] = shape_ptr[i];
+    t->strides[i] = size;
+    size *= shape_ptr[i];
+  }
+  t->size = size;
+  t->data = (float*)gc_alloc(size * sizeof(float));
+  memset(t->data, 0, size * sizeof(float));
+  return t;
+}
+
+MogTensor* tensor_create_with_data(int64_t ndim, int64_t* shape_ptr, float* data_ptr, int64_t dtype) {
+  MogTensor* t = tensor_create(ndim, shape_ptr, dtype);
+  memcpy(t->data, data_ptr, t->size * sizeof(float));
+  return t;
+}
+
+float tensor_get_f32(MogTensor* t, int64_t idx) { return t->data[idx]; }
+void tensor_set_f32(MogTensor* t, int64_t idx, float val) { t->data[idx] = val; }
+int64_t tensor_shape_dim(MogTensor* t, int64_t dim) { return t->shape[dim]; }
+int64_t tensor_ndim(MogTensor* t) { return t->ndim; }
+int64_t tensor_size(MogTensor* t) { return t->size; }
+
+MogTensor* tensor_add(MogTensor* a, MogTensor* b) {
+  MogTensor* r = tensor_create(a->ndim, a->shape, 0);
+  for (int64_t i = 0; i < a->size; i++) r->data[i] = a->data[i] + b->data[i];
+  return r;
+}
+
+MogTensor* tensor_sub(MogTensor* a, MogTensor* b) {
+  MogTensor* r = tensor_create(a->ndim, a->shape, 0);
+  for (int64_t i = 0; i < a->size; i++) r->data[i] = a->data[i] - b->data[i];
+  return r;
+}
+
+MogTensor* tensor_mul(MogTensor* a, MogTensor* b) {
+  MogTensor* r = tensor_create(a->ndim, a->shape, 0);
+  for (int64_t i = 0; i < a->size; i++) r->data[i] = a->data[i] * b->data[i];
+  return r;
+}
+
+MogTensor* tensor_matmul(MogTensor* a, MogTensor* b) {
+  // a is MxK, b is KxN, result is MxN
+  int64_t M = a->shape[0], K = a->shape[1], N = b->shape[1];
+  int64_t result_shape[2] = {M, N};
+  MogTensor* r = tensor_create(2, result_shape, 0);
+  for (int64_t i = 0; i < M; i++) {
+    for (int64_t j = 0; j < N; j++) {
+      float sum = 0;
+      for (int64_t k = 0; k < K; k++) {
+        sum += a->data[i * K + k] * b->data[k * N + j];
+      }
+      r->data[i * N + j] = sum;
+    }
+  }
+  return r;
+}
+
+double tensor_sum(MogTensor* t) {
+  double sum = 0;
+  for (int64_t i = 0; i < t->size; i++) sum += t->data[i];
+  return sum;
+}
+
+double tensor_mean(MogTensor* t) {
+  return tensor_sum(t) / (double)t->size;
+}
+
+void tensor_print(MogTensor* t) {
+  printf("tensor(");
+  if (t->ndim == 1) {
+    printf("[");
+    for (int64_t i = 0; i < t->size; i++) {
+      if (i > 0) printf(", ");
+      printf("%.4f", t->data[i]);
+    }
+    printf("]");
+  } else if (t->ndim == 2) {
+    printf("[");
+    for (int64_t i = 0; i < t->shape[0]; i++) {
+      if (i > 0) printf(", ");
+      printf("[");
+      for (int64_t j = 0; j < t->shape[1]; j++) {
+        if (j > 0) printf(", ");
+        printf("%.4f", t->data[i * t->shape[1] + j]);
+      }
+      printf("]");
+    }
+    printf("]");
+  }
+  printf(", shape=[");
+  for (int64_t i = 0; i < t->ndim; i++) {
+    if (i > 0) printf(", ");
+    printf("%lld", (long long)t->shape[i]);
+  }
+  printf("])\n");
+}
+
+MogTensor* tensor_reshape(MogTensor* t, int64_t new_ndim, int64_t* new_shape) {
+  MogTensor* r = tensor_create(new_ndim, new_shape, 0);
+  memcpy(r->data, t->data, t->size * sizeof(float));
+  return r;
 }

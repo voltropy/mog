@@ -164,6 +164,11 @@ class PointerType {
   }
 }
 
+class StringType {
+  readonly type = "StringType" as const
+  toString() { return "string" }
+}
+
 class VoidType {
   type = "VoidType"
 
@@ -320,7 +325,7 @@ class FunctionType {
   }
 }
 
-type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType | TensorType | ResultType | OptionalType | FutureType
+type Type = IntegerType | UnsignedType | FloatType | BoolType | ArrayType | MapType | PointerType | VoidType | StringType | StructType | AOSType | SOAType | CustomType | TypeAliasType | FunctionType | TensorType | ResultType | OptionalType | FutureType
 
 const i8 = new IntegerType("i8")
 const i16 = new IntegerType("i16")
@@ -356,7 +361,7 @@ function map(keyType: Type, valueType: Type): MapType {
   return new MapType(keyType, valueType)
 }
 
-const stringType = array(u8, [])
+const stringType = new StringType()
 
 function isIntegerType(type: Type): type is IntegerType {
   return type instanceof IntegerType
@@ -406,6 +411,10 @@ function isBoolType(type: Type): type is BoolType {
   return type instanceof BoolType
 }
 
+function isStringType(type: Type): type is StringType {
+  return type instanceof StringType
+}
+
 function isTypeAliasType(type: Type): type is TypeAliasType {
   return type instanceof TypeAliasType
 }
@@ -449,6 +458,7 @@ function sameType(a: Type, b: Type): boolean {
   if (b instanceof TypeAliasType) b = b.aliasedType
 
   if (a instanceof BoolType && b instanceof BoolType) return true
+  if (a instanceof StringType && b instanceof StringType) return true
 
   if (a instanceof FloatType && b instanceof FloatType) {
     return a.kind === b.kind
@@ -538,6 +548,14 @@ function compatibleTypes(from: Type, to: Type): boolean {
   if (from instanceof ArrayType && from.isString && to instanceof PointerType) {
     return true
   }
+
+  // StringType is compatible with PointerType (bidirectional, for backward compat)
+  if (from instanceof StringType && to instanceof PointerType) return true
+  if (from instanceof PointerType && to instanceof StringType) return true
+
+  // StringType is compatible with [u8] arrays (bidirectional, for backward compat)
+  if (from instanceof StringType && to instanceof ArrayType && to.elementType instanceof UnsignedType && to.elementType.kind === "u8") return true
+  if (from instanceof ArrayType && from.elementType instanceof UnsignedType && from.elementType.kind === "u8" && to instanceof StringType) return true
 
   // FunctionType compatibility
   if (from instanceof FunctionType && to instanceof FunctionType) {
@@ -762,6 +780,7 @@ export {
   TableType,
   PointerType,
   VoidType,
+  StringType,
   StructType,
   AOSType,
   SOAType,
@@ -780,6 +799,7 @@ export {
   isUnsignedType,
   isFloatType,
   isBoolType,
+  isStringType,
   isTypeAliasType,
   isFunctionType,
   isTensorType,

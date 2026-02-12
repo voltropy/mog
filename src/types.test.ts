@@ -211,10 +211,9 @@ describe("Type Constructors", () => {
       expect(arr.dimensions).toEqual([3, 4])
     })
 
-    test("stringType is u8 array", () => {
-      expect(stringType.elementType).toBe(u8)
-      expect(stringType.rank).toBe(0)
-      expect(stringType.isString).toBe(false)
+    test("stringType is StringType", () => {
+      expect(stringType.type).toBe("StringType")
+      expect(stringType.toString()).toBe("string")
     })
 
     test("1D array of u8 is detected as string", () => {

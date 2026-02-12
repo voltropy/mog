@@ -1,5 +1,5 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
-import { isArrayType, isMapType, isFloatType, IntegerType, UnsignedType, ArrayType, StructType, SOAType, ResultType, OptionalType, FunctionType } from "./types.js"
+import { isArrayType, isMapType, isFloatType, isTensorType, IntegerType, UnsignedType, FloatType, ArrayType, StructType, SOAType, ResultType, OptionalType, FunctionType, TensorType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -380,6 +380,24 @@ class LLVMIRGenerator {
     ir.push("declare i64 @mog_optional_is_some(ptr %optional)")
     ir.push("declare i64 @mog_optional_unwrap(ptr %optional)")
     ir.push("")
+
+    ir.push("; Declare tensor functions")
+    ir.push("declare ptr @tensor_create(i64 %ndim, ptr %shape, i64 %dtype)")
+    ir.push("declare ptr @tensor_create_with_data(i64 %ndim, ptr %shape, ptr %data, i64 %dtype)")
+    ir.push("declare float @tensor_get_f32(ptr %tensor, i64 %idx)")
+    ir.push("declare void @tensor_set_f32(ptr %tensor, i64 %idx, float %val)")
+    ir.push("declare i64 @tensor_shape_dim(ptr %tensor, i64 %dim)")
+    ir.push("declare i64 @tensor_ndim(ptr %tensor)")
+    ir.push("declare i64 @tensor_size(ptr %tensor)")
+    ir.push("declare ptr @tensor_add(ptr %a, ptr %b)")
+    ir.push("declare ptr @tensor_sub(ptr %a, ptr %b)")
+    ir.push("declare ptr @tensor_mul(ptr %a, ptr %b)")
+    ir.push("declare ptr @tensor_matmul(ptr %a, ptr %b)")
+    ir.push("declare double @tensor_sum(ptr %tensor)")
+    ir.push("declare double @tensor_mean(ptr %tensor)")
+    ir.push("declare void @tensor_print(ptr %tensor)")
+    ir.push("declare ptr @tensor_reshape(ptr %tensor, i64 %ndim, ptr %shape)")
+    ir.push("")
   }
 
   private generateStatement(ir: string[], statement: StatementNode): void {
@@ -393,11 +411,24 @@ class LLVMIRGenerator {
         const llvmType = this.toLLVMType(statement.varType)
         const reg = `%${statement.name}`
         let isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType" 
+          || statement.varType?.type === "StringType"
           || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
           || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
+          || statement.varType?.type === "TensorType"
         // Infer pointer type from value expression when varType is not explicit
         if (!isPointerLike && statement.value) {
           isPointerLike = this.isStringProducingExpression(statement.value)
+        }
+        // Infer tensor type from TensorConstruction value
+        if (!isPointerLike && (statement.value as any)?.type === "TensorConstruction") {
+          isPointerLike = true
+          const tensorDtype = (statement.value as any).dtype
+          this.variableTypes.set(statement.name, new TensorType(tensorDtype))
+        }
+        // Infer tensor type from value expression's resultType (e.g., tensor + tensor, matmul(a, b))
+        if (!isPointerLike && (statement.value as any)?.resultType?.type === "TensorType") {
+          isPointerLike = true
+          this.variableTypes.set(statement.name, (statement.value as any).resultType)
         }
         // Infer closure/function type from call expression returning ptr (function type)
         if (!isPointerLike && statement.value) {
@@ -416,15 +447,22 @@ class LLVMIRGenerator {
         const allocaType = isPointerLike ? "ptr" : llvmType
         ir.push(`  ${reg} = alloca ${allocaType}`)
         if (isPointerLike && !statement.varType) {
+          // Check if this is a tensor construction — already registered in variableTypes above
+          const isTensorValue = (statement.value as any)?.type === "TensorConstruction"
           // Check if this is a function/closure value — register as FunctionType
           const isFuncValue = statement.value?.type === "Lambda"
             || (statement.value?.type === "CallExpression" && statement.value.callee?.type === "Identifier"
                 && this.functionTypes.get(statement.value.callee.name)?.type === "FunctionType")
             || (statement.value?.type === "Identifier" && this.functions.has(statement.value.name))
-          if (isFuncValue) {
+          if (isTensorValue) {
+            // Already registered as TensorType above, skip
+          } else if (isFuncValue) {
             // Register as FunctionType so indirect call handler kicks in
             const funcType = (statement.value as any)?.resultType || new FunctionType([], { type: "VoidType" } as any)
             this.variableTypes.set(statement.name, funcType)
+          } else if (this.isStringProducingExpression(statement.value)) {
+            // For inferred string types, register as StringType
+            this.variableTypes.set(statement.name, { type: "StringType" } as any)
           } else {
             // For inferred pointer types, register as ArrayType(u8, []) so isStringType works
             this.variableTypes.set(statement.name, new ArrayType(new UnsignedType("u8"), []))
@@ -452,8 +490,10 @@ class LLVMIRGenerator {
         if (statement.value) {
           const value = this.generateExpression(ir, statement.value)
           let isPointerLike2 = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
+            || statement.varType?.type === "StringType"
             || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
             || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
+            || statement.varType?.type === "TensorType"
           if (!isPointerLike2 && isPointerLike) {
             isPointerLike2 = true
           }
@@ -611,8 +651,10 @@ class LLVMIRGenerator {
 
         const varType = this.variableTypes.get(name)
         const isPointerLike = varType?.type === "ArrayType" || varType?.type === "PointerType" || 
+                              varType?.type === "StringType" ||
                               varType?.type === "StructType" || varType?.type === "CustomType" || 
-                              varType?.type === "SOAType" || varType?.type === "FunctionType"
+                              varType?.type === "SOAType" || varType?.type === "FunctionType" ||
+                              varType?.type === "TensorType"
 
         // Determine LLVM type for loading
         let llvmLoadType = "i64"
@@ -695,6 +737,8 @@ class LLVMIRGenerator {
         // TODO: For now, await simply evaluates the inner expression synchronously.
         // Future implementation will suspend execution and resume via state machine.
         return this.generateExpression(ir, expr.argument)
+      case "TensorConstruction":
+        return this.generateTensorConstruction(ir, expr)
       default:
         return ""
     }
@@ -822,6 +866,7 @@ class LLVMIRGenerator {
         if (varType?.type === "FloatType") return varType.kind || "f64"
         if (varType?.type === "IntegerType") return varType.kind || "i64"
         if (varType?.type === "UnsignedType") return varType.kind || "u64"
+        if (varType?.type === "StringType") return "string" // string type
         if (varType?.type === "ArrayType") return "string" // [u8] strings
         if (varType?.type === "PointerType") return "string" // ptr strings
         // Check if this is a string-typed variable by checking isStringType
@@ -940,6 +985,21 @@ class LLVMIRGenerator {
       const extReg = `%${this.valueCounter++}`
       ir.push(`  ${extReg} = zext i1 ${boolReg} to i64`)
       return extReg
+    }
+
+    // Check for tensor operations - both operands are tensors
+    if (this.isTensorType(expr.left) || this.isTensorType(expr.right)) {
+      const tensorOps: Record<string, string> = {
+        "+": "@tensor_add",
+        "-": "@tensor_sub",
+        "*": "@tensor_mul",
+      }
+      const tensorFunc = tensorOps[expr.operator]
+      if (tensorFunc) {
+        const resultReg = `%${this.valueCounter++}`
+        ir.push(`  ${resultReg} = call ptr ${tensorFunc}(ptr ${left}, ptr ${right})`)
+        return resultReg
+      }
     }
 
     // Check for matrix operations - both operands are 2D arrays
@@ -1325,6 +1385,12 @@ class LLVMIRGenerator {
         return this.generatePrintCall(ir, funcName, args, expr)
       }
 
+      // Handle tensor_print function
+      if (funcName === "tensor_print") {
+        ir.push(`  call void @tensor_print(ptr ${args[0]})`)
+        return "0"
+      }
+
       // Handle input functions
       const inputFunctions = ["input_i64", "input_u64", "input_f64", "input_string"]
       if (inputFunctions.includes(funcName)) {
@@ -1401,8 +1467,7 @@ class LLVMIRGenerator {
                         argExpr?.type === "FloatLiteral" ||
                         (argExpr?.type === "Identifier" && this.variableTypes.get(argExpr.name)?.type === "FloatType")
         if (isFloat) {
-          const doubleReg = `%${this.valueCounter++}`
-          ir.push(`  ${doubleReg} = bitcast i64 ${argReg} to double`)
+          const doubleReg = this.toDoubleReg(ir, argReg, argExpr)
           const reg = `%${this.valueCounter++}`
           ir.push(`  ${reg} = call ptr @f64_to_string(double ${doubleReg})`)
           return reg
@@ -1666,6 +1731,76 @@ class LLVMIRGenerator {
         }
       }
 
+      // Check if this is a tensor method call
+      if (this.isTensorType(memberExpr.object)) {
+        const tensorReg = this.generateExpression(ir, memberExpr.object)
+        const method = memberExpr.property
+        const callArgs = expr.args || expr.arguments || []
+
+        switch (method) {
+          case "sum": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call double @tensor_sum(ptr ${tensorReg})`)
+            return reg
+          }
+          case "mean": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call double @tensor_mean(ptr ${tensorReg})`)
+            return reg
+          }
+          case "matmul": {
+            const otherReg = this.generateExpression(ir, callArgs[0])
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @tensor_matmul(ptr ${tensorReg}, ptr ${otherReg})`)
+            return reg
+          }
+          case "reshape": {
+            // reshape takes shape as array literal
+            const shapeArg = callArgs[0]
+            if (shapeArg && shapeArg.type === "ArrayLiteral") {
+              const shapeElements = shapeArg.elements || []
+              const ndim = shapeElements.length
+              const shapeAlloca = `%${this.valueCounter++}`
+              ir.push(`  ${shapeAlloca} = alloca [${ndim} x i64]`)
+              for (let i = 0; i < ndim; i++) {
+                const dimVal = this.generateExpression(ir, shapeElements[i])
+                const gepReg = `%${this.valueCounter++}`
+                ir.push(`  ${gepReg} = getelementptr [${ndim} x i64], ptr ${shapeAlloca}, i64 0, i64 ${i}`)
+                ir.push(`  store i64 ${dimVal}, ptr ${gepReg}`)
+              }
+              const reg = `%${this.valueCounter++}`
+              ir.push(`  ${reg} = call ptr @tensor_reshape(ptr ${tensorReg}, i64 ${ndim}, ptr ${shapeAlloca})`)
+              return reg
+            }
+            return tensorReg
+          }
+          case "print": {
+            ir.push(`  call void @tensor_print(ptr ${tensorReg})`)
+            return "0"
+          }
+          case "shape": {
+            // .shape(i) as method call returns dimension i
+            if (callArgs.length > 0) {
+              const dimReg = this.generateExpression(ir, callArgs[0])
+              const reg = `%${this.valueCounter++}`
+              ir.push(`  ${reg} = call i64 @tensor_shape_dim(ptr ${tensorReg}, i64 ${dimReg})`)
+              return reg
+            }
+            return "0"
+          }
+          case "ndim": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @tensor_ndim(ptr ${tensorReg})`)
+            return reg
+          }
+          case "size": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @tensor_size(ptr ${tensorReg})`)
+            return reg
+          }
+        }
+      }
+
       if (memberExpr.object.type === "Identifier" && this.capabilities.has(memberExpr.object.name)) {
         return this.generateCapabilityCall(ir, memberExpr.object.name, memberExpr.property, args, expr)
       }
@@ -1858,11 +1993,202 @@ class LLVMIRGenerator {
   }
 
   private generateMatmulCall(ir: string[], expr: any, args: string[]): string {
+    // Check if arguments are tensors (TensorType) - use tensor_matmul
+    const arg0Expr = expr.args?.[0] || expr.arguments?.[0]
+    if (arg0Expr && this.isTensorType(arg0Expr)) {
+      const reg = `%${this.valueCounter++}`
+      ir.push(`  ${reg} = call ptr @tensor_matmul(ptr ${args[0]}, ptr ${args[1]})`)
+      return reg
+    }
     // matmul takes two arrays and returns a new array (result of matrix multiplication)
     // Both arguments should be arrays
     const reg = `%${this.valueCounter++}`
     ir.push(`  ${reg} = call ptr @matmul(ptr ${args[0]}, ptr ${args[1]})`)
     return reg
+  }
+
+  private generateTensorConstruction(ir: string[], expr: any): string {
+    const args = expr.args || []
+    const dtypeNum = this.tensorDtypeToInt(expr.dtype)
+
+    if (args.length === 0) {
+      // tensor<f32>() - no args, return empty 0-dim tensor
+      const shapeAlloca = `%${this.valueCounter++}`
+      ir.push(`  ${shapeAlloca} = alloca i64`)
+      ir.push(`  store i64 0, ptr ${shapeAlloca}`)
+      const reg = `%${this.valueCounter++}`
+      ir.push(`  ${reg} = call ptr @tensor_create(i64 0, ptr ${shapeAlloca}, i64 ${dtypeNum})`)
+      return reg
+    }
+
+    // First arg should be shape (ArrayLiteral)
+    const shapeArg = args[0]
+
+    if (shapeArg.type === "ArrayLiteral") {
+      const shapeElements = shapeArg.elements || []
+      const ndim = shapeElements.length
+
+      // Allocate shape array on stack
+      const shapeAlloca = `%${this.valueCounter++}`
+      ir.push(`  ${shapeAlloca} = alloca [${ndim} x i64]`)
+
+      // Store each dimension value
+      for (let i = 0; i < ndim; i++) {
+        const dimVal = this.generateExpression(ir, shapeElements[i])
+        const gepReg = `%${this.valueCounter++}`
+        ir.push(`  ${gepReg} = getelementptr [${ndim} x i64], ptr ${shapeAlloca}, i64 0, i64 ${i}`)
+        ir.push(`  store i64 ${dimVal}, ptr ${gepReg}`)
+      }
+
+      if (args.length >= 2 && args[1].type === "ArrayLiteral") {
+        // tensor<f32>([2, 3], [1,2,3,4,5,6]) - with data
+        const dataElements = args[1].elements || []
+        const dataCount = dataElements.length
+
+        // Allocate data array on stack as floats
+        const dataAlloca = `%${this.valueCounter++}`
+        ir.push(`  ${dataAlloca} = alloca [${dataCount} x float]`)
+
+        for (let i = 0; i < dataCount; i++) {
+          const elemVal = this.generateExpression(ir, dataElements[i])
+          const floatVal = this.toFloatReg(ir, elemVal, dataElements[i])
+          const gepReg = `%${this.valueCounter++}`
+          ir.push(`  ${gepReg} = getelementptr [${dataCount} x float], ptr ${dataAlloca}, i64 0, i64 ${i}`)
+          ir.push(`  store float ${floatVal}, ptr ${gepReg}`)
+        }
+
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call ptr @tensor_create_with_data(i64 ${ndim}, ptr ${shapeAlloca}, ptr ${dataAlloca}, i64 ${dtypeNum})`)
+        return reg
+      } else {
+        // tensor<f32>([3, 4]) - zeros
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call ptr @tensor_create(i64 ${ndim}, ptr ${shapeAlloca}, i64 ${dtypeNum})`)
+        return reg
+      }
+    }
+
+    // Fallback: evaluate the first arg as a general expression (it might be a variable holding a shape)
+    const shapeReg = this.generateExpression(ir, shapeArg)
+    const reg = `%${this.valueCounter++}`
+    ir.push(`  ${reg} = call ptr @tensor_create(i64 1, ptr ${shapeReg}, i64 ${dtypeNum})`)
+    return reg
+  }
+
+  private tensorDtypeToInt(dtype: any): number {
+    if (!dtype) return 0
+    const kind = dtype.kind || dtype.toString()
+    switch (kind) {
+      case "f32": return 0
+      case "f64": return 1
+      case "f16": return 2
+      case "bf16": return 3
+      case "i32": return 4
+      case "i64": return 5
+      default: return 0
+    }
+  }
+
+  private toFloatReg(ir: string[], reg: string, expr: any): string {
+    // If it's already a float literal or float expression, return as-is
+    if (expr?.type === "FloatLiteral") {
+      // FloatLiteral values come as i64 (bitcast from double), convert to float
+      const doubleReg = `%${this.valueCounter++}`
+      ir.push(`  ${doubleReg} = bitcast i64 ${reg} to double`)
+      const floatReg = `%${this.valueCounter++}`
+      ir.push(`  ${floatReg} = fptrunc double ${doubleReg} to float`)
+      return floatReg
+    }
+    if (this.isFloatOperand(expr)) {
+      // Already double, truncate to float
+      const floatReg = `%${this.valueCounter++}`
+      ir.push(`  ${floatReg} = fptrunc double ${reg} to float`)
+      return floatReg
+    }
+    // Integer literal - convert to float
+    const floatReg = `%${this.valueCounter++}`
+    ir.push(`  ${floatReg} = sitofp i64 ${reg} to float`)
+    return floatReg
+  }
+
+  private isTensorType(expr: any): boolean {
+    if (!expr) return false
+
+    // Check if it's an identifier with TensorType in variableTypes
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "TensorType") return true
+    }
+
+    // Check if the expression has a resultType that's a tensor
+    if (expr.resultType?.type === "TensorType") return true
+
+    // Check if it's a TensorConstruction node
+    if (expr.type === "TensorConstruction") return true
+
+    return false
+  }
+
+  private inferTensorDtype(expr: any): any {
+    if (!expr) return { kind: "f32", type: "FloatType" }
+    // Direct tensor construction
+    if (expr.type === "TensorConstruction") return expr.dtype
+    // Binary expression - infer from operands
+    if (expr.type === "BinaryExpression") {
+      if (this.isTensorType(expr.left)) return this.inferTensorDtype(expr.left)
+      if (this.isTensorType(expr.right)) return this.inferTensorDtype(expr.right)
+    }
+    // Identifier - get from variable type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "TensorType") return varType.dtype
+    }
+    // Call expression
+    if (expr.type === "CallExpression") {
+      if (expr.callee?.type === "MemberExpression" && this.isTensorType(expr.callee.object)) {
+        return this.inferTensorDtype(expr.callee.object)
+      }
+      // matmul(a, b) - infer from first arg
+      const args = expr.args || expr.arguments || []
+      if (args.length > 0) return this.inferTensorDtype(args[0])
+    }
+    return { kind: "f32", type: "FloatType" }
+  }
+
+  private isFloatProducingExpression(expr: any): boolean {
+    if (!expr) return false
+    // Tensor method calls that return double: .sum(), .mean()
+    if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
+      const method = expr.callee.property
+      if (this.isTensorType(expr.callee.object)) {
+        const floatMethods = ["sum", "mean", "norm", "dot"]
+        if (floatMethods.includes(method)) return true
+      }
+    }
+    return false
+  }
+
+  private isTensorProducingExpression(expr: any): boolean {
+    if (!expr) return false
+    // Direct tensor construction
+    if (expr.type === "TensorConstruction") return true
+    // Binary expression where at least one operand is a tensor
+    if (expr.type === "BinaryExpression") {
+      return this.isTensorType(expr.left) || this.isTensorType(expr.right)
+    }
+    // matmul() call
+    if (expr.type === "CallExpression" && expr.callee?.type === "Identifier" && expr.callee.name === "matmul") {
+      return true
+    }
+    // Tensor method calls that return tensors (matmul, reshape, etc.)
+    if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
+      const method = expr.callee.property
+      if (this.isTensorType(expr.callee.object)) {
+        const tensorMethods = ["matmul", "reshape", "transpose", "view", "flatten", "squeeze", "unsqueeze"]
+        if (tensorMethods.includes(method)) return true
+      }
+    }
+    return false
   }
 
   private generatePrintCall(ir: string[], funcName: string, args: string[], expr: any): string {
@@ -1902,7 +2228,7 @@ class LLVMIRGenerator {
         argType = funcType.type
       }
     }
-    // String literals are arrays (strings)
+    // String literals are strings
     if (!argType && arg?.type === "StringLiteral") {
       argType = "ArrayType"
     }
@@ -1942,7 +2268,7 @@ class LLVMIRGenerator {
     }
     // Check if it's a string method call result (e.g., s.upper(), s.lower(), s.trim())
     if (!argType && this.isStringType(arg)) {
-      argType = "PointerType"
+      argType = "StringType"
     }
     argType = argType || "IntegerType"
 
@@ -1958,7 +2284,7 @@ class LLVMIRGenerator {
         actualFunc = funcName === "print" ? "print_f64" : "println_f64"
       } else if (argType === "UnsignedType") {
         actualFunc = funcName === "print" ? "print_u64" : "println_u64"
-      } else if (argType === "ArrayType" || argType === "PointerType") {
+      } else if (argType === "ArrayType" || argType === "PointerType" || argType === "StringType") {
         actualFunc = funcName === "print" ? "print_string" : "println_string"
       } else {
         actualFunc = funcName === "print" ? "print_i64" : "println_i64"
@@ -1979,7 +2305,7 @@ class LLVMIRGenerator {
         doubleVal = bc
       }
       ir.push(`  call void @${actualFunc}(double ${doubleVal})`)
-    } else if (argType === "ArrayType" || argType === "PointerType") {
+    } else if (argType === "ArrayType" || argType === "PointerType" || argType === "StringType") {
       ir.push(`  call void @${actualFunc}(ptr ${args[0]})`)
     } else {
       ir.push(`  call void @${actualFunc}(i64 ${args[0]})`)
@@ -2225,9 +2551,15 @@ class LLVMIRGenerator {
           && this.functions.get(value.callee.name)?.returnType === "ptr"
         const isFuncPtr = valueReg.startsWith("@") || value?.type === "Lambda" || isNamedFuncRef || isClosureCall
         const isStringExpr = this.isStringProducingExpression(value)
-        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor) ? "ptr" : "i64"
+        const isTensorExpr = this.isTensorProducingExpression(value)
+        const isFloatExpr = this.isFloatProducingExpression(value)
+        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor || isTensorExpr) ? "ptr" : isFloatExpr ? "double" : "i64"
         ir.push(`  %${name} = alloca ${allocaType}`)
-        if (isSoAConstructor) {
+        if (isTensorExpr) {
+          // Register as TensorType for later method/operator dispatch
+          const tensorDtype = this.inferTensorDtype(value)
+          this.variableTypes.set(name, new TensorType(tensorDtype))
+        } else if (isSoAConstructor) {
           // Build SOAType from struct fields and register it
           const structFields = this.structDefs.get(value.structName)
           if (structFields) {
@@ -2277,6 +2609,9 @@ class LLVMIRGenerator {
         } else if (isStringExpr) {
           // Track as string type for later isStringType checks
           this.variableTypes.set(name, new ArrayType(new UnsignedType("u8"), []))
+        } else if (isFloatExpr) {
+          // Track as float type for proper load/store
+          this.variableTypes.set(name, new FloatType("f64"))
         }
         varType = this.variableTypes.get(name)
       }
@@ -2560,6 +2895,21 @@ class LLVMIRGenerator {
       const reg = `%${this.valueCounter++}`
       ir.push(`  ${reg} = call i64 @array_length(ptr ${arrReg})`)
       return reg
+    }
+
+    // Tensor property access: t.ndim, t.size
+    if (this.isTensorType(expr.object)) {
+      const tensorReg = this.generateExpression(ir, expr.object)
+      if (expr.property === "ndim") {
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call i64 @tensor_ndim(ptr ${tensorReg})`)
+        return reg
+      }
+      if (expr.property === "size") {
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call i64 @tensor_size(ptr ${tensorReg})`)
+        return reg
+      }
     }
 
     // SoA transposed access: datums[i].field → load column array, then array_get
@@ -2864,6 +3214,9 @@ class LLVMIRGenerator {
     // If it's an identifier, look up the variable type
     if (expr.type === "Identifier" && expr.name) {
       const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "StringType") {
+        return true
+      }
       if (varType?.type === "ArrayType") {
         const arrType = varType as ArrayType
         return arrType.elementType?.type === "UnsignedType" &&
@@ -4253,6 +4606,8 @@ class LLVMIRGenerator {
         return "ptr"
       case "PointerType":
         return "ptr"
+      case "StringType":
+        return "ptr"
       case "FunctionType":
         // Function types are function pointers
         return "ptr"
@@ -4265,6 +4620,9 @@ class LLVMIRGenerator {
       case "FutureType":
         // TODO: Future types use synchronous fallback for now - represented as their inner type
         return this.toLLVMType(type.innerType)
+      case "TensorType":
+        // Tensors are heap-allocated GC objects, represented as pointers
+        return "ptr"
       case "VoidType":
         return "void"
  default:

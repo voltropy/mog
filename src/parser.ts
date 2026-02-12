@@ -1,7 +1,7 @@
 import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
 import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
-import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, CustomType, FunctionType, TensorType, ResultType, OptionalType, FutureType } from "./types.js"
+import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, StringType, CustomType, FunctionType, TensorType, ResultType, OptionalType, FutureType } from "./types.js"
 import { getPOSIXConstant } from "./posix_constants.js"
 
 // Decode escape sequences in string literals
@@ -1886,6 +1886,7 @@ private comparison(): ExpressionNode {
     if (name.startsWith("u")) return new UnsignedType(name as any)
     if (name.startsWith("f")) return new FloatType(name as any)
     if (name === "ptr") return new PointerType()
+    if (name === "string") return new StringType()
     return null
   }
 
