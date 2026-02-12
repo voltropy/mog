@@ -70,6 +70,13 @@ const char *mog_arg_string(MogArgs *args, int index);
 void       *mog_arg_handle(MogArgs *args, int index, const char *expected_type);
 bool        mog_arg_present(MogArgs *args, int index); // for optional params
 
+// Direct value extractors (from a MogValue, not from MogArgs)
+// These abort on type mismatch, similar to mog_arg_* but for standalone values.
+int64_t     mog_as_int(MogValue v);
+double      mog_as_float(MogValue v);
+bool        mog_as_bool(MogValue v);
+const char *mog_as_string(MogValue v);
+
 // Result helpers
 MogValue mog_ok_int(int64_t value);
 MogValue mog_ok_float(double value);

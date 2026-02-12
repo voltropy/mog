@@ -1,0 +1,19 @@
+// process — Process capability (POSIX host)
+// Provides process-level operations: sleep, env vars, exit.
+
+capability process {
+  // Sleep for given milliseconds (genuinely async via event loop timer)
+  fn sleep(ms: int) -> int
+  
+  // Get environment variable value
+  fn getenv(name: string) -> string
+  
+  // Get current working directory
+  fn cwd() -> string
+  
+  // Exit the process with given code
+  fn exit(code: int) -> int
+  
+  // Get current timestamp in milliseconds since epoch
+  fn timestamp() -> int
+}

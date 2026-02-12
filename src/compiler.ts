@@ -33,17 +33,23 @@ export async function compile(source: string): Promise<CompiledProgram> {
     const filteredTokens = tokens.filter((t) => t.type !== "WHITESPACE" && t.type !== "COMMENT")
     const ast: ProgramNode = parseTokens(filteredTokens)
 
-    // Extract capability declarations from AST
+    // Extract capability declarations from AST (may be top-level or inside a Block)
     const requiredCaps: string[] = []
     const optionalCaps: string[] = []
-    for (const stmt of ast.statements) {
-      if ((stmt as any).type === "RequiresDeclaration") {
-        requiredCaps.push(...(stmt as any).capabilities)
-      }
-      if ((stmt as any).type === "OptionalDeclaration") {
-        optionalCaps.push(...(stmt as any).capabilities)
+    const extractCaps = (statements: any[]) => {
+      for (const stmt of statements) {
+        if ((stmt as any).type === "RequiresDeclaration") {
+          requiredCaps.push(...(stmt as any).capabilities)
+        }
+        if ((stmt as any).type === "OptionalDeclaration") {
+          optionalCaps.push(...(stmt as any).capabilities)
+        }
+        if ((stmt as any).type === "Block" && (stmt as any).statements) {
+          extractCaps((stmt as any).statements)
+        }
       }
     }
+    extractCaps(ast.statements)
 
     // Load capability declarations from .mogdecl files
     const capabilityDecls = new Map<string, any>()

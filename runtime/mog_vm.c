@@ -252,6 +252,40 @@ bool mog_arg_present(MogArgs *args, int index) {
     return args->values[index].tag != MOG_NONE;
 }
 
+// --- Direct value extractors (from MogValue, not MogArgs) ---
+
+int64_t mog_as_int(MogValue v) {
+    if (v.tag != MOG_INT) {
+        fprintf(stderr, "mog_as_int: expected MOG_INT, got tag %d\n", v.tag);
+        exit(1);
+    }
+    return v.data.i;
+}
+
+double mog_as_float(MogValue v) {
+    if (v.tag != MOG_FLOAT) {
+        fprintf(stderr, "mog_as_float: expected MOG_FLOAT, got tag %d\n", v.tag);
+        exit(1);
+    }
+    return v.data.f;
+}
+
+bool mog_as_bool(MogValue v) {
+    if (v.tag != MOG_BOOL) {
+        fprintf(stderr, "mog_as_bool: expected MOG_BOOL, got tag %d\n", v.tag);
+        exit(1);
+    }
+    return v.data.b;
+}
+
+const char *mog_as_string(MogValue v) {
+    if (v.tag != MOG_STRING) {
+        fprintf(stderr, "mog_as_string: expected MOG_STRING, got tag %d\n", v.tag);
+        exit(1);
+    }
+    return v.data.s;
+}
+
 // --- Result helpers ---
 
 MogValue mog_ok_int(int64_t value) {

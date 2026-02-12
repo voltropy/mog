@@ -80,6 +80,16 @@ class LLVMIRGenerator {
   private capabilities: Set<string> = new Set()
   private capCallDeclared = false
   private capStringConstants: string[] = []
+  // Async/coroutine state
+  private isInAsyncFunction = false
+  private coroHandle = ""
+  private coroFuture = ""
+  private coroId = ""
+  private awaitCounter = 0
+  // Track which functions are async (name -> true)
+  private asyncFunctions: Set<string> = new Set()
+  // Track whether the program has any async functions
+  private hasAsyncFunctions = false
   private resetStringCounter(): void {
     this.stringCounter = 0
     this.stringNameMap.clear()
@@ -102,6 +112,12 @@ class LLVMIRGenerator {
     this.generatePrintDeclarations(ir)
     if (this.capabilities.size > 0) {
       this.generateCapabilityDeclarations(ir)
+    }
+
+    // Detect async functions in AST
+    this.detectAsyncFunctions(ast)
+    if (this.hasAsyncFunctions) {
+      this.generateAsyncDeclarations(ir)
     }
 
     this.resetValueCounter(0)
@@ -151,7 +167,9 @@ class LLVMIRGenerator {
         name: p.name,
         type: this.toLLVMType(p.paramType)
       }))
-      const llvmReturnType = this.toLLVMType(funcDecl.returnType)
+      // Async functions return ptr (MogFuture*) instead of their declared return type
+      const isAsync = funcDecl.type === "AsyncFunctionDeclaration" || this.asyncFunctions.has(funcDecl.name)
+      const llvmReturnType = isAsync ? "ptr" as LLVMType : this.toLLVMType(funcDecl.returnType)
       this.functions.set(funcName, {
         name: funcName,
         returnType: llvmReturnType,
@@ -182,67 +200,100 @@ class LLVMIRGenerator {
       ir.push("")
     }
 
+    // Determine if main is async
+    const mainIsAsync = mainFunc && (mainFunc.type === "AsyncFunctionDeclaration" || this.asyncFunctions.has("main"))
+
     if (hasMain) {
       // User defined main() - generate wrapper at @main
       ir.push("; Main entry point (calls user's main)")
       
-      const hasParams = mainFunc && mainFunc.params.length >= 2
-      
-      if (hasParams) {
+      if (mainIsAsync) {
+        // Async main - set up event loop, call program_user (returns MogFuture*), run loop
         ir.push("define i32 @main(i32 %argc, ptr %argv) {")
         ir.push("entry:")
         ir.push("  call void @gc_init()")
         ir.push("  call void @gc_push_frame()")
-        
-        // Build array of length argc with argv pointers
-        ir.push("  %args_array = call ptr @array_alloc(i64 8, i64 1, i64 %argc)")
-        
-        // Loop through argv and store pointers in array
-        ir.push("  %args_array_data = getelementptr ptr, ptr %args_array, i64 0")
-        
-        // Process first 10 arguments (to keep code size reasonable)
-        for (let i = 0; i < 10; i++) {
-          ir.push(`  ; Process argv[${i}]`)
-          ir.push(`  %argv_gep_${i} = getelementptr ptr, ptr %argv, i64 ${i}`)
-          ir.push(`  %argv_ptr_${i} = load ptr, ptr %argv_gep_${i}`)
-          ir.push(`  %in_bounds_${i} = icmp ult i64 ${i}, %argc`)
-          ir.push(`  br i1 %in_bounds_${i}, label %store_argv_${i}, label %argv_done_${i}`)
-          ir.push(`store_argv_${i}:`)
-          ir.push(`  %array_gep_${i} = getelementptr i64, ptr %args_array_data, i64 ${i}`)
-          ir.push(`  %argv_int_${i} = ptrtoint ptr %argv_ptr_${i} to i64`)
-          ir.push(`  store i64 %argv_int_${i}, ptr %array_gep_${i}`)
-          ir.push(`  br label %argv_done_${i}`)
-          ir.push(`argv_done_${i}:`)
-        }
-        ir.push(`  ; Skip remaining argv elements (10..)`)
-        
-        // Create CLI args table (argc + args array)
-        ir.push("  %cli_table = call ptr @map_new(i64 2)")
-        ir.push("  %argc_key = alloca [5 x i8]")
-        ir.push("  store [5 x i8] c\"argc\\00\", ptr %argc_key")
-        ir.push("  call void @map_set(ptr %cli_table, ptr %argc_key, i64 4, i64 %argc)")
-        
-        ir.push("  %args_key = alloca [5 x i8]")
-        ir.push("  store [5 x i8] c\"args\\00\", ptr %args_key")
-        ir.push("  %args_int = ptrtoint ptr %args_array to i64")
-        ir.push("  call void @map_set(ptr %cli_table, ptr %args_key, i64 4, i64 %args_int)")
-        
-        ir.push("  %cli_table_int = ptrtoint ptr %cli_table to i64")
-        
-        // Call user's main with CLI args table
-        ir.push("  %result = call i64 @program_user(i64 %argc, i64 %cli_table_int)")
+        ir.push("")
+        ir.push("  ; Create and set global event loop")
+        ir.push("  %loop = call ptr @mog_loop_new()")
+        ir.push("  call void @mog_loop_set_global(ptr %loop)")
+        ir.push("")
+        ir.push("  ; Start the async main - runs eagerly, returns a future")
+        ir.push("  %future = call ptr @program_user()")
+        ir.push("")
+        ir.push("  ; Run the event loop until everything completes")
+        ir.push("  ; (For purely synchronous completions, this returns immediately)")
+        ir.push("  call void @mog_loop_run(ptr %loop)")
+        ir.push("")
+        ir.push("  ; Get the result from main's future")
+        ir.push("  %result_i64 = call i64 @mog_future_get_result(ptr %future)")
+        ir.push("  %truncated = trunc i64 %result_i64 to i32")
+        ir.push("")
+        ir.push("  ; Cleanup")
+        ir.push("  call void @mog_loop_free(ptr %loop)")
+        ir.push("  call void @gc_pop_frame()")
+        ir.push("  ret i32 %truncated")
+        ir.push("}")
       } else {
-        ir.push("define i32 @main(i32 %argc, ptr %argv) {")
-        ir.push("entry:")
-        ir.push("  call void @gc_init()")
-        ir.push("  call void @gc_push_frame()")
-        ir.push("  %result = call i64 @program_user()")
+        // Synchronous main - existing behavior
+        const hasParams = mainFunc && mainFunc.params.length >= 2
+        
+        if (hasParams) {
+          ir.push("define i32 @main(i32 %argc, ptr %argv) {")
+          ir.push("entry:")
+          ir.push("  call void @gc_init()")
+          ir.push("  call void @gc_push_frame()")
+          
+          // Build array of length argc with argv pointers
+          ir.push("  %args_array = call ptr @array_alloc(i64 8, i64 1, i64 %argc)")
+          
+          // Loop through argv and store pointers in array
+          ir.push("  %args_array_data = getelementptr ptr, ptr %args_array, i64 0")
+          
+          // Process first 10 arguments (to keep code size reasonable)
+          for (let i = 0; i < 10; i++) {
+            ir.push(`  ; Process argv[${i}]`)
+            ir.push(`  %argv_gep_${i} = getelementptr ptr, ptr %argv, i64 ${i}`)
+            ir.push(`  %argv_ptr_${i} = load ptr, ptr %argv_gep_${i}`)
+            ir.push(`  %in_bounds_${i} = icmp ult i64 ${i}, %argc`)
+            ir.push(`  br i1 %in_bounds_${i}, label %store_argv_${i}, label %argv_done_${i}`)
+            ir.push(`store_argv_${i}:`)
+            ir.push(`  %array_gep_${i} = getelementptr i64, ptr %args_array_data, i64 ${i}`)
+            ir.push(`  %argv_int_${i} = ptrtoint ptr %argv_ptr_${i} to i64`)
+            ir.push(`  store i64 %argv_int_${i}, ptr %array_gep_${i}`)
+            ir.push(`  br label %argv_done_${i}`)
+            ir.push(`argv_done_${i}:`)
+          }
+          ir.push(`  ; Skip remaining argv elements (10..)`)
+          
+          // Create CLI args table (argc + args array)
+          ir.push("  %cli_table = call ptr @map_new(i64 2)")
+          ir.push("  %argc_key = alloca [5 x i8]")
+          ir.push("  store [5 x i8] c\"argc\\00\", ptr %argc_key")
+          ir.push("  call void @map_set(ptr %cli_table, ptr %argc_key, i64 4, i64 %argc)")
+          
+          ir.push("  %args_key = alloca [5 x i8]")
+          ir.push("  store [5 x i8] c\"args\\00\", ptr %args_key")
+          ir.push("  %args_int = ptrtoint ptr %args_array to i64")
+          ir.push("  call void @map_set(ptr %cli_table, ptr %args_key, i64 4, i64 %args_int)")
+          
+          ir.push("  %cli_table_int = ptrtoint ptr %cli_table to i64")
+          
+          // Call user's main with CLI args table
+          ir.push("  %result = call i64 @program_user(i64 %argc, i64 %cli_table_int)")
+        } else {
+          ir.push("define i32 @main(i32 %argc, ptr %argv) {")
+          ir.push("entry:")
+          ir.push("  call void @gc_init()")
+          ir.push("  call void @gc_push_frame()")
+          ir.push("  %result = call i64 @program_user()")
+        }
+        
+        ir.push("  %truncated = trunc i64 %result to i32")
+        ir.push("  call void @gc_pop_frame()")
+        ir.push("  ret i32 %truncated")
+        ir.push("}")
       }
-      
-      ir.push("  %truncated = trunc i64 %result to i32")
-      ir.push("  call void @gc_pop_frame()")
-      ir.push("  ret i32 %truncated")
-      ir.push("}")
     } else {
       // No main() - use program() entry point
       this.resetValueCounter(10)
@@ -276,6 +327,26 @@ class LLVMIRGenerator {
     const declarations = this.findFunctionDeclarationsRecursive(ast.statements)
     functions.push(...declarations)
     return functions
+  }
+
+  private detectAsyncFunctions(ast: ProgramNode): void {
+    const stmts = ast.statements || []
+    this.detectAsyncInStatements(stmts)
+  }
+
+  private detectAsyncInStatements(stmts: any[]): void {
+    for (const stmt of stmts) {
+      if (stmt.type === "AsyncFunctionDeclaration") {
+        this.asyncFunctions.add(stmt.name)
+        this.hasAsyncFunctions = true
+      }
+      if (stmt.body?.statements) {
+        this.detectAsyncInStatements(stmt.body.statements)
+      }
+      if (stmt.type === "Block" && stmt.statements) {
+        this.detectAsyncInStatements(stmt.statements)
+      }
+    }
   }
 
   private findFunctionDeclarationsRecursive(statements: any[]): any[] {
@@ -398,6 +469,130 @@ class LLVMIRGenerator {
     ir.push("declare void @tensor_print(ptr %tensor)")
     ir.push("declare ptr @tensor_reshape(ptr %tensor, i64 %ndim, ptr %shape)")
     ir.push("")
+  }
+
+  private generateAsyncDeclarations(ir: string[]): void {
+    ir.push("")
+    ir.push("; LLVM Coroutine intrinsics")
+    ir.push("declare token @llvm.coro.id(i32, ptr, ptr, ptr)")
+    ir.push("declare i64 @llvm.coro.size.i64()")
+    ir.push("declare ptr @llvm.coro.begin(token, ptr)")
+    ir.push("declare token @llvm.coro.save(ptr)")
+    ir.push("declare i8 @llvm.coro.suspend(token, i1)")
+    ir.push("declare ptr @llvm.coro.free(token, ptr)")
+    ir.push("declare i1 @llvm.coro.end(ptr, i1, token)")
+    ir.push("declare void @llvm.coro.resume(ptr)")
+    ir.push("declare void @llvm.coro.destroy(ptr)")
+    ir.push("declare i1 @llvm.coro.done(ptr)")
+    ir.push("")
+    ir.push("; Async runtime functions")
+    ir.push("declare ptr @mog_future_new()")
+    ir.push("declare void @mog_future_complete(ptr, i64)")
+    ir.push("declare i64 @mog_await(ptr, ptr)")
+    ir.push("declare i32 @mog_future_is_ready(ptr)")
+    ir.push("declare i64 @mog_future_get_result(ptr)")
+    ir.push("declare void @mog_future_set_waiter(ptr, ptr)")
+    ir.push("declare ptr @malloc(i64)")
+    ir.push("declare void @free(ptr)")
+    ir.push("declare void @mog_loop_schedule(ptr, ptr)")
+    ir.push("declare ptr @mog_loop_get_global()")
+    ir.push("declare void @mog_loop_add_timer(ptr, i64, ptr)")
+    ir.push("declare ptr @mog_all(ptr, i32)")
+    ir.push("declare ptr @mog_race(ptr, i32)")
+    ir.push("declare ptr @mog_loop_new()")
+    ir.push("declare void @mog_loop_set_global(ptr)")
+    ir.push("declare void @mog_loop_run(ptr)")
+    ir.push("declare void @mog_loop_free(ptr)")
+    ir.push("declare ptr @mog_future_get_coro_handle(ptr)")
+    ir.push("declare void @mog_coro_resume(ptr)")
+    ir.push("declare void @mog_future_set_coro_frame(ptr, ptr)")
+    ir.push("")
+  }
+
+  private generateAwaitExpression(ir: string[], expr: any): string {
+    const awaitIdx = this.awaitCounter++
+    const innerExpr = expr.argument
+
+    // Check if this is a capability call (e.g., process.sleep, fs.read_file)
+    // that returns a handle (MogFuture*)
+    let innerFuture: string
+    const isCapabilityAwait = innerExpr?.type === "CallExpression" &&
+      innerExpr?.callee?.type === "MemberExpression" &&
+      this.capabilities.has(innerExpr?.callee?.object?.name)
+
+    if (isCapabilityAwait) {
+      // For capability calls, the result is an i64 from mog_cap_call_out.
+      // For process.sleep, the returned value is a MogFuture* cast to i64 via a MogHandle.
+      // We need to check if the function is "sleep" which returns a real pending future.
+      const capName = innerExpr.callee.object.name
+      const funcName = innerExpr.callee.property
+
+      if (capName === "process" && funcName === "sleep") {
+        // process.sleep returns a MogHandle containing a MogFuture*
+        // The capability call returns i64 which is the handle data field (ptr as i64)
+        const capResult = this.generateCapabilityCall(ir, capName, funcName,
+          (innerExpr.args || innerExpr.arguments || []).map((a: any) => this.generateExpression(ir, a)),
+          innerExpr)
+        // The result is a ptr-as-i64, convert to ptr for the future
+        const futurePtr = `%await_future_${awaitIdx}`
+        ir.push(`  ${futurePtr} = inttoptr i64 ${capResult} to ptr`)
+        innerFuture = futurePtr
+      } else {
+        // Other capability calls complete immediately - wrap in a completed future
+        const capResult = this.generateCapabilityCall(ir, capName, funcName,
+          (innerExpr.args || innerExpr.arguments || []).map((a: any) => this.generateExpression(ir, a)),
+          innerExpr)
+        const newFuture = `%await_syncfut_${awaitIdx}`
+        ir.push(`  ${newFuture} = call ptr @mog_future_new()`)
+        ir.push(`  call void @mog_future_complete(ptr ${newFuture}, i64 ${capResult})`)
+        innerFuture = newFuture
+      }
+    } else {
+      // Regular async function call - evaluates to a MogFuture* (ptr)
+      const futureVal = this.generateExpression(ir, innerExpr)
+      innerFuture = futureVal
+
+      // The called async function is suspended at its initial suspend point.
+      // We need to resume it so it can start executing.
+      // Extract the coroutine handle from the returned future and resume it.
+      const childHandle = `%await_child_hdl_${awaitIdx}`
+      ir.push(`  ${childHandle} = call ptr @mog_future_get_coro_handle(ptr ${innerFuture})`)
+      // Resume the child coroutine (it will run until it completes or suspends at an await)
+      ir.push(`  call void @mog_coro_resume(ptr ${childHandle})`)
+    }
+
+    // Call mog_await
+    const awaitResult = `%await_res_${awaitIdx}`
+    ir.push(`  ${awaitResult} = call i64 @mog_await(ptr ${innerFuture}, ptr ${this.coroHandle})`)
+
+    // Check if ready
+    const isReadyReg = `%await_is_ready_${awaitIdx}`
+    ir.push(`  ${isReadyReg} = call i32 @mog_future_is_ready(ptr ${innerFuture})`)
+    const readyCmp = `%await_ready_cmp_${awaitIdx}`
+    ir.push(`  ${readyCmp} = icmp ne i32 ${isReadyReg}, 0`)
+
+    // Save coroutine state
+    const saveToken = `%await_save_${awaitIdx}`
+    ir.push(`  ${saveToken} = call token @llvm.coro.save(ptr ${this.coroHandle})`)
+
+    // Branch based on readiness
+    ir.push(`  br i1 ${readyCmp}, label %await${awaitIdx}.ready, label %await${awaitIdx}.suspend`)
+
+    // Suspend path
+    ir.push(`await${awaitIdx}.suspend:`)
+    const susResult = `%await_sus_${awaitIdx}`
+    ir.push(`  ${susResult} = call i8 @llvm.coro.suspend(token ${saveToken}, i1 false)`)
+    ir.push(`  switch i8 ${susResult}, label %coro.suspend [`)
+    ir.push(`    i8 0, label %await${awaitIdx}.ready`)
+    ir.push(`    i8 1, label %coro.cleanup`)
+    ir.push(`  ]`)
+
+    // Ready path - get the result
+    ir.push(`await${awaitIdx}.ready:`)
+    const resultReg = `%await_val_${awaitIdx}`
+    ir.push(`  ${resultReg} = call i64 @mog_future_get_result(ptr ${innerFuture})`)
+
+    return resultReg
   }
 
   private generateStatement(ir: string[], statement: StatementNode): void {
@@ -543,14 +738,22 @@ class LLVMIRGenerator {
         if (statement.value) {
           value = this.generateExpression(ir, statement.value)
         }
-        ir.push("  call void @gc_pop_frame()")
-        if (value) {
-          const returnType = this.currentFunction?.returnType || "i64"
-          ir.push(`  ret ${returnType} ${value}`)
+        if (this.isInAsyncFunction) {
+          // In async functions, return completes the future and jumps to cleanup
+          const retVal = value || "0"
+          ir.push(`  call void @mog_future_complete(ptr ${this.coroFuture}, i64 ${retVal})`)
+          ir.push(`  br label %coro.cleanup`)
+          this.blockTerminated = true
         } else {
-          ir.push(`  ret void`)
+          ir.push("  call void @gc_pop_frame()")
+          if (value) {
+            const returnType = this.currentFunction?.returnType || "i64"
+            ir.push(`  ret ${returnType} ${value}`)
+          } else {
+            ir.push(`  ret void`)
+          }
+          this.blockTerminated = true
         }
-        this.blockTerminated = true
         break
       }
       case "Conditional":
@@ -739,8 +942,10 @@ class LLVMIRGenerator {
       case "IsErrExpression":
         return this.generateIsErrExpression(ir, expr)
       case "AwaitExpression":
-        // TODO: For now, await simply evaluates the inner expression synchronously.
-        // Future implementation will suspend execution and resume via state machine.
+        if (this.isInAsyncFunction) {
+          return this.generateAwaitExpression(ir, expr)
+        }
+        // Fallback: non-async context, just evaluate synchronously
         return this.generateExpression(ir, expr.argument)
       case "TensorConstruction":
         return this.generateTensorConstruction(ir, expr)
@@ -1344,27 +1549,53 @@ class LLVMIRGenerator {
     const namedArgs: { name: string; value: any }[] = expr.namedArgs || []
 
     // Handle all([...]) and race([...]) builtins for structured concurrency
-    // TODO: For now, all() evaluates all elements sequentially and race() evaluates only the first.
-    // Future implementation will use coroutine-based concurrency with the host event loop.
     if (expr.callee.type === "Identifier" && (expr.callee.name === "all" || expr.callee.name === "race")) {
       const arg = positionalArgs[0]
       if (arg && arg.type === "ArrayLiteral") {
         const elements = arg.elements || []
-        if (expr.callee.name === "race") {
-          // race: return first element's result
-          if (elements.length > 0) {
-            return this.generateExpression(ir, elements[0])
+
+        if (this.isInAsyncFunction) {
+          // Async context: use mog_all/mog_race combinators
+          const count = elements.length
+          if (count === 0) {
+            return "0"
           }
-          return "0"
-        } else {
-          // all: evaluate all elements sequentially, return the array
-          // For synchronous fallback, build a simple array of results
-          const results: string[] = []
+
+          // Evaluate each future expression
+          const futureRegs: string[] = []
           for (const elem of elements) {
-            results.push(this.generateExpression(ir, elem))
+            futureRegs.push(this.generateExpression(ir, elem))
           }
-          // Return last result (simplified - full implementation would build array)
-          return results.length > 0 ? results[results.length - 1] : "0"
+
+          // Store future pointers in a stack-allocated array
+          const arrayReg = `%${this.valueCounter++}`
+          ir.push(`  ${arrayReg} = alloca ptr, i32 ${count}`)
+          for (let i = 0; i < count; i++) {
+            const gep = `%${this.valueCounter++}`
+            ir.push(`  ${gep} = getelementptr ptr, ptr ${arrayReg}, i32 ${i}`)
+            ir.push(`  store ptr ${futureRegs[i]}, ptr ${gep}`)
+          }
+
+          // Call mog_all or mog_race
+          const combFn = expr.callee.name === "all" ? "mog_all" : "mog_race"
+          const resultFuture = `%${this.valueCounter++}`
+          ir.push(`  ${resultFuture} = call ptr @${combFn}(ptr ${arrayReg}, i32 ${count})`)
+
+          return resultFuture
+        } else {
+          // Synchronous fallback
+          if (expr.callee.name === "race") {
+            if (elements.length > 0) {
+              return this.generateExpression(ir, elements[0])
+            }
+            return "0"
+          } else {
+            const results: string[] = []
+            for (const elem of elements) {
+              results.push(this.generateExpression(ir, elem))
+            }
+            return results.length > 0 ? results[results.length - 1] : "0"
+          }
         }
       }
     }
@@ -4268,6 +4499,12 @@ class LLVMIRGenerator {
 
   private generateFunctionDeclaration(ir: string[], statement: any): void {
     const { name, params, returnType, body } = statement
+    const isAsync = statement.type === "AsyncFunctionDeclaration" || this.asyncFunctions.has(name)
+
+    if (isAsync) {
+      this.generateAsyncFunctionDeclaration(ir, statement)
+      return
+    }
 
     this.resetValueCounter(10)
     this.currentFunctionBasicBlocks = 0
@@ -4347,6 +4584,128 @@ class LLVMIRGenerator {
     this.currentFunction = null
   }
 
+  private generateAsyncFunctionDeclaration(ir: string[], statement: any): void {
+    const { name, params, returnType, body } = statement
+
+    this.resetValueCounter(10)
+    this.currentFunctionBasicBlocks = 0
+    this.awaitCounter = 0
+
+    const llvmParams = params.map((p: any) => {
+      const llvmType = this.toLLVMType(p.paramType)
+      return { name: p.name, type: llvmType }
+    })
+
+    // Async functions return ptr (MogFuture*)
+    const func: LLVMFunction = {
+      name,
+      returnType: "ptr",
+      params: llvmParams,
+      body: [],
+    }
+
+    this.functions.set(name, func)
+    this.functionTypes.set(name, returnType)
+    this.currentFunction = func
+
+    const paramStr = llvmParams.map((p: LLVMValue) => `${p.type} %${p.name}`).join(", ")
+
+    // Async functions use presplitcoroutine attribute (required for LLVM coroutine passes)
+    ir.push(`define ptr @${name}(${paramStr}) presplitcoroutine {`)
+    ir.push("entry:")
+
+    // Coroutine setup
+    ir.push("  %coro.id = call token @llvm.coro.id(i32 0, ptr null, ptr null, ptr null)")
+    ir.push("  %coro.size = call i64 @llvm.coro.size.i64()")
+    ir.push("  %coro.mem = call ptr @malloc(i64 %coro.size)")
+    ir.push("  %coro.hdl = call ptr @llvm.coro.begin(token %coro.id, ptr %coro.mem)")
+    ir.push("")
+
+    // Create the future that represents this async function's result
+    ir.push("  %coro.future = call ptr @mog_future_new()")
+    ir.push("")
+
+    // No initial suspend - the function runs eagerly. If it completes without
+    // hitting an await, the future is completed inline and returned directly.
+    // Set up GC frame and local variables
+    ir.push("  call void @gc_push_frame()")
+
+    // Save async state
+    const prevIsAsync = this.isInAsyncFunction
+    const prevCoroHandle = this.coroHandle
+    const prevCoroFuture = this.coroFuture
+    const prevCoroId = this.coroId
+    const prevAwaitCounter = this.awaitCounter
+
+    this.isInAsyncFunction = true
+    this.coroHandle = "%coro.hdl"
+    this.coroFuture = "%coro.future"
+    this.coroId = "%coro.id"
+    this.awaitCounter = 0
+
+    // Allocate local variables for parameters
+    for (const param of llvmParams) {
+      const paramReg = `%${param.name}`
+      const localReg = `%${param.name}_local`
+      ir.push(`  ${localReg} = alloca ${param.type}`)
+      ir.push(`  store ${param.type} ${paramReg}, ptr ${localReg}`)
+      const paramType = params.find((p: any) => p.name === param.name)?.paramType
+      if (paramType) {
+        this.variableTypes.set(param.name, paramType)
+      }
+    }
+    ir.push("")
+
+    // Generate function body
+    this.blockTerminated = false
+    for (const stmt of body.statements) {
+      this.generateStatement(ir, stmt)
+      if (this.blockTerminated) break
+    }
+
+    // If no explicit return, complete the future with 0
+    if (!this.blockTerminated) {
+      ir.push(`  call void @mog_future_complete(ptr %coro.future, i64 0)`)
+      ir.push(`  br label %coro.cleanup`)
+    }
+
+    // Cleanup label - coroutine is done
+    // IMPORTANT: We do NOT free the coroutine frame here because LLVM's
+    // coroutine pass spills the future pointer into the frame. If we free
+    // the frame and then try to return the future pointer, we get a
+    // use-after-free. Instead, we transfer frame ownership to the future
+    // via mog_future_set_coro_frame, and the frame is freed when the
+    // future is freed.
+    ir.push("")
+    ir.push("coro.cleanup:")
+    ir.push("  call void @gc_pop_frame()")
+    ir.push("  %coro.mem.cleanup = call ptr @llvm.coro.free(token %coro.id, ptr %coro.hdl)")
+    ir.push("  call void @mog_future_set_coro_frame(ptr %coro.future, ptr %coro.mem.cleanup)")
+    ir.push("  br label %coro.done")
+
+    // Done label - return the future
+    ir.push("")
+    ir.push("coro.done:")
+    ir.push("  %coro.unused = call i1 @llvm.coro.end(ptr %coro.hdl, i1 false, token none)")
+    ir.push("  ret ptr %coro.future")
+
+    // Suspend label - returns the future when coroutine suspends
+    ir.push("")
+    ir.push("coro.suspend:")
+    ir.push("  ret ptr %coro.future")
+
+    ir.push("}")
+    ir.push("")
+
+    // Restore state
+    this.isInAsyncFunction = prevIsAsync
+    this.coroHandle = prevCoroHandle
+    this.coroFuture = prevCoroFuture
+    this.coroId = prevCoroId
+    this.awaitCounter = prevAwaitCounter
+    this.currentFunction = null
+  }
+
   /**
    * Determine LLVM function attributes for optimization
    * Small functions get alwaysinline for hot path optimization
@@ -4354,6 +4713,12 @@ class LLVMIRGenerator {
   private determineFunctionAttributes(statement: any): string {
     const attrs: string[] = []
     const body = statement.body
+
+    // Async functions use presplitcoroutine - don't add other attributes that conflict
+    const isAsync = statement.type === "AsyncFunctionDeclaration" || this.asyncFunctions.has(statement.name)
+    if (isAsync) {
+      return " presplitcoroutine"
+    }
 
     // Count basic blocks by checking for control flow statements
     let basicBlockCount = 1 // entry block
