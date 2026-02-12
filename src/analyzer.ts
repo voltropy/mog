@@ -712,6 +712,20 @@ class SemanticAnalyzer {
       this.symbolTable.declare(name, "function", func.returnType)
     }
 
+    // Terminal I/O and utility functions
+    const termioFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
+      stdin_poll: { params: [{ name: "timeout_ms", type: i64Type }], returnType: i64Type },
+      stdin_read_line: { params: [], returnType: ptrType },
+      time_ms: { params: [], returnType: i64Type },
+      string_eq: { params: [{ name: "a", type: ptrType }, { name: "b", type: ptrType }], returnType: i64Type },
+      flush_stdout: { params: [], returnType: voidType },
+      parse_int: { params: [{ name: "s", type: ptrType }], returnType: i64Type },
+    }
+
+    for (const [name, func] of Object.entries(termioFunctions)) {
+      this.symbolTable.declare(name, "function", func.returnType)
+    }
+
     // Math builtin functions (available without import)
     const mathFunctions: Record<string, { params: { name: string; type: Type }[]; returnType: Type }> = {
       // Single-arg: float -> float
@@ -2486,6 +2500,11 @@ class SemanticAnalyzer {
         return new ArrayType(arrayType.elementType, newDimensions)
       }
       return arrayType.elementType
+    }
+
+    // Allow indexing raw pointers (from gc_alloc) — returns i64
+    if (isPointerType(objectType)) {
+      return new IntegerType("i64")
     }
 
     this.emitError(`Cannot index into non-array type ${objectType.toString()}`, node.position)

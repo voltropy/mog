@@ -1718,3 +1718,67 @@ MogTensor* tensor_reshape(MogTensor* t, int64_t new_ndim, int64_t* new_shape) {
   memcpy(r->data, t->data, t->size * sizeof(float));
   return r;
 }
+
+/* --- Terminal I/O utilities --- */
+#include <sys/select.h>
+#include <termios.h>
+
+/* Check if stdin has data ready within timeout_ms milliseconds.
+   Returns 1 if data is available, 0 if timeout elapsed. */
+int64_t stdin_poll(int64_t timeout_ms) {
+  fd_set fds;
+  struct timeval tv;
+  FD_ZERO(&fds);
+  FD_SET(STDIN_FILENO, &fds);
+  tv.tv_sec = timeout_ms / 1000;
+  tv.tv_usec = (timeout_ms % 1000) * 1000;
+  int result = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+  return (int64_t)(result > 0 ? 1 : 0);
+}
+
+/* Read a line from stdin (blocking). Returns a GC-allocated string.
+   Strips trailing newline. */
+char* stdin_read_line(void) {
+  char buf[1024];
+  if (fgets(buf, sizeof(buf), stdin) == NULL) {
+    /* EOF or error: return empty string */
+    char* s = (char*)gc_alloc(1);
+    s[0] = '\0';
+    return s;
+  }
+  /* Strip trailing newline/carriage return */
+  size_t len = strlen(buf);
+  while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+    buf[--len] = '\0';
+  }
+  char* s = (char*)gc_alloc(len + 1);
+  memcpy(s, buf, len + 1);
+  return s;
+}
+
+/* Get monotonic time in milliseconds (clock_gettime MONOTONIC). */
+int64_t time_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
+/* Compare two strings for equality. Returns 1 if equal, 0 otherwise. */
+int64_t string_eq(const char* a, const char* b) {
+  if (a == NULL || b == NULL) return (int64_t)(a == b);
+  return (int64_t)(strcmp(a, b) == 0);
+}
+
+/* Flush stdout (useful after print without newline). */
+void flush_stdout(void) {
+  fflush(stdout);
+}
+
+/* Parse an integer from a string. Returns the parsed value, or 0 on failure. */
+int64_t parse_int(const char* s) {
+  if (s == NULL || s[0] == '\0') return 0;
+  char* end;
+  long long val = strtoll(s, &end, 10);
+  if (end == s) return 0;  /* no digits parsed */
+  return (int64_t)val;
+}

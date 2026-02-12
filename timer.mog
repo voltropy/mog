@@ -1,0 +1,149 @@
+// Interactive Timer Program
+// Type a number (milliseconds) and press Enter to set a timer.
+// Multiple timers run concurrently. Type 'q' to quit.
+
+fn main() -> i64 {
+  // Timer storage: parallel arrays for start time, duration, and active flag
+  // Support up to 64 concurrent timers
+  max_timers: i64 = 64;
+  starts: ptr    = gc_alloc(512);
+  durations: ptr = gc_alloc(512);
+  active: ptr    = gc_alloc(512);
+  count: i64 = 0;
+  next_id: i64 = 1;
+
+  // Zero out the active flags
+  zi: i64 = 0;
+  while (zi < max_timers) {
+    active[zi * 8] := 0;
+    zi = zi + 1;
+  }
+
+  // Record program start for relative timestamps
+  t0: i64 = time_ms();
+
+  print_string("=== Mog Timer ===");
+  println();
+  print_string("Enter duration in milliseconds, then press Enter.");
+  println();
+  print_string("Multiple timers can run concurrently.");
+  println();
+  print_string("Type 'q' to quit.");
+  println();
+  println();
+  print_string("> ");
+  flush_stdout();
+
+  running: i64 = 1;
+
+  while (running) {
+    // Poll stdin with a 50ms timeout — allows timer checks ~20 times/sec
+    ready: i64 = stdin_poll(50);
+
+    if (ready) {
+      line: ptr = stdin_read_line();
+
+      // Check for quit
+      is_quit: i64 = string_eq(line, "q");
+      if (is_quit) {
+        print_string("Goodbye!");
+        println();
+        running = 0;
+      } else {
+        // Parse the duration
+        ms: i64 = parse_int(line);
+
+        if (ms > 0) {
+          // Find a free slot
+          slot: i64 = 0;
+          found: i64 = 0;
+          si: i64 = 0;
+          while (si < max_timers) {
+            if (found == 0) {
+              sflag: i64 = active[si * 8];
+              if (sflag == 0) {
+                slot = si;
+                found = 1;
+              }
+            }
+            si = si + 1;
+          }
+
+          if (found) {
+            now: i64 = time_ms();
+            starts[slot * 8] := now;
+            durations[slot * 8] := ms;
+            active[slot * 8] := next_id;
+            next_id = next_id + 1;
+            count = count + 1;
+
+            rel: i64 = now - t0;
+            print_string("  Timer #");
+            print(active[slot * 8]);
+            print_string(" set for ");
+            print(ms);
+            print_string("ms at T+");
+            print(rel);
+            print_string("ms (");
+            print(count);
+            print_string(" active)");
+            println();
+          } else {
+            print_string("  [error] Too many timers! (max 64)");
+            println();
+          }
+        } else {
+          // Not a valid number and not "q"
+          len: u64 = string_length(line);
+          if (len > 0) {
+            print_string("  [error] Enter a positive number (ms) or 'q' to quit");
+            println();
+          }
+        }
+        // Re-display prompt
+        print_string("> ");
+        flush_stdout();
+      }
+    }
+
+    // Check all active timers for expiry
+    check_time: i64 = time_ms();
+    ci: i64 = 0;
+    while (ci < max_timers) {
+      tflag: i64 = active[ci * 8];
+      if (tflag > 0) {
+        tstart: i64 = starts[ci * 8];
+        tdur: i64 = durations[ci * 8];
+        elapsed: i64 = check_time - tstart;
+        if (elapsed >= tdur) {
+          // Timer expired!
+          rel_start: i64 = tstart - t0;
+          rel_end: i64 = check_time - t0;
+          print_string("\n  [DING] Timer #");
+          print(tflag);
+          print_string(": ");
+          print(tdur);
+          print_string("ms timer started at T+");
+          print(rel_start);
+          print_string("ms, fired at T+");
+          print(rel_end);
+          print_string("ms (actual: ");
+          print(elapsed);
+          print_string("ms)");
+          println();
+
+          // Deactivate
+          active[ci * 8] := 0;
+          count = count - 1;
+
+          // Re-display prompt
+          print_string("> ");
+          flush_stdout();
+        }
+      }
+      ci = ci + 1;
+    }
+  }
+
+  return 0;
+}

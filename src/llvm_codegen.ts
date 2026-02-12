@@ -517,6 +517,15 @@ class LLVMIRGenerator {
     ir.push("declare void @tensor_print(ptr %tensor)")
     ir.push("declare ptr @tensor_reshape(ptr %tensor, i64 %ndim, ptr %shape)")
     ir.push("")
+
+    ir.push("; Declare terminal I/O and utility functions")
+    ir.push("declare i64 @stdin_poll(i64 %timeout_ms)")
+    ir.push("declare ptr @stdin_read_line()")
+    ir.push("declare i64 @time_ms()")
+    ir.push("declare i64 @string_eq(ptr %a, ptr %b)")
+    ir.push("declare void @flush_stdout()")
+    ir.push("declare i64 @parse_int(ptr %s)")
+    ir.push("")
   }
 
   private generateAsyncDeclarations(ir: string[]): void {
@@ -1881,6 +1890,12 @@ class LLVMIRGenerator {
         i64_to_string: { params: ["i64"], ret: "ptr" },
         f64_to_string: { params: ["double"], ret: "ptr" },
         gc_alloc: { params: ["i64"], ret: "ptr" },
+        stdin_poll: { params: ["i64"], ret: "i64" },
+        stdin_read_line: { params: [], ret: "ptr" },
+        time_ms: { params: [], ret: "i64" },
+        string_eq: { params: ["ptr", "ptr"], ret: "i64" },
+        flush_stdout: { params: [], ret: "void" },
+        parse_int: { params: ["ptr"], ret: "i64" },
       }
 
       const sig = posixSignatures[funcName]
@@ -5037,8 +5052,11 @@ class LLVMIRGenerator {
     switch (type.type) {
       case "IntegerType":
         return type.kind as LLVMType
-      case "UnsignedType":
-        return type.kind as LLVMType
+      case "UnsignedType": {
+        // LLVM integers are signless — u8 maps to i8, u16 to i16, etc.
+        const bits = type.kind.slice(1)  // "u64" -> "64"
+        return `i${bits}` as LLVMType
+      }
       case "FloatType":
         // LLVM float type mapping: f8/f16->half, f32->float, f64->double, f128->fp128
         // f256 is not natively supported by LLVM - we treat it as fp128 (or could use software emulation)
