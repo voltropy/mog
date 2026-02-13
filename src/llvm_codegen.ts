@@ -799,14 +799,12 @@ class LLVMIRGenerator {
           // If storing into a ptr variable, convert i64 -> ptr.
           // Also handle await wrapping a capability call (await cap.fn()).
           const exprVal = statement.value as any
-          const isCapCall = (exprVal?.type === "CallExpression" 
+          const isDirectCapCall = (exprVal?.type === "CallExpression" 
             && exprVal?.callee?.type === "MemberExpression"
             && this.capabilities.has(exprVal?.callee?.object?.name))
-            || (exprVal?.type === "AwaitExpression"
-              && exprVal?.argument?.type === "CallExpression"
-              && exprVal?.argument?.callee?.type === "MemberExpression"
-              && this.capabilities.has(exprVal?.argument?.callee?.object?.name))
-          if (storeType === "ptr" && isCapCall) {
+          // Note: AwaitExpression wrapping a cap call already converts to ptr in generateAwaitExpression,
+          // so we only need inttoptr for direct (non-awaited) cap calls.
+          if (storeType === "ptr" && isDirectCapCall) {
             const ptrConv = `%${this.valueCounter++}`
             ir.push(`  ${ptrConv} = inttoptr i64 ${value} to ptr`)
             ir.push(`  store ptr ${ptrConv}, ptr ${reg}`)
@@ -5518,9 +5516,14 @@ private getIntBits(type: LLVMType): number {
 
   private generateErrExpression(ir: string[], expr: any): string {
     const value = this.generateExpression(ir, expr.value)
-    // The value should be a string pointer
-    const valuePtr = `%${this.valueCounter++}`
-    ir.push(`  ${valuePtr} = inttoptr i64 ${value} to ptr`)
+    // The value may be a ptr (string literal GEP) or i64 (variable)
+    let valuePtr: string
+    if (expr.value.type === "StringLiteral" || expr.value.type === "TemplateLiteral") {
+      valuePtr = value // already a ptr from GEP
+    } else {
+      valuePtr = `%${this.valueCounter++}`
+      ir.push(`  ${valuePtr} = inttoptr i64 ${value} to ptr`)
+    }
     const resultPtr = `%${this.valueCounter++}`
     ir.push(`  ${resultPtr} = call ptr @mog_result_err(ptr ${valuePtr})`)
     const resultInt = `%${this.valueCounter++}`

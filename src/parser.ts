@@ -1037,17 +1037,31 @@ class Parser {
       this.consume("RBRACKET", "Expected ] after capacity")
       varType = { type: "SOAType", structName, capacity }
       typeName = `soa ${structName}[${capacity ?? ''}]`
+    } else if (this.checkType("QUESTION_MARK")) {
+      // Optional type annotation: x: ?i64 = ...
+      this.advance() // consume ?
+      const innerType = this.parseReturnType()
+      varType = new OptionalType(innerType)
+      typeName = varType.toString()
     } else if (this.checkType("IDENTIFIER")) {
       // Handle custom type names (e.g., Point, Particle)
       let typeToken = this.consume("IDENTIFIER", "Expected type annotation")
       typeName = typeToken.value
-      declaredType = { name: typeName, type: "CustomType" }
-      // Handle trailing [] for array of type (e.g., f64[][])
-      while (this.matchType("LBRACKET")) {
-        typeName += "[]"
-        this.consume("RBRACKET", "Expected ] after array bracket")
+      // Check for Result<T> type
+      if (typeName === "Result" && this.matchType("LESS")) {
+        const innerType = this.parseReturnType()
+        this.consume("GREATER", "Expected > after Result<T>")
+        varType = new ResultType(innerType)
+        typeName = varType.toString()
+      } else {
+        declaredType = { name: typeName, type: "CustomType" }
+        // Handle trailing [] for array of type (e.g., f64[][])
+        while (this.matchType("LBRACKET")) {
+          typeName += "[]"
+          this.consume("RBRACKET", "Expected ] after array bracket")
+        }
+        varType = this.parseType(typeName)
       }
-      varType = this.parseType(typeName)
     } else {
       throw new Error("Expected type annotation")
     }

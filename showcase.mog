@@ -159,7 +159,31 @@ async fn pipeline() -> i64 {
 }
 
 // ============================================================
-// 4. MAIN - entry point (async to support await)
+// 4. RESULT & OPTIONAL - error handling
+// ============================================================
+
+fn safe_divide(a: i64, b: i64) -> Result<i64> {
+  if b == 0 {
+    return err("division by zero");
+  }
+  return ok(a / b);
+}
+
+fn find_positive(n: i64) -> ?i64 {
+  if n > 0 {
+    return some(n);
+  }
+  return none;
+}
+
+fn chain_divide(a: i64, b: i64, c: i64) -> Result<i64> {
+  step1: i64 = safe_divide(a, b)?;
+  step2: i64 = safe_divide(step1, c)?;
+  return ok(step2);
+}
+
+// ============================================================
+// 5. MAIN - entry point (async to support await)
 // ============================================================
 
 async fn main() -> i64 {
@@ -401,6 +425,77 @@ async fn main() -> i64 {
 
   iresult2: i64 = if ival > 100 { 1; } else { 0; };
   print_string(f"  if 10 > 100: {iresult2}\n");
+  print_string("\n");
+
+  // --- Section: Result Type ---
+  print_string("=== Result Type ===\n");
+
+  // ok and err constructors
+  res1: Result<i64> = safe_divide(10, 3);
+  if res1 is ok(div_ok) {
+    print_string(f"  10 / 3 = {div_ok}\n");
+  }
+
+  res2: Result<i64> = safe_divide(10, 0);
+  if res2 is err(div_err) {
+    print_string("  10 / 0 = err (division by zero)\n");
+  }
+
+  // ? propagation through chain_divide
+  res3: Result<i64> = chain_divide(100, 5, 2);
+  if res3 is ok(chain_ok) {
+    print_string(f"  100 / 5 / 2 = {chain_ok}\n");
+  }
+
+  res4: Result<i64> = chain_divide(100, 0, 2);
+  if res4 is err(chain_err) {
+    print_string("  100 / 0 / 2 = err (propagated)\n");
+  }
+
+  // match on Result
+  res5: Result<i64> = safe_divide(42, 6);
+  rdesc: i64 = match res5 {
+    ok(rval) => rval,
+    err(rmsg) => 0
+  };
+  print_string(f"  match ok(42/6): {rdesc}\n");
+
+  res6: Result<i64> = safe_divide(42, 0);
+  rdesc2: i64 = match res6 {
+    ok(rval2) => rval2,
+    err(rmsg2) => 0
+  };
+  print_string(f"  match err(42/0): {rdesc2}\n");
+  print_string("\n");
+
+  // --- Section: Optional Type ---
+  print_string("=== Optional Type ===\n");
+
+  // some and none
+  o1: ?i64 = find_positive(42);
+  if o1 is some(found) {
+    print_string(f"  find_positive(42) = {found}\n");
+  }
+
+  o2: ?i64 = find_positive(-5);
+  if o2 is none {
+    print_string("  find_positive(-5) = none\n");
+  }
+
+  // match on Optional
+  o3: ?i64 = some(99);
+  oval: i64 = match o3 {
+    some(sv) => sv,
+    none => 0
+  };
+  print_string(f"  match some(99): {oval}\n");
+
+  o4: ?i64 = none;
+  oval2: i64 = match o4 {
+    some(sv2) => sv2,
+    none => 0
+  };
+  print_string(f"  match none: {oval2}\n");
   print_string("\n");
 
   // --- Section: Math Builtins ---
