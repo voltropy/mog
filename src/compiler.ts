@@ -89,7 +89,7 @@ export async function compile(source: string): Promise<CompiledProgram> {
       return { llvmIR: "", errors }
     }
 
-    const llvmIR = generateLLVMIR(ast, undefined, allCaps)
+    const llvmIR = generateLLVMIR(ast, undefined, allCaps, capabilityDecls)
 
     return { llvmIR, errors: [] }
   } catch (error: unknown) {

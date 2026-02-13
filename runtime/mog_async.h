@@ -40,6 +40,7 @@ struct MogFuture {
 struct MogTimer {
     uint64_t    deadline_ns;  /* Absolute monotonic time */
     MogFuture  *future;       /* Future to complete when timer fires */
+    int64_t     result_value; /* Value to pass to mog_future_complete */
     MogTimer   *next;         /* Sorted linked list */
 };
 
@@ -83,6 +84,7 @@ void       mog_future_free(MogFuture *future);
 void mog_loop_enqueue_ready(MogEventLoop *loop, MogFuture *future);
 void mog_loop_schedule(MogEventLoop *loop, void *coro_handle);
 void mog_loop_add_timer(MogEventLoop *loop, uint64_t delay_ms, MogFuture *future);
+void mog_loop_add_timer_with_value(MogEventLoop *loop, uint64_t delay_ms, MogFuture *future, int64_t value);
 
 /* ---- Global event loop ---- */
 void          mog_loop_set_global(MogEventLoop *loop);

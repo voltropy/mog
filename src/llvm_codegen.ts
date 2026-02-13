@@ -60,6 +60,18 @@ class LLVMIRGenerator {
     }
   }
 
+  setCapabilityDecls(decls: Map<string, any>): void {
+    this.capabilityDecls = decls
+  }
+
+  /** Check if a capability function is declared as async in its .mogdecl */
+  private isAsyncCapabilityFunc(capName: string, funcName: string): boolean {
+    const decl = this.capabilityDecls.get(capName)
+    if (!decl) return false
+    const func = decl.functions?.find((f: any) => f.name === funcName)
+    return func?.isAsync === true
+  }
+
   private resetValueCounter(start: number = 0): void {
     this.valueCounter = start
   }
@@ -78,6 +90,7 @@ class LLVMIRGenerator {
   private structDefs: Map<string, { name: string; fieldType: any }[]> = new Map()
   // Capability tracking for Host FFI
   private capabilities: Set<string> = new Set()
+  private capabilityDecls: Map<string, any> = new Map() // CapabilityDecl objects from .mogdecl
   private capCallDeclared = false
   private capStringConstants: string[] = []
   // Async/coroutine state
@@ -90,7 +103,8 @@ class LLVMIRGenerator {
   private asyncFunctions: Set<string> = new Set()
   // Track whether the program has any async functions
   private hasAsyncFunctions = false
-  // Runtime async functions that return MogFuture* directly (not coroutines)
+  // Runtime async builtins (C functions that return MogFuture* directly, not Mog coroutines).
+  // These skip coro-resume since they have no coroutine handle — they manage their own suspension.
   private runtimeAsyncFunctions: Set<string> = new Set(["async_read_line"])
   // Package prefix for name mangling in multi-package builds
   private packagePrefix: string = ""
@@ -586,27 +600,20 @@ class LLVMIRGenerator {
       this.capabilities.has(innerExpr?.callee?.object?.name)
 
     if (isCapabilityAwait) {
-      // For capability calls, the result is an i64 from mog_cap_call_out.
-      // For process.sleep, the returned value is a MogFuture* cast to i64 via a MogHandle.
-      // We need to check if the function is "sleep" which returns a real pending future.
       const capName = innerExpr.callee.object.name
       const funcName = innerExpr.callee.property
+      const capArgs = (innerExpr.args || innerExpr.arguments || []).map((a: any) => this.generateExpression(ir, a))
 
-      if (capName === "process" && funcName === "sleep") {
-        // process.sleep returns a MogHandle containing a MogFuture*
-        // The capability call returns i64 which is the handle data field (ptr as i64)
-        const capResult = this.generateCapabilityCall(ir, capName, funcName,
-          (innerExpr.args || innerExpr.arguments || []).map((a: any) => this.generateExpression(ir, a)),
-          innerExpr)
-        // The result is a ptr-as-i64, convert to ptr for the future
+      if (this.isAsyncCapabilityFunc(capName, funcName)) {
+        // This capability function is declared as `async fn` in its .mogdecl.
+        // The host returns a MogFuture* (as i64 inside a MogHandle).
+        const capResult = this.generateCapabilityCall(ir, capName, funcName, capArgs, innerExpr)
         const futurePtr = `%await_future_${awaitIdx}`
         ir.push(`  ${futurePtr} = inttoptr i64 ${capResult} to ptr`)
         innerFuture = futurePtr
       } else {
-        // Other capability calls complete immediately - wrap in a completed future
-        const capResult = this.generateCapabilityCall(ir, capName, funcName,
-          (innerExpr.args || innerExpr.arguments || []).map((a: any) => this.generateExpression(ir, a)),
-          innerExpr)
+        // Synchronous capability call — wrap result in an immediately-completed future.
+        const capResult = this.generateCapabilityCall(ir, capName, funcName, capArgs, innerExpr)
         const newFuture = `%await_syncfut_${awaitIdx}`
         ir.push(`  ${newFuture} = call ptr @mog_future_new()`)
         ir.push(`  call void @mog_future_complete(ptr ${newFuture}, i64 ${capResult})`)
@@ -634,25 +641,20 @@ class LLVMIRGenerator {
       }
     }
 
-    // Call mog_await
-    const awaitResult = `%await_res_${awaitIdx}`
-    ir.push(`  ${awaitResult} = call i64 @mog_await(ptr ${innerFuture}, ptr ${this.coroHandle})`)
-
-    // Check if ready
-    const isReadyReg = `%await_is_ready_${awaitIdx}`
-    ir.push(`  ${isReadyReg} = call i32 @mog_future_is_ready(ptr ${innerFuture})`)
-    const readyCmp = `%await_ready_cmp_${awaitIdx}`
-    ir.push(`  ${readyCmp} = icmp ne i32 ${isReadyReg}, 0`)
-
-    // Save coroutine state
+    // Save coroutine state BEFORE the await (coro.save sets the resume index)
     const saveToken = `%await_save_${awaitIdx}`
     ir.push(`  ${saveToken} = call token @llvm.coro.save(ptr ${this.coroHandle})`)
 
-    // Branch based on readiness
-    ir.push(`  br i1 ${readyCmp}, label %await${awaitIdx}.ready, label %await${awaitIdx}.suspend`)
+    // Call mog_await — registers coro_handle as waiter. If the future is already
+    // ready, mog_await enqueues it in the event loop's ready queue so that
+    // coro.suspend below returns immediately upon resumption.
+    const awaitResult = `%await_res_${awaitIdx}`
+    ir.push(`  ${awaitResult} = call i64 @mog_await(ptr ${innerFuture}, ptr ${this.coroHandle})`)
 
-    // Suspend path
-    ir.push(`await${awaitIdx}.suspend:`)
+    // Always suspend. The event loop will resume us immediately if the future
+    // was already ready (mog_await enqueued it). This avoids the LLVM coroutine
+    // pass miscompilation where skipping coro.suspend causes llvm.assume to
+    // eliminate readiness checks in the resume function.
     const susResult = `%await_sus_${awaitIdx}`
     ir.push(`  ${susResult} = call i8 @llvm.coro.suspend(token ${saveToken}, i1 false)`)
     ir.push(`  switch i8 ${susResult}, label %coro.suspend [`)
@@ -665,10 +667,9 @@ class LLVMIRGenerator {
     const rawResult = `%await_raw_${awaitIdx}`
     ir.push(`  ${rawResult} = call i64 @mog_future_get_result(ptr ${innerFuture})`)
 
-    // Check if the result should be a pointer (e.g., async_read_line returns a string pointer)
+    // Check if the result should be a pointer (e.g., a function returning a string pointer)
     const resultType = expr?.resultType
     const needsPtrConversion = resultType?.type === "PointerType" || resultType?.type === "StringType"
-      || (innerExpr?.type === "CallExpression" && innerExpr?.callee?.name === "async_read_line")
 
     if (needsPtrConversion) {
       const ptrResult = `%await_val_${awaitIdx}`
@@ -4827,7 +4828,7 @@ class LLVMIRGenerator {
       ir.push(`  br label %coro.cleanup`)
     }
 
-    // Cleanup label - coroutine is done
+    // Cleanup label - coroutine is done (destroy path)
     // IMPORTANT: We do NOT free the coroutine frame here because LLVM's
     // coroutine pass spills the future pointer into the frame. If we free
     // the frame and then try to return the future pointer, we get a
@@ -4839,17 +4840,15 @@ class LLVMIRGenerator {
     ir.push("  call void @gc_pop_frame()")
     ir.push("  %coro.mem.cleanup = call ptr @llvm.coro.free(token %coro.id, ptr %coro.hdl)")
     ir.push("  call void @mog_future_set_coro_frame(ptr %coro.future, ptr %coro.mem.cleanup)")
-    ir.push("  br label %coro.done")
+    ir.push("  br label %coro.suspend")
 
-    // Done label - return the future
-    ir.push("")
-    ir.push("coro.done:")
-    ir.push("  %coro.unused = call i1 @llvm.coro.end(ptr %coro.hdl, i1 false, token none)")
-    ir.push("  ret ptr %coro.future")
-
-    // Suspend label - returns the future when coroutine suspends
+    // Suspend label - shared exit point for both suspend and cleanup paths.
+    // Both the switch default case (suspend) and cleanup branch here.
+    // coro.end marks where the coroutine returns control to the caller;
+    // in the resume function this becomes ret void.
     ir.push("")
     ir.push("coro.suspend:")
+    ir.push(`  %coro.end.unused = call i1 @llvm.coro.end(ptr ${this.coroHandle}, i1 false, token none)`)
     ir.push("  ret ptr %coro.future")
 
     ir.push("}")
@@ -5736,10 +5735,13 @@ private getIntBits(type: LLVMType): number {
   }
 }
 
-export function generateLLVMIR(ast: ProgramNode, options?: Partial<OptimizationOptions>, capabilities?: string[]): string {
+export function generateLLVMIR(ast: ProgramNode, options?: Partial<OptimizationOptions>, capabilities?: string[], capabilityDecls?: Map<string, any>): string {
   const generator = new LLVMIRGenerator(options)
   if (capabilities && capabilities.length > 0) {
     generator.setCapabilities(capabilities)
+  }
+  if (capabilityDecls && capabilityDecls.size > 0) {
+    generator.setCapabilityDecls(capabilityDecls)
   }
   return generator.generate(ast)
 }
@@ -5748,10 +5750,14 @@ export function generateModuleLLVMIR(
   packages: { packageName: string; ast: ProgramNode; exports: Map<string, { name: string; kind: string }> }[],
   options?: Partial<OptimizationOptions>,
   capabilities?: string[],
+  capabilityDecls?: Map<string, any>,
 ): string {
   const generator = new LLVMIRGenerator(options)
   if (capabilities && capabilities.length > 0) {
     generator.setCapabilities(capabilities)
+  }
+  if (capabilityDecls && capabilityDecls.size > 0) {
+    generator.setCapabilityDecls(capabilityDecls)
   }
 
   // For multi-package compilation, we merge all package ASTs into a single AST

@@ -3,7 +3,7 @@
 
 capability process {
   // Sleep for given milliseconds (genuinely async via event loop timer)
-  fn sleep(ms: int) -> int
+  async fn sleep(ms: int) -> int
   
   // Get environment variable value
   fn getenv(name: string) -> string

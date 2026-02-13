@@ -176,6 +176,29 @@ void mog_loop_add_timer(MogEventLoop *loop, uint64_t delay_ms, MogFuture *future
     if (!timer) { fprintf(stderr, "mog: out of memory (timer)\n"); exit(1); }
     timer->deadline_ns = now_ns() + delay_ms * 1000000ULL;
     timer->future = future;
+    timer->result_value = 0;
+
+    /* Insert sorted by deadline */
+    if (!loop->timers || timer->deadline_ns < loop->timers->deadline_ns) {
+        timer->next = loop->timers;
+        loop->timers = timer;
+    } else {
+        MogTimer *cur = loop->timers;
+        while (cur->next && cur->next->deadline_ns <= timer->deadline_ns) {
+            cur = cur->next;
+        }
+        timer->next = cur->next;
+        cur->next = timer;
+    }
+}
+
+void mog_loop_add_timer_with_value(MogEventLoop *loop, uint64_t delay_ms, MogFuture *future, int64_t value) {
+    if (!loop || !future) return;
+    MogTimer *timer = (MogTimer *)calloc(1, sizeof(MogTimer));
+    if (!timer) { fprintf(stderr, "mog: out of memory (timer)\n"); exit(1); }
+    timer->deadline_ns = now_ns() + delay_ms * 1000000ULL;
+    timer->future = future;
+    timer->result_value = value;
 
     /* Insert sorted by deadline */
     if (!loop->timers || timer->deadline_ns < loop->timers->deadline_ns) {
@@ -214,7 +237,7 @@ void mog_loop_run(MogEventLoop *loop) {
         while (loop->timers && loop->timers->deadline_ns <= t) {
             MogTimer *timer = loop->timers;
             loop->timers = timer->next;
-            mog_future_complete(timer->future, 0);
+            mog_future_complete(timer->future, timer->result_value);
             free(timer);
         }
 
@@ -365,11 +388,14 @@ MogFuture *async_read_line(void) {
 
 int64_t mog_await(MogFuture *future, void *coro_handle) {
     if (!future) return 0;
-    if (future->state != MOG_FUTURE_PENDING) {
-        return future->result;  /* Already ready — return result immediately */
-    }
-    /* Not ready — register the waiter so the loop can resume us */
+    /* Always register the coroutine handle so the event loop can resume us */
     future->coro_handle = coro_handle;
+    if (future->state != MOG_FUTURE_PENDING) {
+        /* Already ready — enqueue for immediate resumption by the event loop.
+         * The coroutine will suspend (coro.suspend) and the event loop will
+         * pick this up from the ready queue and resume immediately. */
+        mog_loop_enqueue_ready(g_loop, future);
+    }
     return 0;
 }
 

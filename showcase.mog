@@ -729,6 +729,29 @@ async fn main() -> i64 {
   print_string(f"  process.sleep(25ms): elapsed = {elapsed}ms\n");
   print_string("\n");
 
+  // --- Section: Custom Host Async Function ---
+  print_string("=== Custom Host Async (env.delay_square) ===\n");
+  print_string("  (host computes result, delivers via event loop timer)\n");
+
+  // 10. Basic async host call — host squares the value after a delay
+  sq1: i64 = await env.delay_square(7, 10);
+  print_string(f"  await env.delay_square(7, 10ms) = {sq1}\n");
+
+  // 11. Timed async host call — verify the delay actually happens
+  t1: i64 = await process.timestamp();
+  sq2: i64 = await env.delay_square(12, 30);
+  t2: i64 = await process.timestamp();
+  sq_elapsed: i64 = t2 - t1;
+  print_string(f"  await env.delay_square(12, 30ms) = {sq2} (took {sq_elapsed}ms)\n");
+
+  // 12. Multiple async host calls — fire sequentially and collect results
+  a1: i64 = await env.delay_square(3, 5);
+  a2: i64 = await env.delay_square(4, 5);
+  a3: i64 = await env.delay_square(5, 5);
+  host_sum: i64 = a1 + a2 + a3;
+  print_string(f"  3²+4²+5² = {a1}+{a2}+{a3} = {host_sum}\n");
+  print_string("\n");
+
   // --- Summary ---
   print_string("=== Showcase Complete ===\n");
   print_string("All features demonstrated successfully!\n");

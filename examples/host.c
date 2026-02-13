@@ -11,6 +11,7 @@
  */
 
 #include "mog.h"
+#include "mog_async.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +53,30 @@ static MogValue host_env_log(MogVM *vm, MogArgs *args) {
     return mog_none();
 }
 
+/*
+ * Async host function: delay_square(value, delay_ms)
+ * Computes value * value, but delivers the result after delay_ms via the event loop.
+ * This demonstrates a host function that returns a MogFuture* — the Mog async/await
+ * machinery suspends the calling coroutine and resumes it when the timer fires.
+ */
+static MogValue host_env_delay_square(MogVM *vm, MogArgs *args) {
+    (void)vm;
+    int64_t value = mog_arg_int(args, 0);
+    int64_t delay_ms = mog_arg_int(args, 1);
+    int64_t result = value * value;
+
+    MogEventLoop *loop = mog_loop_get_global();
+    if (loop) {
+        /* Async path: create a future, schedule timer to complete it with the result */
+        MogFuture *future = mog_future_new();
+        mog_loop_add_timer_with_value(loop, (uint64_t)delay_ms, future, result);
+        return mog_int((int64_t)(intptr_t)future);
+    } else {
+        /* No event loop: synchronous fallback */
+        return mog_int(result);
+    }
+}
+
 /* ============================================================
  * Capability registration table
  * ============================================================ */
@@ -62,6 +87,7 @@ static const MogCapEntry env_functions[] = {
     { "timestamp",   host_env_timestamp   },
     { "random",      host_env_random      },
     { "log",         host_env_log         },
+    { "delay_square",host_env_delay_square},
     { NULL, NULL }  /* sentinel */
 };
 
