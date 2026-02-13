@@ -92,6 +92,10 @@ class LLVMIRGenerator {
   private hasAsyncFunctions = false
   // Runtime async functions that return MogFuture* directly (not coroutines)
   private runtimeAsyncFunctions: Set<string> = new Set(["async_read_line"])
+  // Package prefix for name mangling in multi-package builds
+  private packagePrefix: string = ""
+  // Map of import alias -> package prefix for resolving cross-package calls
+  public importedPackages: Map<string, string> = new Map()
   private resetStringCounter(): void {
     this.stringCounter = 0
     this.stringNameMap.clear()
@@ -1991,6 +1995,26 @@ class LLVMIRGenerator {
     if (expr.callee.type === "MemberExpression") {
       const memberExpr = expr.callee
 
+      // Package-qualified function call: pkg.func(args)
+      if (memberExpr.object?.type === "Identifier" && this.importedPackages.has(memberExpr.object.name)) {
+        const pkgName = memberExpr.object.name
+        const mangledName = `${pkgName}__${memberExpr.property}`
+        const funcInfo = this.functions.get(mangledName)
+        let typedArgs: string[]
+        if (funcInfo && funcInfo.params) {
+          typedArgs = args.map((arg: string, i: number) => {
+            const paramType = funcInfo.params[i]?.type || "i64"
+            return `${paramType} ${arg}`
+          })
+        } else {
+          typedArgs = args.map((arg: string) => `i64 ${arg}`)
+        }
+        const reg = `%${this.valueCounter++}`
+        const returnType = funcInfo?.returnType || "i64"
+        ir.push(`  ${reg} = call ${returnType} @${mangledName}(${typedArgs.join(", ")})`)
+        return reg
+      }
+
       // Check if this is a string method call (e.g., s.upper(), s.lower())
       if (this.isStringType(memberExpr.object)) {
         const strReg = this.generateExpression(ir, memberExpr.object)
@@ -3250,6 +3274,14 @@ class LLVMIRGenerator {
   }
 
   private generateMemberExpression(ir: string[], expr: any): string {
+    // Package-qualified access: pkg.func or pkg.Type
+    if (expr.object?.type === "Identifier" && this.importedPackages.has(expr.object.name)) {
+      const pkgName = expr.object.name
+      const mangledName = `${pkgName}__${expr.property}`
+      // Return as identifier reference to the mangled name
+      return `@${mangledName}`
+    }
+
     // String property access: s.len
     if (expr.property === "len" && this.isStringType(expr.object)) {
       const strReg = this.generateExpression(ir, expr.object)
@@ -5707,6 +5739,63 @@ export function generateLLVMIR(ast: ProgramNode, options?: Partial<OptimizationO
     generator.setCapabilities(capabilities)
   }
   return generator.generate(ast)
+}
+
+export function generateModuleLLVMIR(
+  packages: { packageName: string; ast: ProgramNode; exports: Map<string, { name: string; kind: string }> }[],
+  options?: Partial<OptimizationOptions>,
+  capabilities?: string[],
+): string {
+  const generator = new LLVMIRGenerator(options)
+  if (capabilities && capabilities.length > 0) {
+    generator.setCapabilities(capabilities)
+  }
+
+  // For multi-package compilation, we merge all package ASTs into a single AST
+  // with package-prefixed function names for non-main packages
+  const mergedStatements: any[] = []
+  const importedPkgs = new Map<string, string>()
+
+  for (const pkg of packages) {
+    if (pkg.packageName === "main") {
+      // Main package statements go through directly
+      mergedStatements.push(...pkg.ast.statements)
+    } else {
+      // Non-main package: prefix function and struct names
+      for (const stmt of pkg.ast.statements) {
+        if (stmt.type === "PackageDeclaration" || stmt.type === "ImportDeclaration") {
+          continue // Skip package/import declarations
+        }
+        if (stmt.type === "FunctionDeclaration" || stmt.type === "AsyncFunctionDeclaration") {
+          const funcStmt = stmt as any
+          const mangledName = `${pkg.packageName}__${funcStmt.name}`
+          mergedStatements.push({ ...funcStmt, name: mangledName })
+        } else if (stmt.type === "StructDeclaration" || stmt.type === "StructDefinition") {
+          const structStmt = stmt as any
+          const mangledName = `${pkg.packageName}__${structStmt.name}`
+          mergedStatements.push({ ...structStmt, name: mangledName })
+        } else {
+          mergedStatements.push(stmt)
+        }
+      }
+      importedPkgs.set(pkg.packageName, pkg.packageName)
+    }
+  }
+
+  // Set imported packages on generator for resolving qualified member access
+  generator.importedPackages = importedPkgs
+
+  const mergedAst: ProgramNode = {
+    type: "Program",
+    statements: mergedStatements,
+    scopeId: "module",
+    position: packages[0]?.ast.position || {
+      start: { line: 1, column: 1, index: 0 },
+      end: { line: 1, column: 1, index: 0 },
+    },
+  }
+
+  return generator.generate(mergedAst)
 }
 
 export { LLVMIRGenerator, type OptimizationOptions }

@@ -1,7 +1,7 @@
-import { compile } from "./compiler.js"
-import { readFileSync } from "fs"
+import { compile, compileModule } from "./compiler.js"
+import { readFileSync, existsSync } from "fs"
 import { compileRuntime, linkToExecutable } from "./linker.js"
-import { basename } from "path"
+import { basename, dirname, resolve, join } from "path"
 
 const filePath = process.argv[2]
 if (!filePath) {
@@ -9,12 +9,31 @@ if (!filePath) {
   process.exit(1)
 }
 
-const source = readFileSync(filePath, "utf-8")
-
 console.log("\nMog Compiler")
 console.log("===================")
 
-const result = await compile(source)
+// Detect module mode: walk up from file to find mog.mod
+function findModRoot(startDir: string): string | null {
+  let dir = startDir
+  while (true) {
+    if (existsSync(join(dir, "mog.mod"))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+}
+
+const absPath = resolve(filePath)
+const modRoot = findModRoot(dirname(absPath))
+
+let result
+if (modRoot) {
+  console.log(`Module root: ${modRoot}`)
+  result = await compileModule(absPath)
+} else {
+  const source = readFileSync(filePath, "utf-8")
+  result = await compile(source)
+}
 
 if (result.errors.length > 0) {
   console.log("\nErrors:")

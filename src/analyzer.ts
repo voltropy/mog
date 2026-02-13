@@ -86,17 +86,31 @@ type StatementNode =
   | RequiresDeclarationNode
   | OptionalDeclarationNode
   | TryCatchNode
+  | PackageDeclarationNode
+  | ImportDeclarationNode
+
+interface PackageDeclarationNode extends ASTNode {
+  type: "PackageDeclaration"
+  name: string
+}
+
+interface ImportDeclarationNode extends ASTNode {
+  type: "ImportDeclaration"
+  paths: string[]
+}
 
 interface StructDefinitionNode extends ASTNode {
   type: "StructDefinition"
   name: string
   fields: { name: string; fieldType: Type }[]
+  isPublic?: boolean
 }
 
 interface StructDeclarationNode extends ASTNode {
   type: "StructDeclaration"
   name: string
   fields: { name: string; fieldType: Type }[]
+  isPublic?: boolean
 }
 
 interface VariableDeclarationNode extends ASTNode {
@@ -195,6 +209,7 @@ interface FunctionDeclarationNode extends ASTNode {
   params: FunctionParam[]
   returnType: Type
   body: BlockNode
+  isPublic?: boolean
 }
 
 interface AsyncFunctionDeclarationNode extends ASTNode {
@@ -204,6 +219,7 @@ interface AsyncFunctionDeclarationNode extends ASTNode {
   returnType: Type
   body: BlockNode
   isAsync: true
+  isPublic?: boolean
 }
 
 interface AwaitExpressionNode extends ASTNode {
@@ -861,6 +877,12 @@ class SemanticAnalyzer {
         break
       case "AsyncFunctionDeclaration":
         this.visitAsyncFunctionDeclaration(node as AsyncFunctionDeclarationNode)
+        break
+      case "PackageDeclaration":
+        // Package declarations are recorded by the module resolver, nothing to do here
+        break
+      case "ImportDeclaration":
+        // Import declarations are resolved by the module resolver, nothing to do here
         break
     }
   }
@@ -2914,4 +2936,6 @@ export type {
   IsErrExpressionNode,
   AsyncFunctionDeclarationNode,
   AwaitExpressionNode,
+  PackageDeclarationNode,
+  ImportDeclarationNode,
 }

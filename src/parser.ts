@@ -1,6 +1,6 @@
 import type { Token } from "./lexer.js"
 import { tokenize } from "./lexer.js"
-import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode } from "./analyzer.js"
+import type { ProgramNode, StatementNode, ExpressionNode, Position, BlockNode, PackageDeclarationNode, ImportDeclarationNode } from "./analyzer.js"
 import { IntegerType, UnsignedType, FloatType, BoolType, TypeAliasType, ArrayType, MapType, PointerType, VoidType, StringType, CustomType, FunctionType, TensorType, ResultType, OptionalType, FutureType } from "./types.js"
 // Decode escape sequences in string literals
 function decodeEscapeSequences(str: string): string {
@@ -68,6 +68,21 @@ class Parser {
 
     if (this.checkType("RBRACE") || this.isAtEnd()) {
       return null
+    }
+
+    // Package declaration: package name;
+    if (this.matchType("package")) {
+      return this.packageDeclaration()
+    }
+
+    // Import declaration: import "path" or import ( "path1" "path2" )
+    if (this.matchType("import")) {
+      return this.importDeclaration()
+    }
+
+    // pub modifier: pub fn ..., pub struct ..., pub type ...
+    if (this.checkType("pub")) {
+      return this.pubDeclaration()
     }
 
     if (this.matchType("requires")) {
@@ -298,6 +313,89 @@ class Parser {
         end: this.lastPosition(),
       },
     } as any
+  }
+
+  private packageDeclaration(): StatementNode {
+    const name = this.consume("IDENTIFIER", "Expected package name").value
+    this.matchType("SEMICOLON") // optional semicolon
+    return {
+      type: "PackageDeclaration",
+      name,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    } as any
+  }
+
+  private importDeclaration(): StatementNode {
+    const paths: string[] = []
+
+    if (this.matchType("LPAREN")) {
+      // Grouped import: import ( "path1" "path2" )
+      while (!this.checkType("RPAREN") && !this.isAtEnd()) {
+        const pathToken = this.consume("STRING", "Expected import path string")
+        // Strip quotes from STRING token value
+        const pathValue = pathToken.value.slice(1, -1)
+        paths.push(pathValue)
+        // Allow optional semicolons or commas between imports
+        this.matchType("SEMICOLON") || this.matchType("COMMA")
+      }
+      this.consume("RPAREN", "Expected ) after grouped imports")
+    } else {
+      // Single import: import "path"
+      const pathToken = this.consume("STRING", "Expected import path string")
+      const pathValue = pathToken.value.slice(1, -1)
+      paths.push(pathValue)
+    }
+
+    this.matchType("SEMICOLON") // optional trailing semicolon
+
+    return {
+      type: "ImportDeclaration",
+      paths,
+      position: {
+        start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    } as any
+  }
+
+  private pubDeclaration(): StatementNode {
+    this.advance() // consume 'pub'
+
+    // pub fn ...
+    if (this.checkType("fn") && this.peekNext()?.type === "IDENTIFIER") {
+      this.advance() // consume 'fn'
+      const node = this.functionDeclaration()
+      ;(node as any).isPublic = true
+      return node
+    }
+
+    // pub async fn ...
+    if (this.checkType("async") && this.peekNext()?.type === "fn") {
+      this.advance() // consume 'async'
+      this.advance() // consume 'fn'
+      const node = this.asyncFunctionDeclaration()
+      ;(node as any).isPublic = true
+      return node
+    }
+
+    // pub struct ...
+    if (this.matchType("struct")) {
+      const node = this.structDeclaration()
+      ;(node as any).isPublic = true
+      return node
+    }
+
+    // pub type ...
+    if (this.matchType("type_kw")) {
+      const node = this.typeAliasDeclaration()
+      ;(node as any).isPublic = true
+      return node
+    }
+
+    throw new Error(`Expected fn, struct, or type after pub at line ${this.peek().position.start.line}`)
   }
 
   private functionDeclaration(): StatementNode {

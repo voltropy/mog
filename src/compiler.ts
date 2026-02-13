@@ -1,11 +1,11 @@
 import { tokenize } from "./lexer.js"
 import { parseTokens } from "./parser.js"
 import { SemanticAnalyzer } from "./analyzer.js"
-import { generateLLVMIR } from "./llvm_codegen.js"
+import { generateLLVMIR, generateModuleLLVMIR } from "./llvm_codegen.js"
 import { type ProgramNode } from "./analyzer.js"
 import { compileRuntime, linkToExecutable } from "./linker.js"
 import { parseCapabilityDecl } from "./capability.js"
-import { existsSync, readFileSync } from "fs"
+import { existsSync, readFileSync, readdirSync } from "fs"
 import * as path from "path"
 
 export interface Compiler {
@@ -114,6 +114,263 @@ export class MogCompiler implements Compiler {
   async compile(source: string): Promise<CompiledProgram> {
     return compile(source)
   }
+}
+
+/**
+ * Compile a multi-package module from an entry file.
+ * Resolves imports, collects all packages, and produces combined LLVM IR.
+ */
+export async function compileModule(entryFile: string): Promise<CompiledProgram> {
+  const errors: CompileError[] = []
+
+  try {
+    // Find module root (directory containing mog.mod)
+    const moduleRoot = findModuleRoot(path.dirname(path.resolve(entryFile)))
+    if (!moduleRoot) {
+      // No mog.mod found — fall back to single-file compilation
+      const source = readFileSync(entryFile, "utf-8")
+      return compile(source)
+    }
+
+    const modFile = readFileSync(path.join(moduleRoot, "mog.mod"), "utf-8")
+    const modulePath = parseModFile(modFile)
+
+    // Parse the entry file first
+    const entrySource = readFileSync(entryFile, "utf-8")
+    const entryAst = parseSource(entrySource)
+
+    // Collect imports from the entry file
+    const imports = collectImports(entryAst)
+    
+    // Resolve all packages
+    const packages: { packageName: string; ast: ProgramNode; exports: Map<string, { name: string; kind: string }> }[] = []
+    const resolved = new Set<string>()
+    const resolving = new Set<string>() // For circular import detection
+
+    // Recursively resolve packages
+    const resolvePackage = (importPath: string): void => {
+      if (resolved.has(importPath)) return
+      if (resolving.has(importPath)) {
+        errors.push({
+          message: `Circular import detected: ${importPath}`,
+          line: 0,
+          column: 0,
+        })
+        return
+      }
+      resolving.add(importPath)
+
+      const pkgDir = path.join(moduleRoot, importPath)
+      if (!existsSync(pkgDir)) {
+        errors.push({
+          message: `Package not found: ${importPath} (looking in ${pkgDir})`,
+          line: 0,
+          column: 0,
+        })
+        return
+      }
+
+      // Collect all .mog files in the package directory
+      const files = readdirSync(pkgDir).filter(f => f.endsWith(".mog"))
+      if (files.length === 0) {
+        errors.push({
+          message: `No .mog files found in package: ${importPath}`,
+          line: 0,
+          column: 0,
+        })
+        return
+      }
+
+      // Parse and merge all files in the package
+      const allStatements: any[] = []
+      let pkgName = path.basename(importPath)
+
+      for (const file of files) {
+        const source = readFileSync(path.join(pkgDir, file), "utf-8")
+        const ast = parseSource(source)
+        
+        // Extract package name from first PackageDeclaration
+        for (const stmt of ast.statements) {
+          if ((stmt as any).type === "PackageDeclaration") {
+            pkgName = (stmt as any).name
+            break
+          }
+        }
+
+        allStatements.push(...ast.statements)
+      }
+
+      // Recursively resolve this package's imports
+      const pkgImports = collectImportsFromStatements(allStatements)
+      for (const imp of pkgImports) {
+        resolvePackage(imp)
+      }
+
+      // Collect exports (pub items)
+      const exports = collectExports(allStatements)
+
+      const mergedAst: ProgramNode = {
+        type: "Program",
+        statements: allStatements,
+        scopeId: `package_${pkgName}`,
+        position: {
+          start: { line: 1, column: 1, index: 0 },
+          end: { line: 1, column: 1, index: 0 },
+        },
+      }
+
+      packages.push({ packageName: pkgName, ast: mergedAst, exports })
+      resolving.delete(importPath)
+      resolved.add(importPath)
+    }
+
+    // Resolve all imports from the entry file
+    for (const imp of imports) {
+      resolvePackage(imp)
+    }
+
+    if (errors.length > 0) {
+      return { llvmIR: "", errors }
+    }
+
+    // Add the main package
+    const mainPkgName = getPackageName(entryAst) || "main"
+    const mainExports = collectExports(entryAst.statements as any[])
+    packages.push({ packageName: mainPkgName, ast: entryAst, exports: mainExports })
+
+    // Run semantic analysis on each package
+    // For the main package, register imported package exports as available symbols
+    for (const pkg of packages) {
+      const analyzer = new SemanticAnalyzer()
+      
+      // Register imported packages' exported symbols
+      if (pkg.packageName === mainPkgName) {
+        for (const otherPkg of packages) {
+          if (otherPkg.packageName !== mainPkgName) {
+            // Register the package name as a variable so pkg.func works
+            // The actual resolution of cross-package calls happens in codegen via name mangling
+            for (const [name, info] of otherPkg.exports) {
+              // We don't register individual exports here — the codegen handles mangling
+              void name
+              void info
+            }
+          }
+        }
+      }
+
+      const semanticErrors = analyzer.analyze(pkg.ast)
+      // Filter out "undeclared variable" errors for imported package names
+      const importedPkgNames = new Set(packages.filter(p => p.packageName !== mainPkgName).map(p => p.packageName))
+      const filteredErrors = semanticErrors.filter(e => {
+        // Allow undefined variable references that match imported package names
+        const undefinedMatch = e.message.match(/^Undefined variable '(\w+)'$/)
+        if (undefinedMatch) {
+          const varName = undefinedMatch[1]
+          if (importedPkgNames.has(varName)) return false
+        }
+        return true
+      })
+
+      if (filteredErrors.length > 0) {
+        errors.push(
+          ...filteredErrors.map(e => ({
+            message: `[${pkg.packageName}] ${e.message}`,
+            line: e.position.start.line,
+            column: e.position.start.column,
+          }))
+        )
+      }
+    }
+
+    if (errors.length > 0) {
+      return { llvmIR: "", errors }
+    }
+
+    // Generate combined LLVM IR
+    const llvmIR = generateModuleLLVMIR(packages)
+
+    return { llvmIR, errors: [] }
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      errors.push({
+        message: error.message,
+        line: 0,
+        column: 0,
+      })
+    }
+    return { llvmIR: "", errors }
+  }
+}
+
+// Helper functions for module compilation
+
+function findModuleRoot(startDir: string): string | null {
+  let dir = startDir
+  while (true) {
+    if (existsSync(path.join(dir, "mog.mod"))) {
+      return dir
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) return null // Hit filesystem root
+    dir = parent
+  }
+}
+
+function parseModFile(content: string): string {
+  // Format: module <name>
+  const lines = content.trim().split("\n")
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith("module ")) {
+      return trimmed.slice(7).trim()
+    }
+  }
+  return ""
+}
+
+function parseSource(source: string): ProgramNode {
+  const tokens = tokenize(source)
+  const filteredTokens = tokens.filter(t => t.type !== "WHITESPACE" && t.type !== "COMMENT")
+  return parseTokens(filteredTokens)
+}
+
+function getPackageName(ast: ProgramNode): string | null {
+  for (const stmt of ast.statements) {
+    if ((stmt as any).type === "PackageDeclaration") {
+      return (stmt as any).name
+    }
+  }
+  return null
+}
+
+function collectImports(ast: ProgramNode): string[] {
+  return collectImportsFromStatements(ast.statements as any[])
+}
+
+function collectImportsFromStatements(statements: any[]): string[] {
+  const imports: string[] = []
+  for (const stmt of statements) {
+    if (stmt.type === "ImportDeclaration") {
+      imports.push(...stmt.paths)
+    }
+  }
+  return imports
+}
+
+function collectExports(statements: any[]): Map<string, { name: string; kind: string }> {
+  const exports = new Map<string, { name: string; kind: string }>()
+  for (const stmt of statements) {
+    if (stmt.isPublic) {
+      if (stmt.type === "FunctionDeclaration" || stmt.type === "AsyncFunctionDeclaration") {
+        exports.set(stmt.name, { name: stmt.name, kind: "function" })
+      } else if (stmt.type === "StructDeclaration" || stmt.type === "StructDefinition") {
+        exports.set(stmt.name, { name: stmt.name, kind: "struct" })
+      } else if (stmt.type === "TypeAliasDeclaration") {
+        exports.set(stmt.name, { name: stmt.name, kind: "type" })
+      }
+    }
+  }
+  return exports
 }
 
 export async function compileToFile(source: string, outputPath: string): Promise<void> {

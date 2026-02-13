@@ -286,6 +286,45 @@ fn main() {
 
 Standard capabilities: `fs`, `http`, `model`, `log`, `env`, `db`. The compiler rejects undeclared capability usage. The host rejects scripts needing capabilities it doesn't provide.
 
+### Module System
+
+Mog uses a Go-style module system:
+
+```mog
+// mog.mod
+module myapp
+```
+
+```mog
+// math/math.mog
+package math
+
+pub fn add(a: int, b: int) -> int {
+    return a + b;
+}
+```
+
+```mog
+// main.mog
+package main
+
+import "math"
+
+fn main() -> int {
+    result := math.add(10, 20);
+    print(result);
+    return 0;
+}
+```
+
+- **`package`** declaration at top of every file
+- **`import`** by path relative to module root (supports grouped imports)
+- **`pub`** keyword for exported symbols (functions, structs, types)
+- **Package = directory** — all `.mog` files in a dir share a package
+- **`mog.mod`** at project root declares the module path
+- **Backward compatible** — files without `package` work in single-file mode
+- Circular imports detected at compile time
+
 ### String Operations
 
 ```mog

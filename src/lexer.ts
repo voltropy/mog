@@ -77,8 +77,11 @@ type TokenType =
   | "tensor"
   | "async"
   | "await"
-  | "spawn"
-  | "COMMENT"
+   | "spawn"
+   | "package"
+   | "import"
+   | "pub"
+   | "COMMENT"
 
 interface Position {
   line: number
@@ -166,6 +169,9 @@ class Lexer {
     const asyncRegex = /async\b/y
     const awaitRegex = /await\b/y
     const spawnRegex = /spawn\b/y
+    const packageRegex = /package\b/y
+    const importRegex = /import\b/y
+    const pubRegex = /pub\b/y
     const trueRegex = /true\b/y
     const falseRegex = /false\b/y
     const questionMarkRegex = /\?/y
@@ -636,6 +642,42 @@ class Lexer {
       value = this.match(spawnRegex)
       if (value) {
         type = "spawn"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(packageRegex)
+      if (value) {
+        type = "package"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(importRegex)
+      if (value) {
+        type = "import"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(pubRegex)
+      if (value) {
+        type = "pub"
         this.advance(value.length)
         tokens.push({
           type,

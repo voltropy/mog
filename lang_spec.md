@@ -933,6 +933,81 @@ Host Application
     └── max_tensor_size: 1GB
 ```
 
+## Module System
+
+Mog uses a Go-style module system with packages, imports, and explicit visibility.
+
+### Package Declaration
+
+Every file begins with a package declaration:
+
+```mog
+package math
+```
+
+All `.mog` files in the same directory belong to the same package. The `package main` package contains the `fn main()` entry point.
+
+Files without a package declaration are implicitly `package main` (single-file mode).
+
+### Module File
+
+Projects have a `mog.mod` file at the root declaring the module path:
+
+```
+module myapp
+```
+
+### Imports
+
+Import other packages by path relative to the module root:
+
+```mog
+import "math"
+
+import (
+    "math"
+    "utils/strings"
+)
+```
+
+Access imported symbols with qualified names:
+
+```mog
+result := math.add(1, 2);
+v := math.Vector { x: 1.0, y: 2.0 };
+```
+
+### Visibility
+
+Symbols are package-private by default. Use `pub` to export:
+
+```mog
+pub fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn helper() -> int {  // package-private
+    return 42;
+}
+
+pub struct Vector {
+    x: float,
+    y: float,
+}
+
+pub type Distance = float;
+```
+
+`pub` works on: `fn`, `async fn`, `struct`, `type`.
+
+### Circular Import Detection
+
+Circular imports are detected at compile time and produce an error.
+
+### Name Mangling
+
+Non-main package symbols are mangled with a `packagename__` prefix in the compiled output. Main package symbols are unmangled.
+
 ## What This Language Is NOT
 
 To keep the surface area small, the following are explicitly **out of scope**:
