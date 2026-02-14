@@ -97,4 +97,29 @@ typedef struct {
 } MogLimits;
 void mog_vm_set_limits(MogVM *vm, const MogLimits *limits);
 
+// --- Cooperative interrupt (safe guest termination) ---
+// The interrupt flag is a global volatile int checked at every loop back-edge.
+// When set to non-zero, guest code branches to an abort path that returns
+// MOG_INTERRUPT_CODE (= -99) to the host. The flag can be set from any thread.
+
+#define MOG_INTERRUPT_CODE (-99)
+
+// Request the running guest program to stop at the next loop back-edge.
+// Thread-safe: can be called from a watchdog thread, signal handler, or timer callback.
+void mog_request_interrupt(void);
+
+// Clear the interrupt flag (call before re-running guest code).
+void mog_clear_interrupt(void);
+
+// Check whether an interrupt has been requested (non-zero = yes).
+int  mog_interrupt_requested(void);
+
+// Arm an automatic timeout: spawns a background thread that calls
+// mog_request_interrupt() after `ms` milliseconds. Returns 0 on success.
+// The timer is one-shot and the thread exits after firing (or on cancel).
+int  mog_arm_timeout(int ms);
+
+// Cancel a previously armed timeout (if it hasn't fired yet).
+void mog_cancel_timeout(void);
+
 #endif // MOG_H

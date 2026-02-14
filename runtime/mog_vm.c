@@ -336,4 +336,67 @@ int mog_validate_capabilities(MogVM *vm, const char **required_caps) {
 void mog_vm_set_limits(MogVM *vm, const MogLimits *limits) {
     if (!vm || !limits) return;
     vm->limits = *limits;
+    // If max_cpu_ms is set, arm the timeout automatically
+    if (limits->max_cpu_ms > 0) {
+        mog_arm_timeout(limits->max_cpu_ms);
+    }
+}
+
+// --- Cooperative interrupt ---
+// This volatile global is the flag checked by generated code at every loop back-edge.
+// It's declared here (in C) and referenced from LLVM IR via @mog_interrupt_flag.
+volatile int mog_interrupt_flag = 0;
+
+void mog_request_interrupt(void) {
+    mog_interrupt_flag = 1;
+}
+
+void mog_clear_interrupt(void) {
+    mog_interrupt_flag = 0;
+}
+
+int mog_interrupt_requested(void) {
+    return mog_interrupt_flag;
+}
+
+// --- Timeout thread ---
+#include <pthread.h>
+#include <unistd.h>
+
+static pthread_t timeout_thread;
+static volatile int timeout_active = 0;
+static int timeout_ms = 0;
+
+static void *timeout_thread_fn(void *arg) {
+    (void)arg;
+    // Sleep in 10ms increments so we can be cancelled quickly
+    int remaining_ms = timeout_ms;
+    while (remaining_ms > 0 && timeout_active) {
+        int sleep_chunk = remaining_ms > 10 ? 10 : remaining_ms;
+        usleep((unsigned int)(sleep_chunk * 1000));
+        remaining_ms -= sleep_chunk;
+    }
+    if (timeout_active) {
+        mog_request_interrupt();
+    }
+    return NULL;
+}
+
+int mog_arm_timeout(int ms) {
+    if (ms <= 0) return -1;
+    // Cancel any existing timeout
+    mog_cancel_timeout();
+    mog_clear_interrupt();
+    timeout_ms = ms;
+    timeout_active = 1;
+    if (pthread_create(&timeout_thread, NULL, timeout_thread_fn, NULL) != 0) {
+        timeout_active = 0;
+        return -1;
+    }
+    pthread_detach(timeout_thread);
+    return 0;
+}
+
+void mog_cancel_timeout(void) {
+    timeout_active = 0;
 }

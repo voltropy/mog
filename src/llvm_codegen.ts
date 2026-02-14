@@ -586,6 +586,11 @@ class LLVMIRGenerator {
     ir.push("declare ptr @tensor_reshape(ptr %tensor, i64 %ndim, ptr %shape)")
     ir.push("")
 
+    ir.push("; Cooperative interrupt flag (checked at every loop back-edge)")
+    ir.push("@mog_interrupt_flag = external global i32")
+    ir.push("declare void @exit(i32) noreturn")
+    ir.push("")
+
     ir.push("; Declare terminal I/O and utility functions")
     ir.push("declare i64 @stdin_poll(i64 %timeout_ms)")
     ir.push("declare ptr @stdin_read_line()")
@@ -3866,6 +3871,47 @@ class LLVMIRGenerator {
     }
   }
 
+  /**
+   * Emit a cooperative interrupt check before a loop back-edge.
+   * Generates: load @mog_interrupt_flag, test, and conditional branch to
+   * an abort block that returns MOG_INTERRUPT_CODE (-99).
+   * The `backEdgeLabel` is where normal execution continues;
+   * `functionExitLabel` is used for early return on interrupt.
+   */
+  private emitInterruptCheck(ir: string[], backEdgeLabel: string): void {
+    const flagLoad = `%__intflag_${this.valueCounter++}`
+    const flagTest = `%__inttest_${this.valueCounter++}`
+    const interruptLabel = this.nextLabel() // label for abort path
+    const continueLabel = this.nextLabel()  // label for normal back-edge
+
+    ir.push(`  ; Cooperative interrupt check`)
+    ir.push(`  ${flagLoad} = load volatile i32, ptr @mog_interrupt_flag`)
+    ir.push(`  ${flagTest} = icmp ne i32 ${flagLoad}, 0`)
+    ir.push(`  br i1 ${flagTest}, label %${interruptLabel}, label %${continueLabel}`)
+    ir.push("")
+
+    // Abort path: return MOG_INTERRUPT_CODE (-99)
+    ir.push(`${interruptLabel}:`)
+    if (this.isInAsyncFunction) {
+      // In async functions, we complete the future with the error code and return
+      ir.push(`  call void @mog_future_complete(ptr ${this.coroFuture}, i64 -99)`)
+      // Branch to coroutine cleanup — we need to end the coroutine
+      ir.push(`  br label %coro.cleanup`)
+    } else if (!this.currentFunction || this.currentFunction.returnType === "void") {
+      // In void functions (including top-level program()), we can't return an error code.
+      // Call a helper that prints a message and exits, since there's no return value to signal.
+      ir.push(`  call void @exit(i32 99)`)
+      ir.push(`  unreachable`)
+    } else {
+      ir.push(`  ret i64 -99`)
+    }
+    ir.push("")
+
+    // Normal path: continue to the back-edge
+    ir.push(`${continueLabel}:`)
+    ir.push(`  br label %${backEdgeLabel}`)
+  }
+
   private generateWhileLoop(ir: string[], statement: any): void {
     const startLabel = this.nextLabel()
     const bodyLabel = this.nextLabel()
@@ -3887,7 +3933,9 @@ class LLVMIRGenerator {
 
     ir.push(`${bodyLabel}:`)
     this.generateStatement(ir, statement.body)
-    ir.push(`  br label %${startLabel}`)
+    if (!this.blockTerminated) {
+      this.emitInterruptCheck(ir, startLabel)
+    }
     ir.push("")
 
     ir.push(`${endLabel}:`)
@@ -3935,7 +3983,7 @@ class LLVMIRGenerator {
     const incValue = `%${this.valueCounter++}`
     ir.push(`  ${incValue} = add i64 ${currentValue}, 1`)
     ir.push(`  store i64 ${incValue}, ptr %${variable}`)
-    ir.push(`  br label %${headerLabel}`)
+    this.emitInterruptCheck(ir, headerLabel)
     ir.push("")
 
     ir.push(`${endLabel}:`)
@@ -4004,7 +4052,7 @@ class LLVMIRGenerator {
     const nextIndex = `%${this.valueCounter++}`
     ir.push(`  ${nextIndex} = add i64 ${currentIndex}, 1`)
     ir.push(`  store i64 ${nextIndex}, ptr ${indexReg}`)
-    ir.push(`  br label %${startLabel}`)
+    this.emitInterruptCheck(ir, startLabel)
     ir.push("")
 
     ir.push(`${endLabel}:`)
@@ -4063,7 +4111,7 @@ class LLVMIRGenerator {
     const incValue = `%${this.valueCounter++}`
     ir.push(`  ${incValue} = add i64 ${currentValue}, 1`)
     ir.push(`  store i64 ${incValue}, ptr %${variable}`)
-    ir.push(`  br label %${headerLabel}`)
+    this.emitInterruptCheck(ir, headerLabel)
     ir.push("")
 
     ir.push(`${endLabel}:`)
@@ -4130,7 +4178,7 @@ class LLVMIRGenerator {
     const nextIndex = `%${this.valueCounter++}`
     ir.push(`  ${nextIndex} = add i64 ${currentIndex}, 1`)
     ir.push(`  store i64 ${nextIndex}, ptr ${indexReg}`)
-    ir.push(`  br label %${startLabel}`)
+    this.emitInterruptCheck(ir, startLabel)
     ir.push("")
 
     ir.push(`${endLabel}:`)
@@ -4207,7 +4255,7 @@ class LLVMIRGenerator {
     const nextIdx = `%${this.valueCounter++}`
     ir.push(`  ${nextIdx} = add i64 ${currentIdx}, 1`)
     ir.push(`  store i64 ${nextIdx}, ptr ${idxReg}`)
-    ir.push(`  br label %${startLabel}`)
+    this.emitInterruptCheck(ir, startLabel)
     ir.push("")
 
     ir.push(`${endLabel}:`)

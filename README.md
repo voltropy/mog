@@ -452,6 +452,7 @@ The core language is fully implemented and tested. The main gaps are in the tens
 | **Module system** | `package`, `import`, `pub`, `mog.mod`, name mangling, circular import detection |
 | **Tensors (basic)** | Creation from literals, `+`, `-`, `*`, `matmul`, `.sum()`, `.mean()`, `.reshape()`, `.shape`, `.ndim` |
 | **Runtime** | Mark-and-sweep GC, `select()`-based async event loop with fd watchers and timers |
+| **Safety** | Cooperative interrupt polling at loop back-edges, `mog_request_interrupt()` host API, `mog_arm_timeout(ms)` for CPU time limits, automatic timeout via `MogLimits.max_cpu_ms` |
 | **Operators** | Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison, logical (`and`, `or`, `not`), bitwise (`&`, `\|`, `^`, `~`, `<<`, `>>`), `?` propagation, `..` range, `as` cast |
 
 ### Partially Implemented
@@ -488,7 +489,7 @@ The core language is fully implemented and tested. The main gaps are in the tens
 bun test
 ```
 
-1006 tests passing across 26 test files.
+1019 tests passing across 27 test files.
 
 ## Architecture
 
@@ -508,7 +509,7 @@ src/
 runtime/
   runtime.c         C runtime (GC, strings, arrays, maps, tensors, I/O)
   mog.h             Public C API for host embedding
-  mog_vm.c          VM for host FFI capability dispatch
+  mog_vm.c          VM for host FFI capability dispatch, interrupt flag, timeout
   mog_async.c       Event loop, futures, coroutine resume, all/race
   mog_async.h       Async runtime headers
   posix_host.c      Built-in fs and process capability providers
@@ -537,6 +538,13 @@ mog_validate_capabilities(vm, script_requires, script_optionals);
 
 // Call into Mog
 MogValue result = mog_cap_call(vm, "math", "add", args);
+
+// Safety: set CPU time limit (auto-interrupts infinite loops)
+MogLimits limits = { .max_cpu_ms = 5000 };  // 5 second timeout
+mog_vm_set_limits(vm, limits);
+
+// Or manually interrupt from another thread:
+mog_request_interrupt();
 ```
 
 ## License
