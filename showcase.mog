@@ -749,7 +749,7 @@ async fn main() -> i64 {
   a2: i64 = await env.delay_square(4, 5);
   a3: i64 = await env.delay_square(5, 5);
   host_sum: i64 = a1 + a2 + a3;
-  print_string(f"  3²+4²+5² = {a1}+{a2}+{a3} = {host_sum}\n");
+  print_string(f"  3^2+4^2+5^2 = {a1}+{a2}+{a3} = {host_sum}\n");
   print_string("\n");
 
   // --- Summary ---
