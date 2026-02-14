@@ -272,4 +272,101 @@ describe("String Type", () => {
       expect(stdout.trim()).toBe("HELLO WORLD")
     })
   })
+
+  describe("UTF-8 support", () => {
+    test("basic UTF-8 string literal (2-byte chars)", async () => {
+      const source = `fn main() -> i64 {
+  s := "café";
+  println_string(s);
+  return 0;
+}`
+      const { exitCode, stdout } = await compileAndRun(source)
+      expect(exitCode).toBe(0)
+      expect(stdout.trim()).toBe("café")
+    })
+
+    test("UTF-8 superscript characters", async () => {
+      const source = `fn main() -> i64 {
+  s := "x² + y²";
+  println_string(s);
+  return 0;
+}`
+      const { exitCode, stdout } = await compileAndRun(source)
+      expect(exitCode).toBe(0)
+      expect(stdout.trim()).toBe("x² + y²")
+    })
+
+    test("UTF-8 3-byte chars (CJK)", async () => {
+      const source = `fn main() -> i64 {
+  s := "hello 世界";
+  println_string(s);
+  return 0;
+}`
+      const { exitCode, stdout } = await compileAndRun(source)
+      expect(exitCode).toBe(0)
+      expect(stdout.trim()).toBe("hello 世界")
+    })
+
+    test("UTF-8 4-byte chars (emoji)", async () => {
+      const source = `fn main() -> i64 {
+  s := "hi 🎉!";
+  println_string(s);
+  return 0;
+}`
+      const { exitCode, stdout } = await compileAndRun(source)
+      expect(exitCode).toBe(0)
+      expect(stdout.trim()).toBe("hi 🎉!")
+    })
+
+    test("UTF-8 in f-string interpolation", async () => {
+      const source = `fn main() -> i64 {
+  x := 42;
+  println_string(f"résultat: {x}");
+  return 0;
+}`
+      const { exitCode, stdout } = await compileAndRun(source)
+      expect(exitCode).toBe(0)
+      expect(stdout.trim()).toBe("résultat: 42")
+    })
+
+    test("UTF-8 string concatenation", async () => {
+      const source = `fn main() -> i64 {
+  a := "über";
+  b := "straße";
+  c := string_concat(a, b);
+  println_string(c);
+  return 0;
+}`
+      const { exitCode, stdout } = await compileAndRun(source)
+      expect(exitCode).toBe(0)
+      expect(stdout.trim()).toBe("überstraße")
+    })
+
+    test("UTF-8 string length returns byte count", async () => {
+      const source = `fn main() -> i64 {
+  s := "café";
+  println_i64(s.len);
+  return 0;
+}`
+      const { exitCode, stdout } = await compileAndRun(source)
+      expect(exitCode).toBe(0)
+      // "café" = 5 UTF-8 bytes (c=1, a=1, f=1, é=2)
+      expect(stdout.trim()).toBe("5")
+    })
+
+    test("mixed ASCII and UTF-8 in multiple strings", async () => {
+      const source = `fn main() -> i64 {
+  println_string("π ≈ 3.14");
+  println_string("∑ = sum");
+  println_string("√2 ≈ 1.41");
+  return 0;
+}`
+      const { exitCode, stdout } = await compileAndRun(source)
+      expect(exitCode).toBe(0)
+      const lines = stdout.trim().split("\n")
+      expect(lines[0]).toBe("π ≈ 3.14")
+      expect(lines[1]).toBe("∑ = sum")
+      expect(lines[2]).toBe("√2 ≈ 1.41")
+    })
+  })
 })

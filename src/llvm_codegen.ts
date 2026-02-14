@@ -79,6 +79,7 @@ class LLVMIRGenerator {
   private stringConstants: string[] = []
   private stringCounter = 0
   private stringNameMap: Map<string, string> = new Map()
+  private stringByteLengths: Map<string, number> = new Map() // JS string value -> UTF-8 byte length
   private lambdaCounter = 0
   private lambdaIR: string[] = []
   // Closure support: wrappers for named functions used as values
@@ -113,6 +114,53 @@ class LLVMIRGenerator {
   private resetStringCounter(): void {
     this.stringCounter = 0
     this.stringNameMap.clear()
+    this.stringByteLengths.clear()
+  }
+
+  /** Encode a JS string to LLVM IR escaped format with proper UTF-8 encoding.
+   *  Returns { escaped: string, byteLength: number } */
+  private escapeStringForLLVM(str: string): { escaped: string; byteLength: number } {
+    let llvmEscaped = ""
+    let byteLength = 0
+    for (const char of str) {
+      const code = char.codePointAt(0)!
+      if (char === "\\") {
+        llvmEscaped += "\\\\"
+        byteLength += 1
+      } else if (char === '"') {
+        llvmEscaped += '\\"'
+        byteLength += 1
+      } else if (code === 10) {
+        llvmEscaped += "\\0A"
+        byteLength += 1
+      } else if (code === 13) {
+        llvmEscaped += "\\0D"
+        byteLength += 1
+      } else if (code === 9) {
+        llvmEscaped += "\\09"
+        byteLength += 1
+      } else if (code >= 32 && code <= 126) {
+        llvmEscaped += char
+        byteLength += 1
+      } else {
+        // Encode to UTF-8 bytes and emit each as hex escape
+        const bytes = new TextEncoder().encode(char)
+        for (const b of bytes) {
+          llvmEscaped += `\\${b.toString(16).padStart(2, "0").toUpperCase()}`
+        }
+        byteLength += bytes.length
+      }
+    }
+    return { escaped: llvmEscaped, byteLength }
+  }
+
+  /** Get the UTF-8 byte length of a JS string (cached in stringByteLengths) */
+  private getStringByteLength(str: string): number {
+    const cached = this.stringByteLengths.get(str)
+    if (cached !== undefined) return cached
+    const byteLength = new TextEncoder().encode(str).length
+    this.stringByteLengths.set(str, byteLength)
+    return byteLength
   }
 
   generate(ast: ProgramNode): string {
@@ -932,7 +980,7 @@ class LLVMIRGenerator {
       case "StringLiteral": {
         const name = this.generateStringLiteral(ir, expr.value)
         const ptrReg = `%${this.valueCounter++}`
-        ir.push(`  ${ptrReg} = getelementptr [${expr.value.length + 1} x i8], ptr ${name}, i64 0, i64 0`)
+        ir.push(`  ${ptrReg} = getelementptr [${this.getStringByteLength(expr.value) + 1} x i8], ptr ${name}, i64 0, i64 0`)
         return ptrReg
       }
       case "TemplateLiteral":
@@ -1071,32 +1119,9 @@ class LLVMIRGenerator {
     if (node.type === "StringLiteral") {
       const name = `@str${this.stringCounter++}`
       this.stringNameMap.set(node.value, name)
-      // Convert string to LLVM IR format
-      // The node.value contains actual characters (\r becomes carriage return, etc.)
-      // We need to escape for LLVM IR and convert control chars to LLVM escape sequences
-      // node.value now contains decoded characters (actual \r, \n, etc.)
-      // Need to convert to LLVM IR escape sequences
-      let llvmEscaped = ""
-      for (const char of node.value) {
-        const code = char.charCodeAt(0)
-        if (char === "\\") {
-          llvmEscaped += "\\\\"
-        } else if (char === '"') {
-          llvmEscaped += '\\"'
-        } else if (code === 10) {  // newline - actual \n char
-          llvmEscaped += "\\0A"
-        } else if (code === 13) {  // carriage return - actual \r char
-          llvmEscaped += "\\0D"
-        } else if (code === 9) {   // tab - actual \t char
-          llvmEscaped += "\\09"
-        } else if (code < 32 || code > 126) {
-          // Other non-printable chars - use hex escape
-          llvmEscaped += `\\${code.toString(16).padStart(2, "0").toUpperCase()}`
-        } else {
-          llvmEscaped += char
-        }
-      }
-      const strDef = `${name} = private unnamed_addr constant [${node.value.length + 1} x i8] c"${llvmEscaped}\\00"`
+      const { escaped: llvmEscaped, byteLength } = this.escapeStringForLLVM(node.value)
+      this.stringByteLengths.set(node.value, byteLength)
+      const strDef = `${name} = private unnamed_addr constant [${byteLength + 1} x i8] c"${llvmEscaped}\\00"`
       this.stringConstants.push(strDef)
       return
     }
@@ -1109,19 +1134,9 @@ class LLVMIRGenerator {
           if (!this.stringNameMap.has(part)) {
             const name = `@str${this.stringCounter++}`
             this.stringNameMap.set(part, name)
-            // Escape for LLVM IR and convert escape sequences to LLVM format
-            let llvmEscaped = ""
-            for (const char of part) {
-              const code = char.charCodeAt(0)
-              if (char === "\\") llvmEscaped += "\\\\"
-              else if (char === '"') llvmEscaped += '\\"'
-              else if (code === 0x0A) llvmEscaped += "\\0A"
-              else if (code === 0x0D) llvmEscaped += "\\0D"
-              else if (code === 0x09) llvmEscaped += "\\09"
-              else if (code < 0x20 || code > 0x7E) llvmEscaped += `\\${code.toString(16).padStart(2, "0").toUpperCase()}`
-              else llvmEscaped += char
-            }
-            const strDef = `${name} = private unnamed_addr constant [${part.length + 1} x i8] c"${llvmEscaped}\\00"`
+            const { escaped: llvmEscaped, byteLength } = this.escapeStringForLLVM(part)
+            this.stringByteLengths.set(part, byteLength)
+            const strDef = `${name} = private unnamed_addr constant [${byteLength + 1} x i8] c"${llvmEscaped}\\00"`
             this.stringConstants.push(strDef)
           }
         } else {
@@ -1139,7 +1154,9 @@ class LLVMIRGenerator {
         if (key && typeof key === "string") {
           const keyName = `@map_key_${this.stringCounter++}`
           this.stringNameMap.set(`__map_key_${key}`, keyName)
-          const strDef = `${keyName} = private constant [${key.length + 1} x i8] c"${key}\\00"`
+          const { escaped: keyEscaped, byteLength: keyByteLen } = this.escapeStringForLLVM(key)
+          this.stringByteLengths.set(key, keyByteLen)
+          const strDef = `${keyName} = private constant [${keyByteLen + 1} x i8] c"${keyEscaped}\\00"`
           this.stringConstants.push(strDef)
         }
       }
@@ -1153,13 +1170,9 @@ class LLVMIRGenerator {
     // Collect MemberExpression property names as string constants
     if (node.type === "MemberExpression") {
       const name = `@key_${node.property}_${this.stringCounter++}`
-      const llvmEscaped = node.property
-        .replace(/\\/g, "\\\\")    // Escape backslash
-        .replace(/"/g, '\\"')      // Escape quote
-        .replace(/\n/g, "\\0A")     // Newline -> \0A
-        .replace(/\r/g, "\\0D")     // Carriage return -> \0D
-        .replace(/\t/g, "\\09")     // Tab -> \09
-      const strDef = `${name} = private unnamed_addr constant [${node.property.length + 1} x i8] c"${llvmEscaped}\\00"`
+      const { escaped: llvmEscaped, byteLength } = this.escapeStringForLLVM(node.property)
+      this.stringByteLengths.set(node.property, byteLength)
+      const strDef = `${name} = private unnamed_addr constant [${byteLength + 1} x i8] c"${llvmEscaped}\\00"`
       this.stringConstants.push(strDef)
     }
 
@@ -1257,7 +1270,7 @@ class LLVMIRGenerator {
         // String literal part
         const name = this.generateStringLiteral(ir, part)
         const ptrReg = `%${this.valueCounter++}`
-        ir.push(`  ${ptrReg} = getelementptr [${part.length + 1} x i8], ptr ${name}, i64 0, i64 0`)
+        ir.push(`  ${ptrReg} = getelementptr [${this.getStringByteLength(part) + 1} x i8], ptr ${name}, i64 0, i64 0`)
         partRegs.push(ptrReg)
       } else {
         // Expression part - generate it and convert to string
@@ -2720,11 +2733,11 @@ class LLVMIRGenerator {
 
         if (keyExpr.type === "StringLiteral") {
           // String key: use string literal directly
-          const escaped = keyExpr.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+          const { escaped, byteLength } = this.escapeStringForLLVM(keyExpr.value)
           keyPtr = `@key_str_${this.stringCounter++}`
-          const strDef = `${keyPtr} = private unnamed_addr constant [${keyExpr.value.length + 1} x i8] c"${escaped}\\00"`
+          const strDef = `${keyPtr} = private unnamed_addr constant [${byteLength + 1} x i8] c"${escaped}\\00"`
           this.stringConstants.push(strDef)
-          keyLen = String(keyExpr.value.length)
+          keyLen = String(byteLength)
         } else if (keyExpr.type === "Identifier") {
           // Variable key - assume it's a string, use strlen to get length
           const keyVar = this.generateExpression(ir, keyExpr)
@@ -2921,10 +2934,10 @@ class LLVMIRGenerator {
       // Fallback: Map member assignment (person.age := 31)
       const obj = this.generateExpression(ir, target.object)
       const keyName = `@key_${target.property}_${this.stringCounter++}`
-      const escaped = target.property.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-      const strDef = `${keyName} = private unnamed_addr constant [${target.property.length + 1} x i8] c"${escaped}\\00"`
+      const { escaped, byteLength } = this.escapeStringForLLVM(target.property)
+      const strDef = `${keyName} = private unnamed_addr constant [${byteLength + 1} x i8] c"${escaped}\\00"`
       this.stringConstants.push(strDef)
-      ir.push(`  call void @map_set(ptr ${obj}, ptr ${keyName}, i64 ${target.property.length}, i64 ${valueReg})`)
+      ir.push(`  call void @map_set(ptr ${obj}, ptr ${keyName}, i64 ${byteLength}, i64 ${valueReg})`)
     } else {
       let varType = this.variableTypes.get(name)
       // If variable doesn't exist yet (walrus-style new variable), allocate it
@@ -3402,11 +3415,11 @@ class LLVMIRGenerator {
     // Fallback: map-based member access
     const obj = this.generateExpression(ir, expr.object)
     const keyName = `@key_${expr.property}_${this.stringCounter++}`
-    const escaped = expr.property.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-    const strDef = `${keyName} = private unnamed_addr constant [${expr.property.length + 1} x i8] c"${escaped}\\00"`
+    const { escaped, byteLength } = this.escapeStringForLLVM(expr.property)
+    const strDef = `${keyName} = private unnamed_addr constant [${byteLength + 1} x i8] c"${escaped}\\00"`
     this.stringConstants.push(strDef)
     const reg = `%${this.valueCounter++}`
-    ir.push(`  ${reg} = call i64 @map_get(ptr ${obj}, ptr ${keyName}, i64 ${expr.property.length})`)
+    ir.push(`  ${reg} = call i64 @map_get(ptr ${obj}, ptr ${keyName}, i64 ${byteLength})`)
     return reg
   }
 
@@ -3433,11 +3446,11 @@ class LLVMIRGenerator {
 
       if (keyExpr.type === "StringLiteral") {
         // String key: use string literal directly
-        const escaped = keyExpr.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+        const { escaped, byteLength } = this.escapeStringForLLVM(keyExpr.value)
         keyPtr = `@key_str_${this.stringCounter++}`
-        const strDef = `${keyPtr} = private unnamed_addr constant [${keyExpr.value.length + 1} x i8] c"${escaped}\\00"`
+        const strDef = `${keyPtr} = private unnamed_addr constant [${byteLength + 1} x i8] c"${escaped}\\00"`
         this.stringConstants.push(strDef)
-        keyLen = String(keyExpr.value.length)
+        keyLen = String(byteLength)
       } else if (keyExpr.type === "IntegerLiteral" || keyExpr.type === "NumberLiteral") {
         // Integer key: store to memory and pass as ptr
         const keyVal = keyExpr.value !== undefined ? keyExpr.value : index
