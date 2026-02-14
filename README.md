@@ -431,35 +431,94 @@ fn process(input: Input) -> Output {
 - No exceptions with stack unwinding
 - No operator overloading (beyond tensor ops)
 
+## Implementation Status
+
+The core language is fully implemented and tested. The main gaps are in the tensor/ML operations layer and a handful of convenience features.
+
+### Fully Implemented
+
+| Category | Features |
+|---|---|
+| **Type system** | `int`, `float`, `bool`, `string`, `?T` (Optional), `Result<T>`, type aliases, `as` casts, numeric precision types (`i8`–`i64`, `u8`–`u64`, `f16`, `bf16`, `f32`, `f64`) |
+| **Variables** | `:=` binding, `=` reassignment, type inference, explicit annotation |
+| **Functions** | `fn` with return types, single-expression bodies, closures/lambdas as first-class values, named arguments |
+| **Async** | `async fn`, `await`, `spawn`, `all()`, `race()`, LLVM coroutine-based with host event loop |
+| **Control flow** | `if`/`else`/`elif`, if-as-expression, `while`, `for i in 0..N`, `for item in array`, `for i, item in array`, `for key, value in map`, `break`, `continue`, `match` with literal/variant/wildcard patterns |
+| **Error handling** | `Result<T>` with `ok`/`err`, `?` propagation, `try`/`catch`, `match` on Result/Optional |
+| **Composite types** | Arrays (`.push`, `.pop`, `.len`, `.contains`, `.sort`, `.reverse`, `.slice`), Maps (create, get, set, iterate), Structs (declare, construct, field access/mutation), SoA (`soa Struct[N]` with AoS syntax) |
+| **Strings** | UTF-8 literals, f-string interpolation, `.len`, `.upper()`, `.lower()`, `.trim()`, `.split()`, `.contains()`, `.starts_with()`, `.ends_with()`, `.replace()`, `str()` conversion |
+| **Math builtins** | `sqrt`, `sin`, `cos`, `tan`, `exp`, `log`, `floor`, `ceil`, `PI`, `E` |
+| **Host capabilities** | `requires`/`optional` declarations, `.mogdecl` files, C API for registration, `fs` (read/write/append/exists/remove/size), `process` (sleep/getenv/cwd/exit/timestamp), `env` (custom host functions, including async) |
+| **Module system** | `package`, `import`, `pub`, `mog.mod`, name mangling, circular import detection |
+| **Tensors (basic)** | Creation from literals, `+`, `-`, `*`, `matmul`, `.sum()`, `.mean()`, `.reshape()`, `.shape`, `.ndim` |
+| **Runtime** | Mark-and-sweep GC, `select()`-based async event loop with fd watchers and timers |
+| **Operators** | Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison, logical (`and`, `or`, `not`), bitwise (`&`, `\|`, `^`, `~`, `<<`, `>>`), `?` propagation, `..` range, `as` cast |
+
+### Partially Implemented
+
+| Feature | Done | Missing |
+|---|---|---|
+| **Tensor creation** | `tensor()` from literal | `.zeros()`, `.ones()`, `.full()`, `.randn()`, `.rand()`, `.arange()`, `.eye()` static constructors |
+| **Tensor shape ops** | `.reshape()`, `.shape`, `.ndim` | `.transpose()`, `.squeeze()`, `.unsqueeze()`, `.expand()`, `.contiguous()`, `.flatten()`, `.view()` |
+| **Tensor reduction** | `.sum()`, `.mean()` | `.max()`, `.min()`, `.argmax()`, `.argmin()`, `.prod()`, `.any()`, `.all()`, dim-based variants |
+| **Tensor elementwise** | `+`, `-`, `*` | `/`, `**`, comparison (bool tensor), `abs`, `neg`, `exp`, `log`, `sqrt`, `clamp`, trig on tensors |
+| **Tensor linear algebra** | `matmul()`, `dot()` | `norm()`, `cross()` |
+| **Math builtins** | Core set above | `abs()`, `pow()`, `asin()`, `acos()`, `atan2()`, `log2()`, `round()`, `min()`, `max()` |
+| **String ops** | All methods above | `s[start:end]` slice syntax, `int("42")` / `float("3.14")` parse functions |
+| **Named args** | Parser support | Default parameter values in codegen |
+| **Array methods** | `.push`, `.pop`, `.len`, `.contains`, `.sort`, `.reverse`, `.slice` | `.filter()`, `.map()` (higher-order), `.join()` |
+| **Map ops** | Create, get, set, iterate | `.has()` key existence check |
+| **String `+`** | Works via `string_concat()` | `+` operator overload for string concatenation |
+
+### Not Yet Implemented
+
+| Feature | Description |
+|---|---|
+| **ML operations** | `relu`, `gelu`, `silu`, `sigmoid`, `tanh`, `softmax`, `layer_norm`, `batch_norm`, `group_norm`, `conv1d`, `conv2d`, `max_pool2d`, `avg_pool2d`, `cross_entropy`, `mse_loss`, `binary_cross_entropy`, `scaled_dot_product_attention`, `dropout`, `embedding` |
+| **Autograd** | `.requires_grad()`, `.backward()`, `.grad`, gradient tracking and backpropagation |
+| **`with` blocks** | `with no_grad() { ... }` and other scoped contexts |
+| **Tensor dtype conversion** | `t.to(f16)`, `t.to(f32)`, `t.to(i32)` |
+| **Tensor advanced indexing** | `matrix[0, :]`, `volume[:, 0:10, :]` multi-dim slice syntax |
+| **Implicit widening** | `i32` → `int`, `f32` → `float` automatic promotion |
+| **`http`, `model`, `log`, `db` capabilities** | Reference host implementations (the capability system itself works — hosts can register any capability) |
+
 ## Testing
 
 ```bash
 bun test
 ```
 
-504 tests passing across 11 test files.
+1006 tests passing across 26 test files.
 
 ## Architecture
 
 ```
 src/
-  lexer.ts          Tokenization
-  parser.ts         AST generation
+  lexer.ts          Tokenization (84 token types, 31 keywords)
+  parser.ts         AST generation (62 node types)
   analyzer.ts       Type checking, capability checking, scope resolution
+  types.ts          Type system (21 type classes)
   compiler.ts       Compiler orchestration
-  llvm_codegen.ts   LLVM IR generation
+  llvm_codegen.ts   LLVM IR generation (68 codegen methods)
   linker.ts         Links IR to native executable
   capability.ts     .mogdecl parser for host FFI declarations
-  types.ts          Type system definitions
+  module.ts         Module resolver with circular import detection
   stdlib.ts         Standard library functions
 
 runtime/
-  runtime.c         C runtime (GC, I/O primitives)
+  runtime.c         C runtime (GC, strings, arrays, maps, tensors, I/O)
   mog.h             Public C API for host embedding
   mog_vm.c          VM for host FFI capability dispatch
+  mog_async.c       Event loop, futures, coroutine resume, all/race
+  mog_async.h       Async runtime headers
+  posix_host.c      Built-in fs and process capability providers
 
 capabilities/
-  *.mogdecl         Capability declaration files
+  *.mogdecl         Capability type declarations for host FFI
+
+examples/
+  host.c            Example host application with custom capabilities
+  build_showcase.sh Build script for the showcase demo
 ```
 
 ## Embedding
