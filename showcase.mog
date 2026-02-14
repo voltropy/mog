@@ -189,7 +189,7 @@ fn chain_divide(a: i64, b: i64, c: i64) -> Result<i64> {
 async fn main() -> i64 {
 
   // --- Section: Basic Variables & Arithmetic ---
-  print_string("=== Variables & Arithmetic ===\n");
+  println("=== Variables & Arithmetic ===");
 
   x: i64 = 42;
   y: i64 = 13;
@@ -199,15 +199,15 @@ async fn main() -> i64 {
   quot: i64 = x / y;
   rem: i64 = x % y;
 
-  print_string(f"  42 + 13 = {sum}\n");
-  print_string(f"  42 - 13 = {diff}\n");
-  print_string(f"  42 * 13 = {prod}\n");
-  print_string(f"  42 / 13 = {quot}\n");
-  print_string(f"  42 % 13 = {rem}\n");
-  print_string("\n");
+  println(f"  42 + 13 = {sum}");
+  println(f"  42 - 13 = {diff}");
+  println(f"  42 * 13 = {prod}");
+  println(f"  42 / 13 = {quot}");
+  println(f"  42 % 13 = {rem}");
+  println("");
 
   // --- Section: Float Arithmetic ---
-  print_string("=== Float Arithmetic ===\n");
+  println("=== Float Arithmetic ===");
 
   a: f64 = 3.14;
   b: f64 = 2.71;
@@ -216,13 +216,13 @@ async fn main() -> i64 {
 
   print_string("  3.14 + 2.71 = ");
   print_f64(fsum);
-  print_string("\n");
+  println("");
   print_string("  3.14 * 2.71 = ");
   print_f64(fprod);
-  print_string("\n\n");
+  println("\n");
 
   // --- Section: Bitwise Operators ---
-  print_string("=== Bitwise Operators ===\n");
+  println("=== Bitwise Operators ===");
 
   bw_and: i64 = 255 & 15;
   bw_or: i64 = 240 | 15;
@@ -230,85 +230,85 @@ async fn main() -> i64 {
   bw_shl: i64 = 1 << 8;
   bw_shr: i64 = 256 >> 4;
 
-  print_string(f"  255 & 15 = {bw_and}\n");
-  print_string(f"  240 | 15 = {bw_or}\n");
-  print_string(f"  255 ^ 15 = {bw_xor}\n");
-  print_string(f"  1 << 8 = {bw_shl}\n");
-  print_string(f"  256 >> 4 = {bw_shr}\n");
-  print_string("\n");
+  println(f"  255 & 15 = {bw_and}");
+  println(f"  240 | 15 = {bw_or}");
+  println(f"  255 ^ 15 = {bw_xor}");
+  println(f"  1 << 8 = {bw_shl}");
+  println(f"  256 >> 4 = {bw_shr}");
+  println("");
 
   // --- Section: Functions ---
-  print_string("=== Functions ===\n");
+  println("=== Functions ===");
 
   r: i64 = add(10, 32);
-  print_string(f"  add(10, 32) = {r}\n");
+  println(f"  add(10, 32) = {r}");
 
   f5: i64 = factorial(5);
-  print_string(f"  factorial(5) = {f5}\n");
+  println(f"  factorial(5) = {f5}");
 
   f10: i64 = factorial(10);
-  print_string(f"  factorial(10) = {f10}\n");
+  println(f"  factorial(10) = {f10}");
 
   fib10: i64 = fibonacci(10);
-  print_string(f"  fibonacci(10) = {fib10}\n");
+  println(f"  fibonacci(10) = {fib10}");
 
   fib20: i64 = fibonacci(20);
-  print_string(f"  fibonacci(20) = {fib20}\n");
-  print_string("\n");
+  println(f"  fibonacci(20) = {fib20}");
+  println("");
 
   // --- Section: Strings & Interpolation ---
-  print_string("=== Strings & Interpolation ===\n");
+  println("=== Strings & Interpolation ===");
 
   greeting: [u8] = "Hello, Mog!";
-  print_string(f"  {greeting}\n");
+  println(f"  {greeting}");
 
   name: [u8] = "World";
-  print_string(f"  Hello, {name}!\n");
+  println(f"  Hello, {name}!");
 
   val: i64 = 99;
-  print_string(f"  The answer is {val}\n");
-  print_string("\n");
+  println(f"  The answer is {val}");
+  println("");
 
   // --- Section: String Methods ---
-  print_string("=== String Methods ===\n");
+  println("=== String Methods ===");
 
   s: [u8] = "hello world";
 
   upper: [u8] = s.upper();
-  print_string(f"  upper: {upper}\n");
+  println(f"  upper: {upper}");
 
   lower: [u8] = upper.lower();
-  print_string(f"  lower: {lower}\n");
+  println(f"  lower: {lower}");
 
   padded: [u8] = "  trimmed  ";
   trimmed: [u8] = padded.trim();
-  print_string(f"  trim: [{trimmed}]\n");
+  println(f"  trim: [{trimmed}]");
 
   replaced: [u8] = s.replace("world", "mog");
-  print_string(f"  replace: {replaced}\n");
+  println(f"  replace: {replaced}");
 
-  print_string(f"  len('hello world') = {s.len}\n");
-  print_string("\n");
+  println(f"  len('hello world') = {s.len}");
+  println("");
 
   // --- Section: If/Else ---
-  print_string("=== If/Else ===\n");
+  println("=== If/Else ===");
 
   test_val: i64 = 42;
   if (test_val > 0) {
-    print_string("  42 > 0: true\n");
+    println("  42 > 0: true");
   } else {
-    print_string("  42 > 0: false\n");
+    println("  42 > 0: false");
   }
 
   if (test_val < 0) {
-    print_string("  42 < 0: true\n");
+    println("  42 < 0: true");
   } else {
-    print_string("  42 < 0: false\n");
+    println("  42 < 0: false");
   }
-  print_string("\n");
+  println("");
 
   // --- Section: While Loop ---
-  print_string("=== While Loop ===\n");
+  println("=== While Loop ===");
 
   wsum: i64 = 0;
   wi: i64 = 1;
@@ -316,21 +316,21 @@ async fn main() -> i64 {
     wsum := wsum + wi;
     wi := wi + 1;
   }
-  print_string(f"  sum(1..10) = {wsum}\n");
-  print_string("\n");
+  println(f"  sum(1..10) = {wsum}");
+  println("");
 
   // --- Section: For-In Range ---
-  print_string("=== For-In Range ===\n");
+  println("=== For-In Range ===");
 
   fsum2: i64 = 0;
   for fi in 0..10 {
     fsum2 := fsum2 + fi;
   }
-  print_string(f"  sum(0..10) = {fsum2}\n");
-  print_string("\n");
+  println(f"  sum(0..10) = {fsum2}");
+  println("");
 
   // --- Section: Break & Continue ---
-  print_string("=== Break & Continue ===\n");
+  println("=== Break & Continue ===");
 
   bsum: i64 = 0;
   for bi in 0..100 {
@@ -339,7 +339,7 @@ async fn main() -> i64 {
     }
     bsum := bsum + bi;
   }
-  print_string(f"  break at 5, sum = {bsum}\n");
+  println(f"  break at 5, sum = {bsum}");
 
   csum: i64 = 0;
   for ci in 0..10 {
@@ -348,56 +348,51 @@ async fn main() -> i64 {
     }
     csum := csum + ci;
   }
-  print_string(f"  skip 5, sum = {csum}\n");
-  print_string("\n");
+  println(f"  skip 5, sum = {csum}");
+  println("");
 
   // --- Section: Structs ---
-  print_string("=== Structs ===\n");
+  println("=== Structs ===");
 
   p1: Point = Point { x: 3.0, y: 4.0 };
   print_string("  Point(3, 4).x = ");
   print_f64(p1.x);
-  print_string("\n");
+  println("");
   print_string("  Point(3, 4).y = ");
   print_f64(p1.y);
-  print_string("\n");
+  println("");
 
   dsq: f64 = distance_sq(p1);
   print_string("  distance_sq = ");
   print_f64(dsq);
-  print_string("\n");
+  println("");
 
   p2: Point = create_point(1.5, 2.5);
   print_string("  create_point(1.5, 2.5).x = ");
   print_f64(p2.x);
-  print_string("\n");
+  println("");
 
   particle: Particle = Particle { x: 0.0, y: 0.0, mass: 1.5 };
   particle.x := 10.0;
   particle.y := 20.0;
-  print_string("  particle after mutation: x=");
-  print_f64(particle.x);
-  print_string(" y=");
-  print_f64(particle.y);
-  print_string(" mass=");
-  print_f64(particle.mass);
-  print_string("\n\n");
+  println(f"  particle after mutation: x={particle.x} y={particle.y} mass={particle.mass}");
+  println("\n");
 
   // --- Section: Arrays ---
-  print_string("=== Arrays ===\n");
+  println("=== Arrays ===");
 
   arr: i64[] = [10, 20, 30, 40, 50];
-  print_string(f"  arr[0] = {arr[0]}\n");
-  print_string(f"  arr[4] = {arr[4]}\n");
+  println(f"  arr[0] = {arr[0]}");
+  println(f"  arr[4] = {arr[4]}");
 
-  print_string(f"  arr.len = {arr.len}\n");
+  println(f"  arr.len = {arr.len}");
 
   arr.push(60);
-  print_string(f"  after push(60), len = {arr.len}\n");
-  print_string("\n");
+  println(f"  after push(60), len = {arr.len}");
+  println("");
 
   // --- Section: Match Expression ---
-  print_string("=== Match Expression ===\n");
+  println("=== Match Expression ===");
 
   mval: i64 = 2;
   mresult: i64 = match mval {
@@ -406,50 +401,50 @@ async fn main() -> i64 {
     3 => 30,
     _ => 0
   };
-  print_string(f"  match 2: {mresult}\n");
+  println(f"  match 2: {mresult}");
 
   mval2: i64 = 99;
   mresult2: i64 = match mval2 {
     1 => 100,
     _ => 999
   };
-  print_string(f"  match 99 (wildcard): {mresult2}\n");
-  print_string("\n");
+  println(f"  match 99 (wildcard): {mresult2}");
+  println("");
 
   // --- Section: If-Expression ---
-  print_string("=== If-Expression ===\n");
+  println("=== If-Expression ===");
 
   ival: i64 = 10;
   iresult: i64 = if ival > 5 { 1; } else { 0; };
-  print_string(f"  if 10 > 5: {iresult}\n");
+  println(f"  if 10 > 5: {iresult}");
 
   iresult2: i64 = if ival > 100 { 1; } else { 0; };
-  print_string(f"  if 10 > 100: {iresult2}\n");
-  print_string("\n");
+  println(f"  if 10 > 100: {iresult2}");
+  println("");
 
   // --- Section: Result Type ---
-  print_string("=== Result Type ===\n");
+  println("=== Result Type ===");
 
   // ok and err constructors
   res1: Result<i64> = safe_divide(10, 3);
   if res1 is ok(div_ok) {
-    print_string(f"  10 / 3 = {div_ok}\n");
+    println(f"  10 / 3 = {div_ok}");
   }
 
   res2: Result<i64> = safe_divide(10, 0);
   if res2 is err(div_err) {
-    print_string("  10 / 0 = err (division by zero)\n");
+    println("  10 / 0 = err (division by zero)");
   }
 
   // ? propagation through chain_divide
   res3: Result<i64> = chain_divide(100, 5, 2);
   if res3 is ok(chain_ok) {
-    print_string(f"  100 / 5 / 2 = {chain_ok}\n");
+    println(f"  100 / 5 / 2 = {chain_ok}");
   }
 
   res4: Result<i64> = chain_divide(100, 0, 2);
   if res4 is err(chain_err) {
-    print_string("  100 / 0 / 2 = err (propagated)\n");
+    println("  100 / 0 / 2 = err (propagated)");
   }
 
   // match on Result
@@ -458,28 +453,28 @@ async fn main() -> i64 {
     ok(rval) => rval,
     err(rmsg) => 0
   };
-  print_string(f"  match ok(42/6): {rdesc}\n");
+  println(f"  match ok(42/6): {rdesc}");
 
   res6: Result<i64> = safe_divide(42, 0);
   rdesc2: i64 = match res6 {
     ok(rval2) => rval2,
     err(rmsg2) => 0
   };
-  print_string(f"  match err(42/0): {rdesc2}\n");
-  print_string("\n");
+  println(f"  match err(42/0): {rdesc2}");
+  println("");
 
   // --- Section: Optional Type ---
-  print_string("=== Optional Type ===\n");
+  println("=== Optional Type ===");
 
   // some and none
   o1: ?i64 = find_positive(42);
   if o1 is some(found) {
-    print_string(f"  find_positive(42) = {found}\n");
+    println(f"  find_positive(42) = {found}");
   }
 
   o2: ?i64 = find_positive(-5);
   if o2 is none {
-    print_string("  find_positive(-5) = none\n");
+    println("  find_positive(-5) = none");
   }
 
   // match on Optional
@@ -488,69 +483,69 @@ async fn main() -> i64 {
     some(sv) => sv,
     none => 0
   };
-  print_string(f"  match some(99): {oval}\n");
+  println(f"  match some(99): {oval}");
 
   o4: ?i64 = none;
   oval2: i64 = match o4 {
     some(sv2) => sv2,
     none => 0
   };
-  print_string(f"  match none: {oval2}\n");
-  print_string("\n");
+  println(f"  match none: {oval2}");
+  println("");
 
   // --- Section: Math Builtins ---
-  print_string("=== Math Builtins ===\n");
+  println("=== Math Builtins ===");
 
   sq: f64 = sqrt(4.0);
   print_string("  sqrt(4.0) = ");
   print_f64(sq);
-  print_string("\n");
+  println("");
 
   sn: f64 = sin(0.0);
   print_string("  sin(0.0) = ");
   print_f64(sn);
-  print_string("\n");
+  println("");
 
   cs: f64 = cos(0.0);
   print_string("  cos(0.0) = ");
   print_f64(cs);
-  print_string("\n");
+  println("");
 
   pi_val: f64 = PI;
   print_string("  PI = ");
   print_f64(pi_val);
-  print_string("\n");
+  println("");
 
   e_val: f64 = E;
   print_string("  E = ");
   print_f64(e_val);
-  print_string("\n");
+  println("");
 
   sin_pi: f64 = sin(PI);
   print_string("  sin(PI) = ");
   print_f64(sin_pi);
-  print_string("\n\n");
+  println("\n");
 
   // --- Section: Host Capability (env) ---
-  print_string("=== Host Capability: env ===\n");
+  println("=== Host Capability: env ===");
 
   await env.log("  [env.log] Hello from the host!");
 
   hname: ptr = await env.get_name();
-  print_string(f"  env.get_name() = {hname}\n");
+  println(f"  env.get_name() = {hname}");
 
   hver: i64 = await env.get_version();
-  print_string(f"  env.get_version() = {hver}\n");
+  println(f"  env.get_version() = {hver}");
 
   hts: i64 = await env.timestamp();
-  print_string(f"  env.timestamp() = {hts}\n");
+  println(f"  env.timestamp() = {hts}");
 
   rnd: i64 = await env.random(1, 100);
-  print_string(f"  env.random(1, 100) = {rnd}\n");
-  print_string("\n");
+  println(f"  env.random(1, 100) = {rnd}");
+  println("");
 
   // --- Section: SoA (Struct of Arrays) ---
-  print_string("=== SoA (Struct of Arrays) ===\n");
+  println("=== SoA (Struct of Arrays) ===");
 
   struct Datum { id: i64, val: i64 }
   datums := soa Datum[10];
@@ -559,21 +554,21 @@ async fn main() -> i64 {
   datums[1].id = 2;
   datums[1].val = 200;
 
-  print_string(f"  datums[0].id = {datums[0].id}\n");
-  print_string(f"  datums[1].val = {datums[1].val}\n");
-  print_string("\n");
+  println(f"  datums[0].id = {datums[0].id}");
+  println(f"  datums[1].val = {datums[1].val}");
+  println("");
 
   // --- Section: Closures ---
-  print_string("=== Closures ===\n");
+  println("=== Closures ===");
 
   // Non-capturing lambda
   double := fn(x: i64) -> i64 { x * 2 };
-  print_string(f"  double(21) = {double(21)}\n");
+  println(f"  double(21) = {double(21)}");
 
   // Closure capturing a variable (value capture)
   offset: i64 = 100;
   add_offset := fn(x: i64) -> i64 { x + offset };
-  print_string(f"  add_offset(42) = {add_offset(42)}\n");
+  println(f"  add_offset(42) = {add_offset(42)}");
 
   // make_adder pattern
   fn make_adder(n: i64) -> fn(i64) -> i64 {
@@ -581,35 +576,35 @@ async fn main() -> i64 {
   }
   add5 := make_adder(5);
   add10 := make_adder(10);
-  print_string(f"  add5(3) = {add5(3)}\n");
-  print_string(f"  add10(3) = {add10(3)}\n");
+  println(f"  add5(3) = {add5(3)}");
+  println(f"  add10(3) = {add10(3)}");
 
   // Higher-order: passing closure as argument
   fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
     return f(x);
   }
-  print_string(f"  apply(double, 7) = {apply(double, 7)}\n");
-  print_string("\n");
+  println(f"  apply(double, 7) = {apply(double, 7)}");
+  println("");
 
   // --- Section: String Type ---
-  print_string("=== String Type ===\n");
+  println("=== String Type ===");
   name2: string = "Mog";
   greeting2: string = f"Hello, {name2}!";
-  print_string(f"  greeting: {greeting2}\n");
+  println(f"  greeting: {greeting2}");
   num_str: string = str(42);
-  print_string(f"  str(42) = {num_str}\n");
-  print_string("\n");
+  println(f"  str(42) = {num_str}");
+  println("");
 
   // --- Section: Map Iteration ---
-  print_string("=== Map Iteration ===\n");
+  println("=== Map Iteration ===");
   scores := {"alice": 95, "bob": 87, "carol": 92};
   for key, value in scores {
-    print_string(f"  {key}: {value}\n");
+    println(f"  {key}: {value}");
   }
-  print_string("\n");
+  println("");
 
   // --- Section: Tensors ---
-  print_string("=== Tensors ===\n");
+  println("=== Tensors ===");
   ta := tensor<f32>([3], [1.0, 2.0, 3.0]);
   tb := tensor<f32>([3], [4.0, 5.0, 6.0]);
   tc := ta + tb;
@@ -618,7 +613,7 @@ async fn main() -> i64 {
   ts: f64 = ta.sum();
   print_string("  a.sum() = ");
   print_f64(ts);
-  print_string("\n");
+  println("");
 
   // Matrix multiply
   m1 := tensor<f32>([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -626,13 +621,13 @@ async fn main() -> i64 {
   m3 := matmul(m1, m2);
   print_string("  matmul = ");
   tensor_print(m3);
-  print_string("\n");
+  println("");
 
   // --- Section: File System Capability ---
-  print_string("=== File System (fs capability) ===\n");
+  println("=== File System (fs capability) ===");
   // Write a file
   await fs.write_file("/tmp/mog_test.txt", "Hello from Mog!");
-  print_string("  Wrote /tmp/mog_test.txt\n");
+  println("  Wrote /tmp/mog_test.txt");
 
   // Check if it exists
   exists_val: bool = await fs.exists("/tmp/mog_test.txt");
@@ -642,83 +637,83 @@ async fn main() -> i64 {
   } else {
     print_string("false");
   }
-  print_string("\n");
+  println("");
 
   // Read it back
   contents: string = await fs.read_file("/tmp/mog_test.txt");
   print_string("  Contents: ");
   print_string(contents);
-  print_string("\n");
+  println("");
 
   // Get file size
   sz: int = await fs.file_size("/tmp/mog_test.txt");
   print_string("  File size: ");
   print(sz);
-  print_string(" bytes\n");
+  println(" bytes");
 
   // Clean up
   await fs.remove("/tmp/mog_test.txt");
-  print_string("  Cleaned up test file\n");
-  print_string("\n");
+  println("  Cleaned up test file");
+  println("");
 
   // --- Section: Process Capability ---
-  print_string("=== Process (process capability) ===\n");
+  println("=== Process (process capability) ===");
   // Get current working directory
   cwd_val: string = await process.cwd();
   print_string("  CWD: ");
   print_string(cwd_val);
-  print_string("\n");
+  println("");
 
   // Get timestamp
   ts_val: int = await process.timestamp();
   print_string("  Timestamp: ");
   print(ts_val);
-  print_string(" ms\n");
+  println(" ms");
 
   // Get environment variable
   home_val: string = await process.getenv("HOME");
   print_string("  HOME: ");
   print_string(home_val);
-  print_string("\n");
-  print_string("\n");
+  println("");
+  println("");
 
   // --- Section: Async/Await ---
-  print_string("=== Async/Await ===\n");
-  print_string("  (powered by LLVM coroutine intrinsics + host event loop)\n");
-  print_string("\n");
+  println("=== Async/Await ===");
+  println("  (powered by LLVM coroutine intrinsics + host event loop)");
+  println("");
 
   // 1. Basic await - call an async function and get the result
   r1: i64 = await async_add(20, 22);
-  print_string(f"  await async_add(20, 22) = {r1}\n");
+  println(f"  await async_add(20, 22) = {r1}");
 
   // 2. Nested async - add_then_double calls async_add then async_double
   r2: i64 = await add_then_double(10, 11);
-  print_string(f"  await add_then_double(10, 11) = {r2}\n");
+  println(f"  await add_then_double(10, 11) = {r2}");
 
   // 3. Recursive async - factorial with each level returning a Future
   r3: i64 = await async_factorial(7);
-  print_string(f"  await async_factorial(7) = {r3}\n");
+  println(f"  await async_factorial(7) = {r3}");
 
   // 4. Sequential awaits in a loop - async fibonacci
   r4: i64 = await async_fibonacci(15);
-  print_string(f"  await async_fibonacci(15) = {r4}\n");
+  println(f"  await async_fibonacci(15) = {r4}");
 
   // 5. Pipeline pattern: fetch -> transform -> validate
   r5: i64 = await pipeline();
-  print_string(f"  await pipeline() = {r5}\n");
+  println(f"  await pipeline() = {r5}");
 
   // 6. Parallel execution with all() - run tasks concurrently
   await all([task_alpha(), task_beta(), task_gamma()]);
-  print_string("  all([alpha, beta, gamma]) completed\n");
+  println("  all([alpha, beta, gamma]) completed");
 
   // 7. Race - first future to complete wins
   winner: i64 = await race([fast_path(), slow_path()]);
-  print_string(f"  race([fast, slow]) winner = {winner}\n");
+  println(f"  race([fast, slow]) winner = {winner}");
 
   // 8. Async file I/O - write, read, verify, clean up
   await fs.write_file("/tmp/mog_async_test.txt", "async file I/O works!");
   async_contents: string = await fs.read_file("/tmp/mog_async_test.txt");
-  print_string(f"  async fs round-trip: {async_contents}\n");
+  println(f"  async fs round-trip: {async_contents}");
   await fs.remove("/tmp/mog_async_test.txt");
 
   // 9. Timed operation with process.sleep
@@ -726,35 +721,35 @@ async fn main() -> i64 {
   await process.sleep(25);
   t_after: i64 = await process.timestamp();
   elapsed: i64 = t_after - t_before;
-  print_string(f"  process.sleep(25ms): elapsed = {elapsed}ms\n");
-  print_string("\n");
+  println(f"  process.sleep(25ms): elapsed = {elapsed}ms");
+  println("");
 
   // --- Section: Custom Host Async Function ---
-  print_string("=== Custom Host Async (env.delay_square) ===\n");
-  print_string("  (host computes result, delivers via event loop timer)\n");
+  println("=== Custom Host Async (env.delay_square) ===");
+  println("  (host computes result, delivers via event loop timer)");
 
   // 10. Basic async host call — host squares the value after a delay
   sq1: i64 = await env.delay_square(7, 10);
-  print_string(f"  await env.delay_square(7, 10ms) = {sq1}\n");
+  println(f"  await env.delay_square(7, 10ms) = {sq1}");
 
   // 11. Timed async host call — verify the delay actually happens
   t1: i64 = await process.timestamp();
   sq2: i64 = await env.delay_square(12, 30);
   t2: i64 = await process.timestamp();
   sq_elapsed: i64 = t2 - t1;
-  print_string(f"  await env.delay_square(12, 30ms) = {sq2} (took {sq_elapsed}ms)\n");
+  println(f"  await env.delay_square(12, 30ms) = {sq2} (took {sq_elapsed}ms)");
 
   // 12. Multiple async host calls — fire sequentially and collect results
   a1: i64 = await env.delay_square(3, 5);
   a2: i64 = await env.delay_square(4, 5);
   a3: i64 = await env.delay_square(5, 5);
   host_sum: i64 = a1 + a2 + a3;
-  print_string(f"  3²+4²+5² = {a1}+{a2}+{a3} = {host_sum}\n");
-  print_string("\n");
+  println(f"  3²+4²+5² = {a1}+{a2}+{a3} = {host_sum}");
+  println("");
 
   // --- Summary ---
-  print_string("=== Showcase Complete ===\n");
-  print_string("All features demonstrated successfully!\n");
+  println("=== Showcase Complete ===");
+  println("All features demonstrated successfully!");
 
   return 0;
 }
