@@ -1,0 +1,1155 @@
+// large.mog — comprehensive benchmark exercising all Mog language features
+// Implements: math helpers, vector ops, statistics, sorting, data processing,
+// matrix ops, string ops, number theory, closures, and test runners.
+
+// ============================================================================
+// Section 1: Math Helpers
+// ============================================================================
+
+fn abs_i64(x: i64) -> i64 {
+  if (x < 0) { return 0 - x; }
+  return x;
+}
+
+fn sqrt_approx(val: i64) -> i64 {
+  if (val <= 0) { return 0; }
+  guess := val / 2;
+  for i in 0..30 {
+    guess = (guess + val / guess) / 2;
+  }
+  return guess;
+}
+
+fn pow_i64(base: i64, exp: i64) -> i64 {
+  result := 1;
+  i := 0;
+  while (i < exp) {
+    result = result * base;
+    i = i + 1;
+  }
+  return result;
+}
+
+fn min_i64(a: i64, b: i64) -> i64 {
+  if (a < b) { return a; }
+  return b;
+}
+
+fn max_i64(a: i64, b: i64) -> i64 {
+  if (a > b) { return a; }
+  return b;
+}
+
+fn clamp_i64(val: i64, lo: i64, hi: i64) -> i64 {
+  return max_i64(lo, min_i64(val, hi));
+}
+
+// ============================================================================
+// Section 2: Vec2 Operations
+// ============================================================================
+
+struct Vec2 {
+  x: i64,
+  y: i64
+}
+
+fn vec2_add(a: Vec2, b: Vec2) -> Vec2 {
+  return Vec2 { x: a.x + b.x, y: a.y + b.y };
+}
+
+fn vec2_sub(a: Vec2, b: Vec2) -> Vec2 {
+  return Vec2 { x: a.x - b.x, y: a.y - b.y };
+}
+
+fn vec2_scale(v: Vec2, s: i64) -> Vec2 {
+  return Vec2 { x: v.x * s, y: v.y * s };
+}
+
+fn vec2_magnitude_sq(v: Vec2) -> i64 {
+  return v.x * v.x + v.y * v.y;
+}
+
+fn vec2_distance_sq(a: Vec2, b: Vec2) -> i64 {
+  d := vec2_sub(a, b);
+  return vec2_magnitude_sq(d);
+}
+
+fn vec2_dot(a: Vec2, b: Vec2) -> i64 {
+  return a.x * b.x + a.y * b.y;
+}
+
+fn vec2_normalize(v: Vec2) -> Vec2 {
+  mag_sq := vec2_magnitude_sq(v);
+  if (mag_sq == 0) { return Vec2 { x: 0, y: 0 }; }
+  return Vec2 { x: v.x * 100 / mag_sq, y: v.y * 100 / mag_sq };
+}
+
+fn vec2_to_string(v: Vec2) -> string {
+  return f"({v.x}, {v.y})";
+}
+
+// ============================================================================
+// Section 3: Array Utilities
+// ============================================================================
+
+fn make_range(start: i64, end: i64) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for i in start..end {
+    result.push(i);
+  }
+  return result;
+}
+
+fn map_squares(nums: i64[]) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for v in nums {
+    result.push(v * v);
+  }
+  return result;
+}
+
+fn map_doubles(nums: i64[]) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for v in nums {
+    result.push(v * 2);
+  }
+  return result;
+}
+
+fn filter_positive(nums: i64[]) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for v in nums {
+    if (v > 0) {
+      result.push(v);
+    }
+  }
+  return result;
+}
+
+fn filter_even(nums: i64[]) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for v in nums {
+    if (v % 2 == 0) {
+      result.push(v);
+    }
+  }
+  return result;
+}
+
+fn filter_odd(nums: i64[]) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for v in nums {
+    if (v % 2 != 0) {
+      result.push(v);
+    }
+  }
+  return result;
+}
+
+fn sum_i64(nums: i64[]) -> i64 {
+  total := 0;
+  for v in nums {
+    total = total + v;
+  }
+  return total;
+}
+
+fn reduce_product(nums: i64[]) -> i64 {
+  product := 1;
+  for v in nums {
+    product = product * v;
+  }
+  return product;
+}
+
+fn contains_i64(nums: i64[], target: i64) -> bool {
+  for v in nums {
+    if (v == target) { return true; }
+  }
+  return false;
+}
+
+fn reverse_array(nums: i64[]) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  i := (nums.len as i64) - 1;
+  while (i >= 0) {
+    result.push(nums[i]);
+    i = i - 1;
+  }
+  return result;
+}
+
+fn count_if_greater(nums: i64[], threshold: i64) -> i64 {
+  count := 0;
+  for v in nums {
+    if (v > threshold) {
+      count = count + 1;
+    }
+  }
+  return count;
+}
+
+// ============================================================================
+// Section 4: Sorting Algorithms
+// ============================================================================
+
+fn copy_array(nums: i64[]) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for v in nums {
+    result.push(v);
+  }
+  return result;
+}
+
+fn bubble_sort(nums: i64[]) -> i64[] {
+  sorted := copy_array(nums);
+  n := sorted.len as i64;
+  for i in 0..n {
+    for j in 0..n - i - 1 {
+      if (sorted[j] > sorted[j + 1]) {
+        tmp := sorted[j];
+        sorted[j] = sorted[j + 1];
+        sorted[j + 1] = tmp;
+      }
+    }
+  }
+  return sorted;
+}
+
+fn insertion_sort(nums: i64[]) -> i64[] {
+  sorted := copy_array(nums);
+  n := sorted.len as i64;
+  i := 1;
+  while (i < n) {
+    key := sorted[i];
+    j := i - 1;
+    while (j >= 0 && sorted[j] > key) {
+      sorted[j + 1] = sorted[j];
+      j = j - 1;
+    }
+    sorted[j + 1] = key;
+    i = i + 1;
+  }
+  return sorted;
+}
+
+fn selection_sort(nums: i64[]) -> i64[] {
+  sorted := copy_array(nums);
+  n := sorted.len as i64;
+  for i in 0..n {
+    min_idx := i;
+    j := i + 1;
+    while (j < n) {
+      if (sorted[j] < sorted[min_idx]) {
+        min_idx = j;
+      }
+      j = j + 1;
+    }
+    if (min_idx != i) {
+      tmp := sorted[i];
+      sorted[i] = sorted[min_idx];
+      sorted[min_idx] = tmp;
+    }
+  }
+  return sorted;
+}
+
+// ============================================================================
+// Section 5: Statistics
+// ============================================================================
+
+struct Stats {
+  mean: i64,
+  median: i64,
+  variance: i64,
+  stddev: i64,
+  min_val: i64,
+  max_val: i64,
+  range: i64,
+  count: i64
+}
+
+fn compute_stats(nums: i64[]) -> Stats {
+  n := nums.len as i64;
+  total := 0;
+  lo := nums[0];
+  hi := nums[0];
+  for v in nums {
+    total = total + v;
+    if (v < lo) { lo = v; }
+    if (v > hi) { hi = v; }
+  }
+  mean := total / n;
+
+  // Variance (integer approximation)
+  var_sum := 0;
+  for v in nums {
+    diff := v - mean;
+    var_sum = var_sum + diff * diff;
+  }
+  variance := var_sum / n;
+  // stddev as integer approx (variance itself, no sqrt)
+  stddev := variance;
+
+  // Median: copy and sort with bubble sort on i64
+  sorted: i64[] = [0]; sorted.pop();
+  for v in nums {
+    sorted.push(v);
+  }
+  sn := sorted.len as i64;
+  for i in 0..sn {
+    for j in 0..sn - i - 1 {
+      if (sorted[j] > sorted[j + 1]) {
+        tmp := sorted[j];
+        sorted[j] = sorted[j + 1];
+        sorted[j + 1] = tmp;
+      }
+    }
+  }
+  median := 0;
+  if (sn % 2 == 1) {
+    median = sorted[sn / 2];
+  } else {
+    median = (sorted[sn / 2 - 1] + sorted[sn / 2]) / 2;
+  }
+
+  return Stats {
+    mean: mean,
+    median: median,
+    variance: variance,
+    stddev: stddev,
+    min_val: lo,
+    max_val: hi,
+    range: hi - lo,
+    count: n
+  };
+}
+
+fn print_stats(s: Stats) {
+  print_string("  count:    "); println_i64(s.count);
+  print_string("  mean:     "); println_i64(s.mean);
+  print_string("  median:   "); println_i64(s.median);
+  print_string("  variance: "); println_i64(s.variance);
+  print_string("  stddev:   "); println_i64(s.stddev);
+  print_string("  min:      "); println_i64(s.min_val);
+  print_string("  max:      "); println_i64(s.max_val);
+  print_string("  range:    "); println_i64(s.range);
+}
+
+// ============================================================================
+// Section 6: Data Generation (LCG pseudo-random)
+// ============================================================================
+
+struct DataPoint {
+  id: i64,
+  value: i64,
+  tag: i64,
+  label: string
+}
+
+fn lcg_next(seed: i64) -> i64 {
+  // Linear congruential generator
+  return (seed * 1103515245 + 12345) % 2147483648;
+}
+
+fn generate_data(count: i64, seed: i64) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  s := seed;
+  for i in 0..count {
+    s = lcg_next(s);
+    val := (s % 10000) / 100;
+    result.push(val);
+  }
+  return result;
+}
+
+fn classify_value(v: i64) -> string {
+  label: string = match v {
+    0 => "zero",
+    _ => "nonzero"
+  };
+  if (v < 0) { return "negative"; }
+  if (v < 25) { return "low"; }
+  if (v < 50) { return "medium"; }
+  if (v < 75) { return "high"; }
+  return "very_high";
+}
+
+fn make_data_points(count: i64, seed: i64) -> i64[] {
+  // Returns array of tags for simplified processing
+  tags: i64[] = [0]; tags.pop();
+  s := seed;
+  for i in 0..count {
+    s = lcg_next(s);
+    tag := s % 5;
+    tags.push(tag);
+  }
+  return tags;
+}
+
+// ============================================================================
+// Section 7: Data Processing
+// ============================================================================
+
+fn count_by_tag(tags: i64[], target: i64) -> i64 {
+  count := 0;
+  for t in tags {
+    if (t == target) {
+      count = count + 1;
+    }
+  }
+  return count;
+}
+
+fn filter_by_tag(tags: i64[], values: i64[], target: i64) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for i in 0..(tags.len ) {
+    if (tags[i] == target) {
+      result.push(values[i]);
+    }
+  }
+  return result;
+}
+
+fn weighted_average(values: i64[], weights: i64[]) -> i64 {
+  wsum := 0;
+  wtotal := 0;
+  n := min_i64(values.len as i64, weights.len );
+  for i in 0..n {
+    wsum = wsum + values[i] * weights[i];
+    wtotal = wtotal + weights[i];
+  }
+  if (wtotal == 0) { return 0; }
+  return wsum / wtotal;
+}
+
+fn normalize(values: i64[]) -> i64[] {
+  lo := values[0];
+  hi := values[0];
+  for v in values {
+    if (v < lo) { lo = v; }
+    if (v > hi) { hi = v; }
+  }
+  range := hi - lo;
+  result: i64[] = [0]; result.pop();
+  for v in values {
+    if (range == 0) {
+      result.push(0);
+    } else {
+      result.push((v - lo) / range);
+    }
+  }
+  return result;
+}
+
+fn running_average(values: i64[]) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  sum := 0;
+  for i in 0..(values.len ) {
+    sum = sum + values[i];
+    result.push(sum / ((i + 1) ));
+  }
+  return result;
+}
+
+// ============================================================================
+// Section 8: Matrix Operations (flattened 2D arrays)
+// ============================================================================
+
+fn matrix_create(rows: i64, cols: i64) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for i in 0..rows * cols {
+    result.push(0);
+  }
+  return result;
+}
+
+fn matrix_identity(n: i64) -> i64[] {
+  m := matrix_create(n, n);
+  for i in 0..n {
+    m[i * n + i] = 1;
+  }
+  return m;
+}
+
+fn matrix_get(m: i64[], cols: i64, r: i64, c: i64) -> i64 {
+  return m[r * cols + c];
+}
+
+fn matrix_set(m: i64[], cols: i64, r: i64, c: i64, val: i64) {
+  m[r * cols + c] = val;
+}
+
+fn matrix_multiply(a: i64[], b: i64[], n: i64) -> i64[] {
+  result := matrix_create(n, n);
+  for i in 0..n {
+    for j in 0..n {
+      sum := 0;
+      for k in 0..n {
+        sum = sum + matrix_get(a, n, i, k) * matrix_get(b, n, k, j);
+      }
+      matrix_set(result, n, i, j, sum);
+    }
+  }
+  return result;
+}
+
+fn matrix_add_i64(a: i64[], b: i64[], n: i64) -> i64[] {
+  result := matrix_create(n, n);
+  for i in 0..n * n {
+    result[i] = a[i] + b[i];
+  }
+  return result;
+}
+
+fn matrix_scale(m: i64[], n: i64, s: i64) -> i64[] {
+  result := matrix_create(n, n);
+  for i in 0..n * n {
+    result[i] = m[i] * s;
+  }
+  return result;
+}
+
+fn matrix_transpose(m: i64[], n: i64) -> i64[] {
+  result := matrix_create(n, n);
+  for i in 0..n {
+    for j in 0..n {
+      matrix_set(result, n, i, j, matrix_get(m, n, j, i));
+    }
+  }
+  return result;
+}
+
+fn matrix_trace(m: i64[], n: i64) -> i64 {
+  sum := 0;
+  for i in 0..n {
+    sum = sum + matrix_get(m, n, i, i);
+  }
+  return sum;
+}
+
+fn print_matrix(m: i64[], rows: i64, cols: i64) {
+  for i in 0..rows {
+    print_string("  [");
+    for j in 0..cols {
+      print_string(" ");
+      println_i64(matrix_get(m, cols, i, j));
+    }
+    println(" ]");
+  }
+}
+
+// ============================================================================
+// Section 9: String Operations
+// ============================================================================
+
+fn string_repeat(s: string, n: i64) -> string {
+  result := "";
+  for i in 0..n {
+    result = f"{result}{s}";
+  }
+  return result;
+}
+
+fn is_digit(c: string) -> bool {
+  if (c == "0") { return true; }
+  if (c == "1") { return true; }
+  if (c == "2") { return true; }
+  if (c == "3") { return true; }
+  if (c == "4") { return true; }
+  if (c == "5") { return true; }
+  if (c == "6") { return true; }
+  if (c == "7") { return true; }
+  if (c == "8") { return true; }
+  if (c == "9") { return true; }
+  return false;
+}
+
+fn count_char(s: string, target: string) -> i64 {
+  // Count occurrences by checking contains after building substrings
+  // Simplified: count target in known test strings
+  count := 0;
+  if (s.contains(target)) {
+    count = 1;
+  }
+  return count;
+}
+
+fn join_strings(parts: string[], sep: string) -> string {
+  if ((parts.len ) == 0) { return ""; }
+  result := "";
+  result = f"{parts[0]}";
+  i := 1;
+  while (i < (parts.len )) {
+    result = f"{result}{sep}{parts[i]}";
+    i = i + 1;
+  }
+  return result;
+}
+
+// ============================================================================
+// Section 10: Number Theory
+// ============================================================================
+
+fn fibonacci(n: i64) -> i64 {
+  if (n <= 1) { return n; }
+  a := 0;
+  b := 1;
+  for i in 2..n + 1 {
+    tmp := a + b;
+    a = b;
+    b = tmp;
+  }
+  return b;
+}
+
+fn factorial(n: i64) -> i64 {
+  if (n <= 1) { return 1; }
+  result := 1;
+  for i in 2..n + 1 {
+    result = result * i;
+  }
+  return result;
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+  x := abs_i64(a);
+  y := abs_i64(b);
+  while (y != 0) {
+    tmp := y;
+    y = x % y;
+    x = tmp;
+  }
+  return x;
+}
+
+fn lcm(a: i64, b: i64) -> i64 {
+  if (a == 0 || b == 0) { return 0; }
+  return abs_i64(a * b) / gcd(a, b);
+}
+
+fn is_prime(n: i64) -> bool {
+  if (n < 2) { return false; }
+  if (n == 2) { return true; }
+  if (n % 2 == 0) { return false; }
+  i := 3;
+  while (i * i <= n) {
+    if (n % i == 0) { return false; }
+    i = i + 2;
+  }
+  return true;
+}
+
+fn count_primes(limit: i64) -> i64 {
+  count := 0;
+  for n in 2..limit {
+    if (is_prime(n)) {
+      count = count + 1;
+    }
+  }
+  return count;
+}
+
+fn sum_divisors(n: i64) -> i64 {
+  sum := 0;
+  for i in 1..n {
+    if (n % i == 0) {
+      sum = sum + i;
+    }
+  }
+  return sum;
+}
+
+fn is_perfect(n: i64) -> bool {
+  return sum_divisors(n) == n;
+}
+
+fn collatz_steps(n: i64) -> i64 {
+  steps := 0;
+  val := n;
+  while (val != 1) {
+    if (val % 2 == 0) {
+      val = val / 2;
+    } else {
+      val = val * 3 + 1;
+    }
+    steps = steps + 1;
+  }
+  return steps;
+}
+
+fn combinations(n: i64, k: i64) -> i64 {
+  if (k > n) { return 0; }
+  if (k == 0 || k == n) { return 1; }
+  return factorial(n) / (factorial(k) * factorial(n - k));
+}
+
+fn digital_root(n: i64) -> i64 {
+  val := abs_i64(n);
+  while (val >= 10) {
+    sum := 0;
+    while (val > 0) {
+      sum = sum + val % 10;
+      val = val / 10;
+    }
+    val = sum;
+  }
+  return val;
+}
+
+// ============================================================================
+// Section 11: Closures and Higher-Order Functions
+// ============================================================================
+
+fn make_multiplier(factor: i64) -> fn(i64) -> i64 {
+  return fn(x: i64) -> i64 { x * factor };
+}
+
+fn make_accumulator(initial: i64) -> fn(i64) -> i64 {
+  // Returns a closure that adds to a running total
+  // Note: closures capture by value, so this returns initial + x each call
+  return fn(x: i64) -> i64 { initial + x };
+}
+
+fn apply_fn(f: fn(i64) -> i64, val: i64) -> i64 {
+  return f(val);
+}
+
+fn apply_twice(f: fn(i64) -> i64, val: i64) -> i64 {
+  return f(f(val));
+}
+
+fn apply_n_times(f: fn(i64) -> i64, val: i64, n: i64) -> i64 {
+  result := val;
+  for i in 0..n {
+    result = f(result);
+  }
+  return result;
+}
+
+fn map_with_fn(nums: i64[], f: fn(i64) -> i64) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for v in nums {
+    result.push(f(v));
+  }
+  return result;
+}
+
+fn filter_with_fn(nums: i64[], pred: fn(i64) -> bool) -> i64[] {
+  result: i64[] = [0]; result.pop();
+  for v in nums {
+    if (pred(v)) {
+      result.push(v);
+    }
+  }
+  return result;
+}
+
+fn reduce_with_fn(nums: i64[], init: i64, f: fn(i64, i64) -> i64) -> i64 {
+  acc := init;
+  for v in nums {
+    acc = f(acc, v);
+  }
+  return acc;
+}
+
+// ============================================================================
+// Section 12: Test Runners
+// ============================================================================
+
+fn test_math() {
+  println("=== Math Helpers ===");
+  print_string("  abs(-42): "); println_i64(abs_i64(-42));
+  print_string("  abs(17):  "); println_i64(abs_i64(17));
+  print_string("  sqrt(144): "); println_i64(sqrt_approx(144)); println("");
+  print_string("  sqrt(2):   "); println_i64(sqrt_approx(2)); println("");
+  print_string("  pow(2,10): "); println_i64(pow_i64(2, 10));
+  print_string("  pow(3,5):  "); println_i64(pow_i64(3, 5));
+  print_string("  min(3,7):  "); println_i64(min_i64(3, 7));
+  print_string("  max(3,7):  "); println_i64(max_i64(3, 7));
+  print_string("  clamp(15,0,10): "); println_i64(clamp_i64(15, 0, 10));
+  print_string("  clamp(-5,0,10): "); println_i64(clamp_i64(-5, 0, 10));
+  println("");
+}
+
+fn test_vec2() {
+  println("=== Vec2 Operations ===");
+  v1 := Vec2 { x: 3, y: 4 };
+  v2 := Vec2 { x: 1, y: 2 };
+
+  sum := vec2_add(v1, v2);
+  println(f"  add: {vec2_to_string(sum)}");
+
+  diff := vec2_sub(v1, v2);
+  println(f"  sub: {vec2_to_string(diff)}");
+
+  scaled := vec2_scale(v1, 2);
+  println(f"  scale(2): {vec2_to_string(scaled)}");
+
+  print_string("  magnitude_sq(3,4): "); println_i64(vec2_magnitude_sq(v1));
+  print_string("  distance_sq: "); println_i64(vec2_distance_sq(v1, v2));
+  print_string("  dot: "); println_i64(vec2_dot(v1, v2));
+
+  norm := vec2_normalize(v1);
+  println(f"  normalize: {vec2_to_string(norm)}");
+  println("");
+}
+
+fn test_arrays() {
+  println("=== Array Utilities ===");
+  nums := make_range(1, 11);
+  print_string("  range(1,11): ");
+  for v in nums {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  squares := map_squares(nums);
+  print_string("  squares: ");
+  for v in squares {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  evens := filter_even(nums);
+  print_string("  evens: ");
+  for v in evens {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  odds := filter_odd(nums);
+  print_string("  odds: ");
+  for v in odds {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  print_string("  sum(1..10): "); println_i64(sum_i64(nums));
+  print_string("  product(1..5): "); println_i64(reduce_product(make_range(1, 6)));
+
+  rev := reverse_array(nums);
+  print_string("  reversed: ");
+  for v in rev {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  print_string("  count > 5: "); println_i64(count_if_greater(nums, 5));
+  print_string("  contains 7: ");
+  if (contains_i64(nums, 7)) {
+    println("true");
+  } else {
+    println("false");
+  }
+  println("");
+}
+
+fn test_sorting() {
+  println("=== Sorting ===");
+  data: i64[] = [64, 34, 25, 12, 22, 11, 90, 1, 55, 43];
+
+  bs := bubble_sort(data);
+  print_string("  bubble:    ");
+  for v in bs {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  ins := insertion_sort(data);
+  print_string("  insertion: ");
+  for v in ins {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  ss := selection_sort(data);
+  print_string("  selection: ");
+  for v in ss {
+    print_string(f"{v} ");
+  }
+  println("");
+  println("");
+}
+
+fn test_statistics() {
+  println("=== Statistics ===");
+  data: i64[] = [2, 4, 4, 4, 5, 5, 7, 9];
+  stats := compute_stats(data);
+  print_stats(stats);
+
+  println("  --- second dataset ---");
+  data2: i64[] = [10, 20, 30, 40, 50];
+  stats2 := compute_stats(data2);
+  print_stats(stats2);
+  println("");
+}
+
+fn test_data_processing() {
+  println("=== Data Processing ===");
+  values := generate_data(20, 42);
+  print_string("  generated 20 values, first 5: ");
+  for i in 0..5 {
+    println_i64(values[i]);
+    print_string(" ");
+  }
+  println("");
+
+  tags := make_data_points(20, 42);
+  for t in 0..5 {
+    ct := count_by_tag(tags, t);
+    println(f"  tag {t}: count={ct}");
+  }
+
+  filtered := filter_by_tag(tags, values, 0);
+  print_string("  values with tag 0: ");
+  println_i64(filtered.len );
+
+  norm := normalize(values);
+  print_string("  normalized first 5: ");
+  for i in 0..5 {
+    println_i64(norm[i]);
+    print_string(" ");
+  }
+  println("");
+
+  ravg := running_average(values);
+  print_string("  running avg first 5: ");
+  for i in 0..5 {
+    println_i64(ravg[i]);
+    print_string(" ");
+  }
+  println("");
+  println("");
+}
+
+fn test_matrix() {
+  println("=== Matrix Operations ===");
+  n := 3;
+  id := matrix_identity(n);
+  println("  identity:");
+  print_matrix(id, n, n);
+
+  // Build a test matrix
+  a := matrix_create(n, n);
+  val := 1;
+  for i in 0..n {
+    for j in 0..n {
+      matrix_set(a, n, i, j, val);
+      val = val + 1;
+    }
+  }
+  println("  matrix A:");
+  print_matrix(a, n, n);
+
+  // A * I = A
+  prod := matrix_multiply(a, id, n);
+  println("  A * I:");
+  print_matrix(prod, n, n);
+
+  // A + A
+  doubled := matrix_add_i64(a, a, n);
+  println("  A + A:");
+  print_matrix(doubled, n, n);
+
+  // Transpose
+  trans := matrix_transpose(a, n);
+  println("  transpose(A):");
+  print_matrix(trans, n, n);
+
+  // Trace
+  print_string("  trace(A): "); println_i64(matrix_trace(a, n)); println("");
+
+  // Scale
+  sc := matrix_scale(a, n, 2);
+  println("  A * 2:");
+  print_matrix(sc, n, n);
+  println("");
+}
+
+fn test_strings() {
+  println("=== String Operations ===");
+  println(f"  repeat('ab', 5): {string_repeat('ab', 5)}");
+  println(f"  repeat('*', 10): {string_repeat('*', 10)}");
+
+  parts: string[] = ["hello", "world", "from", "mog"];
+  joined := join_strings(parts, ", ");
+  println(f"  join: {joined}");
+
+  dashed := join_strings(parts, "-");
+  println(f"  dashed: {dashed}");
+  println("");
+}
+
+fn test_number_theory() {
+  println("=== Number Theory ===");
+  print_string("  fib(10): "); println_i64(fibonacci(10));
+  print_string("  fib(20): "); println_i64(fibonacci(20));
+  print_string("  fact(10): "); println_i64(factorial(10));
+  print_string("  fact(12): "); println_i64(factorial(12));
+
+  print_string("  gcd(48,18): "); println_i64(gcd(48, 18));
+  print_string("  lcm(12,8):  "); println_i64(lcm(12, 8));
+
+  print_string("  primes < 100: "); println_i64(count_primes(100));
+
+  print_string("  is_prime(97): ");
+  if (is_prime(97)) { println("true"); } else { println("false"); }
+
+  print_string("  is_prime(100): ");
+  if (is_prime(100)) { println("true"); } else { println("false"); }
+
+  // Perfect numbers < 30
+  print_string("  perfect numbers < 30: ");
+  for n in 2..30 {
+    if (is_perfect(n)) {
+      print_string(f"{n} ");
+    }
+  }
+  println("");
+
+  print_string("  collatz(27): "); println_i64(collatz_steps(27));
+  print_string("  collatz(1):  "); println_i64(collatz_steps(1));
+
+  print_string("  C(10,3): "); println_i64(combinations(10, 3));
+  print_string("  C(10,5): "); println_i64(combinations(10, 5));
+
+  print_string("  digital_root(493): "); println_i64(digital_root(493));
+  print_string("  digital_root(99999): "); println_i64(digital_root(99999));
+  println("");
+}
+
+fn test_closures() {
+  println("=== Closures ===");
+  double := make_multiplier(2);
+  triple := make_multiplier(3);
+
+  print_string("  double(7):  "); println_i64(apply_fn(double, 7));
+  print_string("  triple(7):  "); println_i64(apply_fn(triple, 7));
+  print_string("  double(double(5)): "); println_i64(apply_twice(double, 5));
+  print_string("  triple applied 3x to 2: "); println_i64(apply_n_times(triple, 2, 3));
+
+  nums := make_range(1, 11);
+  doubled := map_with_fn(nums, double);
+  print_string("  map double: ");
+  for v in doubled {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  is_even := fn(x: i64) -> bool { x % 2 == 0 };
+  evens := filter_with_fn(nums, is_even);
+  print_string("  filter even: ");
+  for v in evens {
+    print_string(f"{v} ");
+  }
+  println("");
+
+  adder := fn(a: i64, b: i64) -> i64 { a + b };
+  total := reduce_with_fn(nums, 0, adder);
+  print_string("  reduce sum: "); println_i64(total);
+
+  mul := fn(a: i64, b: i64) -> i64 { a * b };
+  product := reduce_with_fn(make_range(1, 6), 1, mul);
+  print_string("  reduce product(1..5): "); println_i64(product);
+  println("");
+}
+
+fn test_match() {
+  println("=== Match Expressions ===");
+  for i in 0..8 {
+    label: string = match i {
+      0 => "zero",
+      1 => "one",
+      2 => "two",
+      3 => "three",
+      4 => "four",
+      5 => "five",
+      _ => "many"
+    };
+    println(f"  {i} => {label}");
+  }
+
+  // Nested conditionals with match
+  for n in 0..6 {
+    category: string = match n % 3 {
+      0 => "fizz",
+      1 => "buzz",
+      _ => "other"
+    };
+    println(f"  {n} % 3 => {category}");
+  }
+  println("");
+}
+
+fn test_complex_control_flow() {
+  println("=== Complex Control Flow ===");
+
+  // Nested loops with break
+  count := 0;
+  for i in 0..10 {
+    for j in 0..10 {
+      if (i * j > 30) {
+        break;
+      }
+      count = count + 1;
+    }
+  }
+  print_string("  nested loop count: "); println_i64(count);
+
+  // While with multiple conditions
+  a := 1;
+  b := 1;
+  steps := 0;
+  while (a < 100 && b < 100) {
+    tmp := a + b;
+    a = b;
+    b = tmp;
+    steps = steps + 1;
+  }
+  print_string("  fib steps to 100: "); println_i64(steps);
+  print_string("  fib value: "); println_i64(b);
+
+  // Conditional chains
+  for x in 0..20 {
+    if (x % 15 == 0) {
+      println(f"  {x}: fizzbuzz");
+    } else {
+      if (x % 3 == 0) {
+        println(f"  {x}: fizz");
+      } else {
+        if (x % 5 == 0) {
+          println(f"  {x}: buzz");
+        }
+      }
+    }
+  }
+  println("");
+}
+
+// ============================================================================
+// Main: run all tests
+// ============================================================================
+
+fn main() -> i64 {
+  println("large.mog — comprehensive Mog benchmark");
+  println("=========================================");
+  println("");
+
+  test_math();
+  test_vec2();
+  test_arrays();
+  test_sorting();
+  test_statistics();
+  test_data_processing();
+  test_matrix();
+  test_strings();
+  test_number_theory();
+  test_closures();
+  test_match();
+  test_complex_control_flow();
+
+  println("=========================================");
+  println("all tests complete.");
+  return 0;
+}

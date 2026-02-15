@@ -792,6 +792,14 @@ class LLVMIRGenerator {
         if (!isPointerLike && statement.value?.type === "MapLiteral") {
           isPointerLike = true
         }
+        // Infer struct type from StructLiteral value
+        if (!isPointerLike && statement.value?.type === "StructLiteral") {
+          isPointerLike = true
+        }
+        // Infer array type from ArrayLiteral or ArrayFill value
+        if (!isPointerLike && (statement.value?.type === "ArrayLiteral" || statement.value?.type === "ArrayFill")) {
+          isPointerLike = true
+        }
         const allocaType = isPointerLike ? "ptr" : llvmType
         ir.push(`  ${reg} = alloca ${allocaType}`)
         if (isPointerLike && !statement.varType) {
@@ -898,9 +906,11 @@ class LLVMIRGenerator {
           this.blockTerminated = true
         } else {
           ir.push("  call void @gc_pop_frame()")
-          if (value) {
-            const returnType = this.currentFunction?.returnType || "i64"
+          const returnType = this.currentFunction?.returnType || "i64"
+          if (value && returnType !== "void") {
             ir.push(`  ret ${returnType} ${value}`)
+          } else if (returnType === "void") {
+            ir.push(`  ret void`)
           } else {
             ir.push(`  ret void`)
           }
@@ -982,6 +992,8 @@ class LLVMIRGenerator {
         }
         return `${intVal}`
       }
+      case "BooleanLiteral":
+        return expr.value ? "1" : "0"
       case "StringLiteral": {
         const name = this.generateStringLiteral(ir, expr.value)
         const ptrReg = `%${this.valueCounter++}`
@@ -1250,6 +1262,18 @@ class LLVMIRGenerator {
           const field = fields.find((f: any) => f.name === expr.property)
           if (field?.fieldType?.type === "FloatType") return field.fieldType.kind || "f64"
           if (field?.fieldType?.type === "PointerType") return "string"
+          if (field?.fieldType?.type === "StringType") return "string"
+        }
+        return "i64"
+      }
+      case "IndexExpression": {
+        // Check the element type of the array
+        if (expr.object?.type === "Identifier") {
+          const varType = this.variableTypes.get(expr.object.name)
+          if (varType?.type === "ArrayType") {
+            if (varType.elementType?.type === "StringType") return "string"
+            if (varType.elementType?.type === "FloatType") return varType.elementType.kind || "f64"
+          }
         }
         return "i64"
       }
@@ -1397,6 +1421,21 @@ class LLVMIRGenerator {
     const isFloat = this.isFloatOperand(expr.left) || this.isFloatOperand(expr.right)
 
     if (cmpMap[expr.operator]) {
+      // Handle string comparisons using string_eq runtime function
+      const isStringCmp = this.isStringType(expr.left) || this.isStringType(expr.right)
+      if (isStringCmp && (expr.operator === "==" || expr.operator === "=" || expr.operator === "!=")) {
+        const eqReg = `%${this.valueCounter++}`
+        ir.push(`  ${eqReg} = call i64 @string_eq(ptr ${left}, ptr ${right})`)
+        if (expr.operator === "!=") {
+          // string_eq returns 1 for equal, negate it
+          const negReg = `%${this.valueCounter++}`
+          ir.push(`  ${negReg} = icmp eq i64 ${eqReg}, 0`)
+          const extReg = `%${this.valueCounter++}`
+          ir.push(`  ${extReg} = zext i1 ${negReg} to i64`)
+          return extReg
+        }
+        return eqReg
+      }
       const [intOp, floatOp] = cmpMap[expr.operator]
       const floatType = isFloat ? this.getFloatTypeSize(expr) : "float"
       const cmpOp = isFloat ? `${floatOp} ${floatType} ${left}, ${right}` : `${intOp} ${left}, ${right}`
@@ -2001,8 +2040,12 @@ class LLVMIRGenerator {
         typedArgs = args
       }
 
-      const reg = `%${this.valueCounter++}`
       const returnType = funcInfo?.returnType || posixReturnTypes[funcName] || "i64"
+      if (returnType === "void") {
+        ir.push(`  call ${returnType} @${funcName}(${typedArgs.join(", ")})`)
+        return ""
+      }
+      const reg = `%${this.valueCounter++}`
       ir.push(`  ${reg} = call ${returnType} @${funcName}(${typedArgs.join(", ")})`)
       return reg
       } // end of else block for non-closure direct calls
@@ -2102,7 +2145,17 @@ class LLVMIRGenerator {
         switch (method) {
           case "push": {
             const valueReg = this.generateExpression(ir, callArgs[0])
-            ir.push(`  call void @array_push(ptr ${arrReg}, i64 ${valueReg})`)
+            // Check if the value is a float register — bitcast to i64 for array storage
+            const isFloatValue = this.isFloatProducingExpression(callArgs[0])
+            if (isFloatValue) {
+              // Value is a double register, bitcast to i64 for storage
+              const castReg = `%${this.valueCounter++}`
+              ir.push(`  ${castReg} = bitcast double ${valueReg} to i64`)
+              ir.push(`  call void @array_push(ptr ${arrReg}, i64 ${castReg})`)
+            } else {
+              // Value is already i64 (either integer or float bit pattern)
+              ir.push(`  call void @array_push(ptr ${arrReg}, i64 ${valueReg})`)
+            }
             return "0" // void return
           }
           case "pop": {
@@ -2564,6 +2617,43 @@ class LLVMIRGenerator {
 
   private isFloatProducingExpression(expr: any): boolean {
     if (!expr) return false
+    // IndexExpression on float arrays returns double directly from array_get_f64
+    if (expr.type === "IndexExpression" && expr.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.name)
+      if (varType?.type === "ArrayType" && varType.elementType?.type === "FloatType") return true
+    }
+    // Check resultType annotation from analyzer
+    if (expr.resultType?.type === "FloatType") return true
+    // Float literal: NumberLiteral with '.' in value
+    if (expr.type === "NumberLiteral" && typeof expr.value === "string" && expr.value.includes(".")) return true
+    // Cast to f64
+    if (expr.type === "CastExpression" && (expr.targetType === "f64" || expr.targetType?.name === "f64")) return true
+    // Binary expression where either operand is float-producing
+    if (expr.type === "BinaryExpression") {
+      if (this.isFloatProducingExpression(expr.left) || this.isFloatProducingExpression(expr.right)) return true
+    }
+    // Unary on float
+    if (expr.type === "UnaryExpression") {
+      if (this.isFloatProducingExpression(expr.operand)) return true
+    }
+    // Function call returning float
+    if (expr.type === "CallExpression" && expr.callee?.type === "Identifier") {
+      const retType = this.functionTypes.get(expr.callee.name)
+      if (retType?.type === "FloatType") return true
+    }
+    // Variable known to be float
+    if (expr.type === "Identifier") {
+      const vt = this.variableTypes.get(expr.name)
+      if (vt?.type === "FloatType") return true
+    }
+    // Member access on a struct with float field
+    if (expr.type === "MemberExpression" && expr.object?.type === "Identifier") {
+      const objType = this.variableTypes.get(expr.object.name)
+      if (objType?.type === "StructType" && objType.fields) {
+        const fieldType = objType.fields.get(expr.property)
+        if (fieldType?.type === "FloatType") return true
+      }
+    }
     // Tensor method calls that return double: .sum(), .mean()
     if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
       const method = expr.callee.property
@@ -2953,15 +3043,32 @@ class LLVMIRGenerator {
         // Lambda expressions now return closure pointers (ptr), not @name
         // Also detect named functions used as values (Identifier that resolves to a known function)
         const isNamedFuncRef = value?.type === "Identifier" && this.functions.has(value.name) && !this.variableTypes.has(value.name)
+        // Check types BEFORE closure detection to avoid misclassifying string/struct-returning functions
+        const isStringExpr = this.isStringProducingExpression(value)
+        const isStructLiteral = value?.type === "StructLiteral"
+        // Check if calling a function that returns a struct type
+        const isStructReturningCall = value?.type === "CallExpression" && value.callee?.type === "Identifier"
+          && (() => {
+            const retType = this.functionTypes.get(value.callee.name)
+            return retType?.type === "StructType" || retType?.type === "CustomType"
+          })()
+        // Check if calling a function that returns an array type
+        const isArrayReturningCall = value?.type === "CallExpression" && value.callee?.type === "Identifier"
+          && (() => {
+            const retType = this.functionTypes.get(value.callee.name)
+            return retType?.type === "ArrayType"
+          })()
         // Check if the value is a function call that returns ptr (e.g., make_adder(5) returning a closure)
+        // Exclude string-returning, struct-returning, and array-returning functions
         const isClosureCall = value?.type === "CallExpression" && value.callee?.type === "Identifier"
           && this.functions.get(value.callee.name)?.returnType === "ptr"
+          && !isStringExpr && !isStructLiteral && !isStructReturningCall && !isArrayReturningCall
         const isFuncPtr = valueReg.startsWith("@") || value?.type === "Lambda" || isNamedFuncRef || isClosureCall
-         const isStringExpr = this.isStringProducingExpression(value)
         const isTensorExpr = this.isTensorProducingExpression(value)
         const isFloatExpr = this.isFloatProducingExpression(value)
         const isMapExpr = value?.type === "MapLiteral"
-        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor || isTensorExpr || isMapExpr) ? "ptr" : isFloatExpr ? "double" : "i64"
+        const isArrayExpr = value?.type === "ArrayLiteral" || value?.type === "ArrayFill"
+        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor || isTensorExpr || isMapExpr || isStructLiteral || isStructReturningCall || isArrayReturningCall || isArrayExpr) ? "ptr" : isFloatExpr ? "double" : "i64"
         ir.push(`  %${name} = alloca ${allocaType}`)
         if (isTensorExpr) {
           // Register as TensorType for later method/operator dispatch
@@ -3017,12 +3124,54 @@ class LLVMIRGenerator {
          } else if (isMapExpr) {
           // Track as map type for later map operations
           this.variableTypes.set(name, { type: "MapType" } as any)
+        } else if (isStructLiteral) {
+          // Track as struct type for field access
+          const structName = value.name || value.structName
+          const structFields = this.structDefs.get(structName)
+          if (structFields) {
+            const fieldMap = new Map<string, any>()
+            for (const f of structFields) {
+              fieldMap.set(f.name, f.fieldType)
+            }
+            this.variableTypes.set(name, new StructType(structName, fieldMap))
+            this.structDefs.set(name, structFields)
+          } else {
+            this.variableTypes.set(name, { type: "StructType", name: structName } as any)
+          }
+        } else if (isStructReturningCall) {
+          // Track as struct type from function return type
+          const retType = this.functionTypes.get(value.callee.name)
+          if (retType?.type === "StructType" && retType.name) {
+            const structFields = this.structDefs.get(retType.name)
+            if (structFields) {
+              const fieldMap = new Map<string, any>()
+              for (const f of structFields) {
+                fieldMap.set(f.name, f.fieldType)
+              }
+              this.variableTypes.set(name, new StructType(retType.name, fieldMap))
+              this.structDefs.set(name, structFields)
+            } else {
+              this.variableTypes.set(name, retType)
+            }
+          } else {
+            this.variableTypes.set(name, retType || { type: "StructType" } as any)
+          }
+        } else if (isArrayReturningCall) {
+          // Track as array type from function return type
+          const retType = this.functionTypes.get(value.callee.name)
+          this.variableTypes.set(name, retType)
+        } else if (isArrayExpr) {
+          // Track as array type from ArrayLiteral or ArrayFill
+          this.variableTypes.set(name, new ArrayType(new IntegerType("i64"), []))
         } else if (isStringExpr) {
-          // Track as string type for later isStringType checks
-          this.variableTypes.set(name, new ArrayType(new UnsignedType("u8"), []))
+          // Track as string type for later string operations
+          this.variableTypes.set(name, { type: "StringType" } as any)
         } else if (isFloatExpr) {
           // Track as float type for proper load/store
           this.variableTypes.set(name, new FloatType("f64"))
+        } else {
+          // Default: track as integer type so reassignment doesn't re-alloca
+          this.variableTypes.set(name, new IntegerType("i64"))
         }
         varType = this.variableTypes.get(name)
       }
@@ -3103,15 +3252,17 @@ class LLVMIRGenerator {
     }
 
     // Allocate array with the specified count
-    const countReg = `%${this.valueCounter++}`
+    let countReg: string
     if (countValue !== null) {
+      countReg = `%${this.valueCounter++}`
       ir.push(`  ${countReg} = alloca [1 x i64]`)
       const countPtr = `%${this.valueCounter++}`
       ir.push(`  ${countPtr} = getelementptr [1 x i64], ptr ${countReg}, i64 0, i64 0`)
       ir.push(`  store i64 ${countValue}, ptr ${countPtr}`)
     } else {
-      // Runtime count
+      // Runtime count — generate expression FIRST to avoid register misordering
       const runtimeCount = this.generateExpression(ir, countExpr)
+      countReg = `%${this.valueCounter++}`
       ir.push(`  ${countReg} = alloca [1 x i64]`)
       const countPtr = `%${this.valueCounter++}`
       ir.push(`  ${countPtr} = getelementptr [1 x i64], ptr ${countReg}, i64 0, i64 0`)
@@ -3132,18 +3283,21 @@ class LLVMIRGenerator {
     const iReg = `%${this.valueCounter++}`
     ir.push(`  ${iReg} = alloca i64`)
     ir.push(`  store i64 0, ptr ${iReg}`)
+    ir.push(`  br label %${loopStartLabel}`)
 
     ir.push(`${loopStartLabel}:`)
     const currentI = `%${this.valueCounter++}`
     ir.push(`  ${currentI} = load i64, ptr ${iReg}`)
-    const cmpResult = `%${this.valueCounter++}`
     if (countValue !== null) {
-      ir.push(`  ${cmpResult} = icmp slt i64 ${currentI}, i64 ${countValue}`)
+      const cmpResult = `%${this.valueCounter++}`
+      ir.push(`  ${cmpResult} = icmp slt i64 ${currentI}, ${countValue}`)
+      ir.push(`  br i1 ${cmpResult}, label %${loopBodyLabel}, label %${loopEndLabel}`)
     } else {
       const runtimeCount = this.generateExpression(ir, countExpr)
-      ir.push(`  ${cmpResult} = icmp slt i64 ${currentI}, i64 ${runtimeCount}`)
+      const cmpResult = `%${this.valueCounter++}`
+      ir.push(`  ${cmpResult} = icmp slt i64 ${currentI}, ${runtimeCount}`)
+      ir.push(`  br i1 ${cmpResult}, label %${loopBodyLabel}, label %${loopEndLabel}`)
     }
-    ir.push(`  br i1 ${cmpResult}, label %${loopBodyLabel}, label %${loopEndLabel}`)
 
     ir.push(`${loopBodyLabel}:`)
 
@@ -3519,7 +3673,13 @@ class LLVMIRGenerator {
       ir.push(`  ; BOUNDS_CHECK_ELIDED: release mode optimization`)
     }
 
-    if (elementType?.type === "FloatType") {
+    if (elementType?.type === "StringType") {
+      // String arrays: array_get returns i64 (pointer stored as i64), convert to ptr
+      ir.push(`  ${reg} = call i64 @array_get(ptr ${arrayPtr}, i64 ${index})`)
+      const ptrReg = `%${this.valueCounter++}`
+      ir.push(`  ${ptrReg} = inttoptr i64 ${reg} to ptr`)
+      return ptrReg
+    } else if (elementType?.type === "FloatType") {
       if (elementType.kind === "f32") {
         const floatReg = `%${this.valueCounter++}`
         ir.push(`  ${floatReg} = call float @array_get_f32(ptr ${arrayPtr}, i64 ${index})`)
@@ -3530,10 +3690,8 @@ class LLVMIRGenerator {
       } else if (elementType.kind === "f64") {
         const doubleReg = `%${this.valueCounter++}`
         ir.push(`  ${doubleReg} = call double @array_get_f64(ptr ${arrayPtr}, i64 ${index})`)
-        // Convert double to i64 for language value representation
-        const convReg = `%${this.valueCounter++}`
-        ir.push(`  ${convReg} = fptoui double ${doubleReg} to i64`)
-        return convReg
+        // Return the double register directly — the value is semantically a float
+        return doubleReg
       } else {
         ir.push(`  ${reg} = call i64 @array_get(ptr ${arrayPtr}, i64 ${index})`)
       }
@@ -3592,7 +3750,7 @@ class LLVMIRGenerator {
 
   private isStringProducingExpression(expr: any): boolean {
     if (!expr) return false
-    // str() conversion
+    // str() conversion and string-returning functions
     if (expr.type === "CallExpression" && expr.callee?.type === "Identifier") {
       const name = expr.callee.name
       if (name === "str" || name === "string_concat" || name === "string_upper" || 
@@ -3601,6 +3759,9 @@ class LLVMIRGenerator {
           name === "i64_to_string" || name === "u64_to_string" || name === "f64_to_string") {
         return true
       }
+      // Check user-defined functions that return string type
+      const funcRetType = this.functionTypes.get(name)
+      if (funcRetType?.type === "StringType" || funcRetType?.type === "PointerType") return true
     }
     // String method calls (e.g., s.upper(), s.trim())
     if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
@@ -3612,6 +3773,16 @@ class LLVMIRGenerator {
     // String literals and template literals
     if (expr.type === "StringLiteral" || expr.type === "TemplateLiteral") {
       return true
+    }
+    // IndexExpression on string arrays (e.g., parts[0] where parts: string[])
+    if (expr.type === "IndexExpression" && expr.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.name)
+      if (varType?.type === "ArrayType" && varType.elementType?.type === "StringType") return true
+    }
+    // Identifier that is a string variable
+    if (expr.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "StringType") return true
     }
     return false
   }
@@ -3745,8 +3916,9 @@ class LLVMIRGenerator {
 
     const sourceIsInt = sourceType.startsWith("i") || sourceType === "ptr"
     const targetIsInt = targetType.startsWith("i") || targetType === "ptr"
-    const sourceIsFloat = sourceType.startsWith("f")
-    const targetIsFloat = targetType.startsWith("f")
+    const floatTypes = new Set(["half", "float", "double", "fp128"])
+    const sourceIsFloat = floatTypes.has(sourceType)
+    const targetIsFloat = floatTypes.has(targetType)
 
     if (sourceType === "ptr" && targetIsInt) {
       ir.push(`  ${reg} = ptrtoint ptr ${value} to ${targetType}`)
@@ -3903,7 +4075,14 @@ class LLVMIRGenerator {
       ir.push(`  call void @exit(i32 99)`)
       ir.push(`  unreachable`)
     } else {
-      ir.push(`  ret i64 -99`)
+      const retType = this.currentFunction?.returnType || "i64"
+      if (retType === "double") {
+        ir.push(`  ret double -9.9e1`)
+      } else if (retType === "ptr") {
+        ir.push(`  ret ptr null`)
+      } else {
+        ir.push(`  ret i64 -99`)
+      }
     }
     ir.push("")
 
@@ -4013,14 +4192,31 @@ class LLVMIRGenerator {
 
     // Generate array and get its length
     const arrayPtr = this.generateExpression(ir, array)
-    const indexReg = `%${variable}_idx`
+
+    // Determine element type from array type info
+    const elemType = this.getArrayElementType(array)
+    const isFloatElem = elemType?.type === "FloatType"
+    const allocaType = isFloatElem ? "double" : "i64"
+
+    // Use unique names for the index register to avoid conflicts with multiple loops
+    const loopId = this.valueCounter++
+    const indexReg = `%${variable}_idx_${loopId}`
     const valueReg = `%${variable}`
 
-    // Allocate index variable and loop variable
+    // Allocate index variable (always unique per loop)
     ir.push(`  ${indexReg} = alloca i64`)
     ir.push(`  store i64 0, ptr ${indexReg}`)
-    ir.push(`  ${valueReg} = alloca i64`)
-    this.variableTypes.set(variable, { type: "IntegerType", kind: "i64" })
+
+    // Only allocate loop variable if not already declared in this function
+    const existingVarType = this.variableTypes.get(variable)
+    if (!existingVarType) {
+      ir.push(`  ${valueReg} = alloca ${allocaType}`)
+    }
+    if (isFloatElem) {
+      this.variableTypes.set(variable, new FloatType("f64"))
+    } else {
+      this.variableTypes.set(variable, { type: "IntegerType", kind: "i64" })
+    }
 
     // Get array length
     const lengthReg = `%${this.valueCounter++}`
@@ -4042,7 +4238,14 @@ class LLVMIRGenerator {
     ir.push(`${bodyLabel}:`)
     const elemValue = `%${this.valueCounter++}`
     ir.push(`  ${elemValue} = call i64 @array_get(ptr ${arrayPtr}, i64 ${currentIndex})`)
-    ir.push(`  store i64 ${elemValue}, ptr ${valueReg}`)
+    if (isFloatElem) {
+      // Bitcast i64 to double for f64 array elements
+      const floatVal = `%${this.valueCounter++}`
+      ir.push(`  ${floatVal} = bitcast i64 ${elemValue} to double`)
+      ir.push(`  store double ${floatVal}, ptr ${valueReg}`)
+    } else {
+      ir.push(`  store i64 ${elemValue}, ptr ${valueReg}`)
+    }
     this.generateStatement(ir, body)
     ir.push(`  br label %${incLabel}`)
     ir.push("")
@@ -4080,7 +4283,10 @@ class LLVMIRGenerator {
     const { variable, start, end, body } = statement
 
     const reg = `%${variable}`
-    ir.push(`  ${reg} = alloca i64`)
+    // Only allocate if not already declared in this function
+    if (!this.variableTypes.has(variable)) {
+      ir.push(`  ${reg} = alloca i64`)
+    }
     this.variableTypes.set(variable, { type: "IntegerType", kind: "i64" })
     const startValue = this.generateExpression(ir, start)
     ir.push(`  store i64 ${startValue}, ptr ${reg}`)
@@ -4139,10 +4345,14 @@ class LLVMIRGenerator {
     const indexReg = `%${indexVariable}`
     const valueReg = `%${valueVariable}`
 
-    // Allocate index variable and value variable
-    ir.push(`  ${indexReg} = alloca i64`)
+    // Allocate index variable and value variable (only if not already declared)
+    if (!this.variableTypes.has(indexVariable)) {
+      ir.push(`  ${indexReg} = alloca i64`)
+    }
     ir.push(`  store i64 0, ptr ${indexReg}`)
-    ir.push(`  ${valueReg} = alloca i64`)
+    if (!this.variableTypes.has(valueVariable)) {
+      ir.push(`  ${valueReg} = alloca i64`)
+    }
     this.variableTypes.set(indexVariable, { type: "IntegerType", kind: "i64" })
     this.variableTypes.set(valueVariable, { type: "IntegerType", kind: "i64" })
 
@@ -4575,12 +4785,27 @@ class LLVMIRGenerator {
   private generateMatchExpression(ir: string[], expr: any): string {
     const subjectValue = this.generateExpression(ir, expr.subject)
 
+    // Determine match result type by inspecting arm bodies
+    // Default to i64, use ptr for string-producing arms, double for float-producing arms
+    const arms = expr.arms as any[]
+    let matchResultType: string = "i64"
+    for (const arm of arms) {
+      const bodyExpr = arm.body
+      if (bodyExpr?.type === "StringLiteral" || bodyExpr?.resultType?.type === "StringType") {
+        matchResultType = "ptr"
+        break
+      }
+      if (this.isFloatProducingExpression(bodyExpr)) {
+        matchResultType = "double"
+        break
+      }
+    }
+
     // Allocate result
     const resultReg = `%match_result_${this.valueCounter++}`
-    ir.push(`  ${resultReg} = alloca i64`)
+    ir.push(`  ${resultReg} = alloca ${matchResultType}`)
 
     const endLabel = this.nextLabel()
-    const arms = expr.arms as any[]
 
     for (let i = 0; i < arms.length; i++) {
       const arm = arms[i]
@@ -4589,7 +4814,7 @@ class LLVMIRGenerator {
       if (arm.pattern.type === "WildcardPattern") {
         // Wildcard always matches - generate arm body and jump to end
         const armValue = this.generateExpression(ir, arm.body)
-        ir.push(`  store i64 ${armValue}, ptr ${resultReg}`)
+        ir.push(`  store ${matchResultType} ${armValue}, ptr ${resultReg}`)
         ir.push(`  br label %${endLabel}`)
         ir.push("")
         break
@@ -4602,7 +4827,12 @@ class LLVMIRGenerator {
         // Generate the pattern value
         const patternValue = this.generateExpression(ir, arm.pattern.value)
         const cmpResult = `%${this.valueCounter++}`
-        ir.push(`  ${cmpResult} = icmp eq i64 ${subjectValue}, ${patternValue}`)
+        // Use fcmp for float subjects, icmp for integers
+        if (this.isFloatProducingExpression(expr.subject)) {
+          ir.push(`  ${cmpResult} = fcmp oeq double ${subjectValue}, ${patternValue}`)
+        } else {
+          ir.push(`  ${cmpResult} = icmp eq i64 ${subjectValue}, ${patternValue}`)
+        }
         ir.push(`  br i1 ${cmpResult}, label %${matchBodyLabel}, label %${nextArmLabel}`)
         ir.push("")
       } else if (arm.pattern.type === "VariantPattern") {
@@ -4668,7 +4898,7 @@ class LLVMIRGenerator {
         }
 
         const armValue = this.generateExpression(ir, arm.body)
-        ir.push(`  store i64 ${armValue}, ptr ${resultReg}`)
+        ir.push(`  store ${matchResultType} ${armValue}, ptr ${resultReg}`)
         ir.push(`  br label %${endLabel}`)
         ir.push("")
 
@@ -4681,7 +4911,7 @@ class LLVMIRGenerator {
       // Arm body
       ir.push(`${matchBodyLabel}:`)
       const armValue = this.generateExpression(ir, arm.body)
-      ir.push(`  store i64 ${armValue}, ptr ${resultReg}`)
+      ir.push(`  store ${matchResultType} ${armValue}, ptr ${resultReg}`)
       ir.push(`  br label %${endLabel}`)
       ir.push("")
 
@@ -4693,7 +4923,7 @@ class LLVMIRGenerator {
 
     ir.push(`${endLabel}:`)
     const result = `%${this.valueCounter++}`
-    ir.push(`  ${result} = load i64, ptr ${resultReg}`)
+    ir.push(`  ${result} = load ${matchResultType}, ptr ${resultReg}`)
     return result
   }
 
@@ -4747,6 +4977,9 @@ class LLVMIRGenerator {
     this.functionTypes.set(name, returnType)
     this.currentFunction = func
 
+    // Save and reset per-function variable types to prevent leaking across functions
+    const savedVariableTypes = new Map(this.variableTypes)
+
     const paramStr = llvmParams.map((p: LLVMValue) => `${p.type} %${p.name}`).join(", ")
 
     // Determine function attributes based on optimization settings
@@ -4791,16 +5024,19 @@ class LLVMIRGenerator {
 
     if (!hasReturn) {
       ir.push("  call void @gc_pop_frame()")
-      if (returnType !== "void") {
+      if (llvmReturnType !== "void") {
         ir.push(`  ret ${llvmReturnType} 0`)
       } else {
         ir.push("  ret void")
       }
     }
 
+
     ir.push("}")
     ir.push("")
 
+    // Restore variable types from outer scope
+    this.variableTypes = savedVariableTypes
     this.currentFunction = null
   }
 
@@ -5332,6 +5568,12 @@ private getIntBits(type: LLVMType): number {
       }
     }
 
+    // Check if it's an IndexExpression on a float array (e.g., values[i] where values: f64[])
+    if (expr.type === "IndexExpression" && expr.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.name)
+      if (varType?.type === "ArrayType" && varType.elementType?.type === "FloatType") return true
+    }
+
     // For unary expressions, check the operand recursively
     if (expr.type === "UnaryExpression") {
       const arg = expr.argument || expr.operand
@@ -5343,7 +5585,7 @@ private getIntBits(type: LLVMType): number {
       return this.isFloatOperand(expr.left) || this.isFloatOperand(expr.right)
     }
 
-    // Check if it's a call to a math builtin that returns double
+    // Check if it's a call to a function that returns a float type
     if (expr.type === "CallExpression") {
       const callee = expr.callee?.name || expr.function?.name
       const mathBuiltins = new Set([
@@ -5352,6 +5594,13 @@ private getIntBits(type: LLVMType): number {
         "pow", "atan2", "min", "max",
       ])
       if (callee && mathBuiltins.has(callee)) return true
+      // Check user-defined functions that return float types
+      if (callee) {
+        const func = this.functions.get(callee)
+        if (func && (func.returnType === "double" || func.returnType === "float" || func.returnType === "half" || func.returnType === "fp128")) {
+          return true
+        }
+      }
     }
 
     return false
@@ -5387,6 +5636,14 @@ private getIntBits(type: LLVMType): number {
       const varType = this.variableTypes.get(expr.name)
       if (varType?.type === "FloatType") {
         return floatKindToLLVM(varType.kind)
+      }
+    }
+
+    // Check if it's an IndexExpression on a float array (e.g., values[i] where values: f64[])
+    if (expr.type === "IndexExpression" && expr.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.name)
+      if (varType?.type === "ArrayType" && varType.elementType?.type === "FloatType") {
+        return floatKindToLLVM(varType.elementType.kind)
       }
     }
 

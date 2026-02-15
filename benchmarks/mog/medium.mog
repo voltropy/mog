@@ -1,0 +1,126 @@
+// medium.mog — structs, arrays, closures, match, loops, string formatting
+
+struct Point {
+  x: i64;
+  y: i64;
+}
+
+fn new_point(x: i64, y: i64) -> Point {
+  return Point { x: x, y: y };
+}
+
+fn distance_sq(a: Point, b: Point) -> i64 {
+  dx := a.x - b.x;
+  dy := a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+fn build_squares(n: i64) -> i64[] {
+  result := [0; n];
+  for i in 0..n {
+    result[i] = i * i;
+  }
+  return result;
+}
+
+fn filter_even(nums: i64[]) -> i64[] {
+  result := [0; 0];
+  for v in nums {
+    if (v % 2 == 0) {
+      result.push(v);
+    }
+  }
+  return result;
+}
+
+fn sum_slice(nums: i64[]) -> i64 {
+  total := 0;
+  for v in nums {
+    total = total + v;
+  }
+  return total;
+}
+
+fn bubble_sort(nums: i64[]) -> i64[] {
+  n := nums.len as i64;
+  sorted := [0; n];
+  for i in 0..n {
+    sorted[i] = nums[i];
+  }
+  for i in 0..n {
+    for j in 0..n - i - 1 {
+      if (sorted[j] > sorted[j + 1]) {
+        tmp := sorted[j];
+        sorted[j] = sorted[j + 1];
+        sorted[j + 1] = tmp;
+      }
+    }
+  }
+  return sorted;
+}
+
+fn classify(n: i64) -> string {
+  result: string = match n {
+    0 => "zero",
+    1 => "one",
+    2 => "two",
+    3 => "three",
+    _ => "other"
+  };
+  return result;
+}
+
+fn make_adder(x: i64) -> fn(i64) -> i64 {
+  return fn(y: i64) -> i64 { x + y };
+}
+
+fn apply(f: fn(i64) -> i64, val: i64) -> i64 {
+  return f(val);
+}
+
+fn format_point(p: Point) -> string {
+  return f"({p.x}, {p.y})";
+}
+
+fn main() -> i64 {
+  // Point and distance
+  p1 := new_point(3, 4);
+  p2 := new_point(0, 0);
+  println(format_point(p1));
+  println(format_point(p2));
+  print_string("distance_sq: ");
+  println_i64(distance_sq(p1, p2));
+
+  // Array operations
+  nums := build_squares(20);
+  evens := filter_even(nums);
+  print_string("sum of squares: ");
+  println_i64(sum_slice(nums));
+  print_string("sum of even squares: ");
+  println_i64(sum_slice(evens));
+
+  // Bubble sort
+  unsorted: i64[] = [64, 34, 25, 12, 22, 11, 90];
+  sorted := bubble_sort(unsorted);
+  print_string("sorted: ");
+  for i in 0..sorted.len {
+    print_string(f"{sorted[i]} ");
+  }
+  println("");
+
+  // Match / classify
+  test_vals: i64[] = [0, 1, 2, 3, 42];
+  for v in test_vals {
+    println(f"{v} is {classify(v)}");
+  }
+
+  // Closures
+  add5 := make_adder(5);
+  add10 := make_adder(10);
+  print_string("add5(3): ");
+  println_i64(apply(add5, 3));
+  print_string("add10(7): ");
+  println_i64(apply(add10, 7));
+
+  return 0;
+}
