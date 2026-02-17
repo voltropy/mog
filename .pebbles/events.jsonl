@@ -1,0 +1,102 @@
+{"type":"create","timestamp":"2026-02-16T23:46:03.844957Z","issue_id":"qbe-d95","payload":{"description":"QBECodeGen class with state vars, emit helpers, string escaping, register/label counters, toQBEType mapping. Write initial qbe_codegen.ts with the class shell and utility methods. Test: verify class can be instantiated and toQBEType maps correctly.","priority":"1","title":"Core infrastructure \u0026 class skeleton","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:03.867717Z","issue_id":"qbe-da5","payload":{"description":"String constant collection (collectStringConstants), QBE data section generation (data $str.N = { b \"...\", b 0 }), string dedup via stringNameMap, UTF-8 escaping for QBE format. Test: generate QBE data for various string literals.","priority":"1","title":"String constants \u0026 data section","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:03.885272Z","issue_id":"qbe-ec4","payload":{"description":"NumberLiteral (int + float hex), BooleanLiteral, StringLiteral (reference to data section), Identifier (load from alloc). Test: verify correct QBE IL for each literal type.","priority":"1","title":"Literal expressions","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:03.903196Z","issue_id":"qbe-394","payload":{"description":"Arithmetic (+,-,*,/,%), comparison (==,!=,\u003c,\u003e,\u003c=,\u003e=), logical (\u0026\u0026,||), bitwise (\u0026,|,^,\u003c\u003c,\u003e\u003e), unary (-,!,~). Handle int vs float dispatch. String equality via string_eq. Test: verify QBE IL for arithmetic, comparisons, logical ops.","priority":"1","title":"Binary \u0026 unary expressions","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:03.921527Z","issue_id":"qbe-38e","payload":{"description":"Direct function calls, print/println dispatch, math builtins (sqrt,sin,cos etc), type conversion (str, int_from_string, f64_to_string). Test: verify call instruction generation.","priority":"1","title":"Simple call expressions","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:03.94417Z","issue_id":"qbe-3ae","payload":{"description":"VariableDeclaration with alloc+store, AssignmentExpression for new bindings (:=) and reassignment (=), type inference for the alloc. Index target assignment (array[i]=v, map[k]=v). Member target assignment (struct.field=v). Test: verify alloc/store/load patterns.","priority":"1","title":"Variable declarations \u0026 assignments","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:03.96341Z","issue_id":"qbe-e91","payload":{"description":"Conditional (if/else), WhileLoop, ForLoop, ForInRange, ForEachLoop, ForInIndex, ForInMap, Break, Continue, Block. Include loop stack management and interrupt checks at back-edges. Test: verify branch/jump patterns for each loop type.","priority":"1","title":"Control flow statements","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:03.98172Z","issue_id":"qbe-329","payload":{"description":"Sync FunctionDeclaration with params, return type, gc_push_frame/gc_pop_frame. Async stub (just normal function that calls mog_future_new etc). ReturnStatement. Function attribute detection. Test: verify function definition QBE IL.","priority":"1","title":"Function declarations","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.000025Z","issue_id":"qbe-879","payload":{"description":"ArrayLiteral (array_alloc + array_set loop), ArrayFill ([val; count] with loop), MapLiteral (map_new + map_set). Test: verify data structure construction IL.","priority":"1","title":"Array \u0026 map literals","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.020673Z","issue_id":"qbe-f78","payload":{"description":"StructDeclaration (register in structDefs), StructLiteral (gc_alloc + store fields at 8-byte offsets), MemberExpression for struct field access (add offset + load), SoAConstructor. Test: verify struct allocation and field access.","priority":"1","title":"Struct declarations \u0026 literals","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.039065Z","issue_id":"qbe-b0e","payload":{"description":"MemberExpression (string.len, array.len, struct fields, SoA transposed, package-qualified, map fallback). IndexExpression (array, map, string, nested, pointer). SliceExpression. Test: verify access patterns.","priority":"2","title":"Member \u0026 index expressions","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.059099Z","issue_id":"qbe-896","payload":{"description":"Lambda lifting to top-level function, env struct allocation via gc_alloc_closure, captured variable storage/loading at 8-byte offsets, closure fat pointer (fn_ptr + env_ptr), indirect calls through closure. Function wrappers for named functions used as values. Test: verify closure creation and invocation.","priority":"2","title":"Closures \u0026 lambdas","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.078924Z","issue_id":"qbe-dc2","payload":{"description":"TemplateLiteral with string parts and expression interpolation, type-based conversion (i64_to_string, f64_to_string), string_concat chaining. Test: verify f-string IL generation.","priority":"2","title":"Template literals \u0026 f-strings","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.098309Z","issue_id":"qbe-b1b","payload":{"description":"MatchExpression with LiteralPattern, WildcardPattern, VariantPattern (ok/err/some/none). Result/Optional type patterns with runtime calls. Test: verify match dispatch IL.","priority":"2","title":"Match expressions","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.119738Z","issue_id":"qbe-765","payload":{"description":"Ok, Err, Some, None expressions, PropagateExpression (?), IsSome/IsNone/IsOk/IsErr checks with optional binding. TryCatch. Test: verify tagged union operation IL.","priority":"2","title":"Result/Optional types","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.139492Z","issue_id":"qbe-d89","payload":{"description":"MogValue construction on stack, mog_cap_call_out invocation with explicit output pointer, capability declaration emission, async capability detection from .mogdecl. Test: verify capability call IL.","priority":"2","title":"Capability calls (Host FFI)","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.159441Z","issue_id":"qbe-945","payload":{"description":"TensorConstruction, tensor method calls (.sum, .mean, .reshape etc), tensor binary ops, dtype mapping. Test: verify tensor-related call generation.","priority":"3","title":"Tensor operations","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.17989Z","issue_id":"qbe-1ff","payload":{"description":"generate() method: collect functions, detect async, emit string data, generate function IR, emit main() with gc_init/gc_push_frame. Handle async main with event loop. Handle CLI args. Test: verify complete program IL generation.","priority":"1","title":"Main entry point generation","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.201168Z","issue_id":"qbe-2c8","payload":{"description":"generateModuleQBEIR for multi-package, package prefix name mangling, import handling, pub declarations. Test: verify cross-module call generation.","priority":"2","title":"Module support","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.223522Z","issue_id":"qbe-398","payload":{"description":"Element-wise array operations (vectorized loops), matrix multiply/add via runtime calls, dot product. Test: verify vector operation loop generation.","priority":"3","title":"Vector/matrix operations","type":"task"}}
+{"type":"create","timestamp":"2026-02-16T23:46:04.246279Z","issue_id":"qbe-8da","payload":{"description":"Run existing Mog test suite through QBE backend. Compare outputs with LLVM backend. Fix any discrepancies. Build showcase.mog with QBE.","priority":"1","title":"Integration test suite","type":"task"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.705668Z","issue_id":"qbe-ec4","payload":{"dep_type":"blocks","depends_on":"qbe-d95"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.733094Z","issue_id":"qbe-394","payload":{"dep_type":"blocks","depends_on":"qbe-d95"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.755008Z","issue_id":"qbe-38e","payload":{"dep_type":"blocks","depends_on":"qbe-d95"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.779234Z","issue_id":"qbe-da5","payload":{"dep_type":"blocks","depends_on":"qbe-d95"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.801117Z","issue_id":"qbe-ec4","payload":{"dep_type":"blocks","depends_on":"qbe-da5"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.823576Z","issue_id":"qbe-3ae","payload":{"dep_type":"blocks","depends_on":"qbe-ec4"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.846776Z","issue_id":"qbe-3ae","payload":{"dep_type":"blocks","depends_on":"qbe-394"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.869931Z","issue_id":"qbe-e91","payload":{"dep_type":"blocks","depends_on":"qbe-ec4"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.895415Z","issue_id":"qbe-e91","payload":{"dep_type":"blocks","depends_on":"qbe-394"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.918974Z","issue_id":"qbe-329","payload":{"dep_type":"blocks","depends_on":"qbe-ec4"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.944536Z","issue_id":"qbe-329","payload":{"dep_type":"blocks","depends_on":"qbe-3ae"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.969911Z","issue_id":"qbe-879","payload":{"dep_type":"blocks","depends_on":"qbe-ec4"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:28.992672Z","issue_id":"qbe-879","payload":{"dep_type":"blocks","depends_on":"qbe-3ae"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.016593Z","issue_id":"qbe-f78","payload":{"dep_type":"blocks","depends_on":"qbe-3ae"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.042163Z","issue_id":"qbe-f78","payload":{"dep_type":"blocks","depends_on":"qbe-ec4"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.067145Z","issue_id":"qbe-b0e","payload":{"dep_type":"blocks","depends_on":"qbe-f78"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.09678Z","issue_id":"qbe-b0e","payload":{"dep_type":"blocks","depends_on":"qbe-879"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.122584Z","issue_id":"qbe-896","payload":{"dep_type":"blocks","depends_on":"qbe-329"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.147915Z","issue_id":"qbe-896","payload":{"dep_type":"blocks","depends_on":"qbe-3ae"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.173972Z","issue_id":"qbe-dc2","payload":{"dep_type":"blocks","depends_on":"qbe-da5"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.198846Z","issue_id":"qbe-dc2","payload":{"dep_type":"blocks","depends_on":"qbe-38e"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.224175Z","issue_id":"qbe-b1b","payload":{"dep_type":"blocks","depends_on":"qbe-e91"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.265274Z","issue_id":"qbe-b1b","payload":{"dep_type":"blocks","depends_on":"qbe-ec4"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.324878Z","issue_id":"qbe-765","payload":{"dep_type":"blocks","depends_on":"qbe-38e"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.39938Z","issue_id":"qbe-765","payload":{"dep_type":"blocks","depends_on":"qbe-e91"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.444713Z","issue_id":"qbe-d89","payload":{"dep_type":"blocks","depends_on":"qbe-38e"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.479344Z","issue_id":"qbe-d89","payload":{"dep_type":"blocks","depends_on":"qbe-f78"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.506361Z","issue_id":"qbe-945","payload":{"dep_type":"blocks","depends_on":"qbe-38e"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.545224Z","issue_id":"qbe-945","payload":{"dep_type":"blocks","depends_on":"qbe-879"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.586469Z","issue_id":"qbe-1ff","payload":{"dep_type":"blocks","depends_on":"qbe-329"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.631494Z","issue_id":"qbe-1ff","payload":{"dep_type":"blocks","depends_on":"qbe-e91"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.67746Z","issue_id":"qbe-1ff","payload":{"dep_type":"blocks","depends_on":"qbe-3ae"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.722724Z","issue_id":"qbe-2c8","payload":{"dep_type":"blocks","depends_on":"qbe-1ff"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.7836Z","issue_id":"qbe-398","payload":{"dep_type":"blocks","depends_on":"qbe-879"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.850824Z","issue_id":"qbe-8da","payload":{"dep_type":"blocks","depends_on":"qbe-1ff"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.884978Z","issue_id":"qbe-8da","payload":{"dep_type":"blocks","depends_on":"qbe-2c8"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.916421Z","issue_id":"qbe-8da","payload":{"dep_type":"blocks","depends_on":"qbe-765"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.944632Z","issue_id":"qbe-8da","payload":{"dep_type":"blocks","depends_on":"qbe-d89"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:29.979554Z","issue_id":"qbe-8da","payload":{"dep_type":"blocks","depends_on":"qbe-896"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:30.009164Z","issue_id":"qbe-8da","payload":{"dep_type":"blocks","depends_on":"qbe-b1b"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:30.039981Z","issue_id":"qbe-8da","payload":{"dep_type":"blocks","depends_on":"qbe-dc2"}}
+{"type":"dep_add","timestamp":"2026-02-16T23:46:30.070297Z","issue_id":"qbe-8da","payload":{"dep_type":"blocks","depends_on":"qbe-b0e"}}
+{"type":"status_update","timestamp":"2026-02-16T23:47:00.756341Z","issue_id":"qbe-d95","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-16T23:52:25.501767Z","issue_id":"qbe-d95","payload":{}}
+{"type":"status_update","timestamp":"2026-02-16T23:52:53.80272Z","issue_id":"qbe-da5","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-16T23:52:53.835376Z","issue_id":"qbe-394","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-16T23:52:53.867871Z","issue_id":"qbe-38e","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-16T23:53:11.484395Z","issue_id":"qbe-da5","payload":{}}
+{"type":"close","timestamp":"2026-02-16T23:59:09.221777Z","issue_id":"qbe-394","payload":{}}
+{"type":"close","timestamp":"2026-02-16T23:59:09.25414Z","issue_id":"qbe-38e","payload":{}}
+{"type":"status_update","timestamp":"2026-02-16T23:59:22.448975Z","issue_id":"qbe-ec4","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-16T23:59:22.485532Z","issue_id":"qbe-dc2","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-17T00:05:49.216005Z","issue_id":"qbe-ec4","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:05:49.25315Z","issue_id":"qbe-dc2","payload":{}}
+{"type":"status_update","timestamp":"2026-02-17T00:06:01.696179Z","issue_id":"qbe-3ae","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-17T00:06:01.737584Z","issue_id":"qbe-e91","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-17T00:21:19.614206Z","issue_id":"qbe-3ae","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:21:19.656068Z","issue_id":"qbe-e91","payload":{}}
+{"type":"status_update","timestamp":"2026-02-17T00:21:32.608959Z","issue_id":"qbe-329","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-17T00:21:32.64798Z","issue_id":"qbe-879","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-17T00:21:32.684217Z","issue_id":"qbe-f78","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-17T00:21:32.724011Z","issue_id":"qbe-b1b","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-17T00:21:32.759816Z","issue_id":"qbe-765","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-17T00:32:12.874962Z","issue_id":"qbe-329","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:32:12.912058Z","issue_id":"qbe-879","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:32:12.947978Z","issue_id":"qbe-f78","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:32:12.987308Z","issue_id":"qbe-b1b","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:32:13.02194Z","issue_id":"qbe-765","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:32:41.798958Z","issue_id":"qbe-896","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:32:41.840922Z","issue_id":"qbe-b0e","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:32:41.877949Z","issue_id":"qbe-d89","payload":{}}
+{"type":"status_update","timestamp":"2026-02-17T00:32:57.007402Z","issue_id":"qbe-1ff","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-17T00:32:57.049814Z","issue_id":"qbe-398","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-02-17T00:32:57.090279Z","issue_id":"qbe-945","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-17T00:40:26.918222Z","issue_id":"qbe-1ff","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:40:26.961245Z","issue_id":"qbe-398","payload":{}}
+{"type":"close","timestamp":"2026-02-17T00:40:27.020613Z","issue_id":"qbe-945","payload":{}}
+{"type":"status_update","timestamp":"2026-02-17T00:40:39.338988Z","issue_id":"qbe-2c8","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-17T00:47:09.730363Z","issue_id":"qbe-2c8","payload":{}}
+{"type":"status_update","timestamp":"2026-02-17T00:47:23.592896Z","issue_id":"qbe-8da","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-02-17T00:59:57.090306Z","issue_id":"qbe-8da","payload":{}}

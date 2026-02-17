@@ -29,6 +29,7 @@ if (!existsSync(BUILD_DIR)) mkdirSync(BUILD_DIR, { recursive: true });
 
 interface TimingResult {
   label: string;
+  lines: number;
   mean_ms: number;
   median_ms: number;
   min_ms: number;
@@ -37,7 +38,7 @@ interface TimingResult {
   samples: number[];
 }
 
-function stats(label: string, samples: number[]): TimingResult {
+function stats(label: string, samples: number[], lines: number = 0): TimingResult {
   const sorted = [...samples].sort((a, b) => a - b);
   const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
   const median = sorted[Math.floor(sorted.length / 2)];
@@ -45,7 +46,7 @@ function stats(label: string, samples: number[]): TimingResult {
   const max = sorted[sorted.length - 1];
   const variance = samples.reduce((s, x) => s + (x - mean) ** 2, 0) / samples.length;
   const stddev = Math.sqrt(variance);
-  return { label, mean_ms: mean, median_ms: median, min_ms: min, max_ms: max, stddev_ms: stddev, samples };
+  return { label, lines, mean_ms: mean, median_ms: median, min_ms: min, max_ms: max, stddev_ms: stddev, samples };
 }
 
 function timeShell(cmd: string, cwd?: string): number {
@@ -67,7 +68,7 @@ function benchmark(label: string, fn: () => void): TimingResult {
   return stats(label, samples);
 }
 
-function benchmarkShell(label: string, cmd: string, cwd?: string): TimingResult {
+function benchmarkShell(label: string, cmd: string, lines: number = 0, cwd?: string): TimingResult {
   // Warmup
   for (let i = 0; i < WARMUP; i++) timeShell(cmd, cwd);
   // Measure
@@ -75,7 +76,7 @@ function benchmarkShell(label: string, cmd: string, cwd?: string): TimingResult 
   for (let i = 0; i < ITERATIONS; i++) {
     samples.push(timeShell(cmd, cwd));
   }
-  return stats(label, samples);
+  return stats(label, samples, lines);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +132,7 @@ function mogFrontend(source: string): { timings: MogPhaseTimings; llvmIR: string
 // Benchmark: Mog phases
 // ---------------------------------------------------------------------------
 
-function benchmarkMogPhases(size: string, source: string) {
+function benchmarkMogPhases(size: string, source: string, lines: number) {
   const results: TimingResult[] = [];
 
   // Warmup
@@ -153,11 +154,11 @@ function benchmarkMogPhases(size: string, source: string) {
     totalSamples.push(timings.total_frontend_ms);
   }
 
-  results.push(stats(`mog/${size}/lex`, lexSamples));
-  results.push(stats(`mog/${size}/parse`, parseSamples));
-  results.push(stats(`mog/${size}/analyze`, analyzeSamples));
-  results.push(stats(`mog/${size}/codegen_ir`, codegenSamples));
-  results.push(stats(`mog/${size}/frontend_total`, totalSamples));
+  results.push(stats(`mog/${size}/lex`, lexSamples, lines));
+  results.push(stats(`mog/${size}/parse`, parseSamples, lines));
+  results.push(stats(`mog/${size}/analyze`, analyzeSamples, lines));
+  results.push(stats(`mog/${size}/codegen_ir`, codegenSamples, lines));
+  results.push(stats(`mog/${size}/frontend_total`, totalSamples, lines));
 
   return results;
 }
@@ -166,7 +167,7 @@ function benchmarkMogPhases(size: string, source: string) {
 // Benchmark: Mog LLVM backend (clang on IR at different opt levels)
 // ---------------------------------------------------------------------------
 
-function benchmarkMogBackend(size: string, llvmIR: string) {
+function benchmarkMogBackend(size: string, llvmIR: string, lines: number) {
   const irPath = `${BUILD_DIR}/bench_${size}.ll`;
   writeFileSync(irPath, llvmIR);
   const results: TimingResult[] = [];
@@ -174,7 +175,7 @@ function benchmarkMogBackend(size: string, llvmIR: string) {
   for (const opt of ["-O0", "-O1", "-O2"]) {
     const objPath = `${BUILD_DIR}/bench_${size}_${opt.replace("-", "")}.o`;
     const cmd = `clang ${opt} -c -x ir ${irPath} -o ${objPath}`;
-    results.push(benchmarkShell(`mog/${size}/clang_${opt}`, cmd));
+    results.push(benchmarkShell(`mog/${size}/clang_${opt}`, cmd, lines));
   }
 
   return results;
@@ -184,7 +185,7 @@ function benchmarkMogBackend(size: string, llvmIR: string) {
 // Benchmark: Mog end-to-end (frontend + clang backend)
 // ---------------------------------------------------------------------------
 
-function benchmarkMogE2E(size: string, source: string) {
+function benchmarkMogE2E(size: string, source: string, lines: number) {
   const results: TimingResult[] = [];
 
   for (const opt of ["-O0", "-O1", "-O2"]) {
@@ -206,7 +207,7 @@ function benchmarkMogE2E(size: string, source: string) {
       execSync(`clang ${opt} -c -x ir ${irPath} -o ${objPath}`, { stdio: "pipe" });
       samples.push(performance.now() - start);
     }
-    results.push(stats(`mog/${size}/e2e_${opt}`, samples));
+    results.push(stats(`mog/${size}/e2e_${opt}`, samples, lines));
   }
 
   return results;
@@ -216,14 +217,14 @@ function benchmarkMogE2E(size: string, source: string) {
 // Benchmark: Go
 // ---------------------------------------------------------------------------
 
-function benchmarkGo(size: string) {
+function benchmarkGo(size: string, lines: number) {
   const src = `benchmarks/go/${size}.go`;
   const out = `${BUILD_DIR}/go_${size}`;
   const results: TimingResult[] = [];
 
   // Go has limited optimization flags; gcflags -N -l disables optimization
-  results.push(benchmarkShell(`go/${size}/build_default`, `go build -o ${out} ${src}`));
-  results.push(benchmarkShell(`go/${size}/build_noopt`, `go build -gcflags='-N -l' -o ${out} ${src}`));
+  results.push(benchmarkShell(`go/${size}/build_default`, `go build -o ${out} ${src}`, lines));
+  results.push(benchmarkShell(`go/${size}/build_noopt`, `go build -gcflags='-N -l' -o ${out} ${src}`, lines));
 
   return results;
 }
@@ -232,16 +233,16 @@ function benchmarkGo(size: string) {
 // Benchmark: Rust
 // ---------------------------------------------------------------------------
 
-function benchmarkRust(size: string) {
+function benchmarkRust(size: string, lines: number) {
   const src = `benchmarks/rust/${size}.rs`;
   const out = `${BUILD_DIR}/rust_${size}`;
   const results: TimingResult[] = [];
 
   // Debug (no optimization)
-  results.push(benchmarkShell(`rust/${size}/debug`, `rustc --edition 2021 ${src} -o ${out}`));
+  results.push(benchmarkShell(`rust/${size}/debug`, `rustc --edition 2021 ${src} -o ${out}`, lines));
   // Release with different opt levels
   for (const opt of ["1", "2", "3"]) {
-    results.push(benchmarkShell(`rust/${size}/opt_O${opt}`, `rustc --edition 2021 -C opt-level=${opt} ${src} -o ${out}`));
+    results.push(benchmarkShell(`rust/${size}/opt_O${opt}`, `rustc --edition 2021 -C opt-level=${opt} ${src} -o ${out}`, lines));
   }
 
   return results;
@@ -257,29 +258,37 @@ function fmtMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
+function fmtUsPerLine(ms: number, lines: number): string {
+  if (lines <= 0) return "—";
+  const usPerLine = (ms * 1000) / lines;
+  if (usPerLine < 1) return `${(usPerLine * 1000).toFixed(0)}ns/l`;
+  if (usPerLine < 1000) return `${usPerLine.toFixed(1)}µs/l`;
+  return `${(usPerLine / 1000).toFixed(1)}ms/l`;
+}
+
 function printTable(title: string, results: TimingResult[]) {
-  console.log(`\n${"=".repeat(80)}`);
+  console.log(`\n${"=".repeat(90)}`);
   console.log(`  ${title}`);
-  console.log(`${"=".repeat(80)}`);
+  console.log(`${"=".repeat(90)}`);
   console.log(
-    `  ${"Benchmark".padEnd(35)} ${"Median".padStart(10)} ${"Mean".padStart(10)} ${"Min".padStart(10)} ${"Max".padStart(10)} ${"StdDev".padStart(10)}`
+    `  ${"Benchmark".padEnd(35)} ${"Median".padStart(10)} ${"Mean".padStart(10)} ${"Min".padStart(10)} ${"Max".padStart(10)} ${"StdDev".padStart(10)} ${"µs/line".padStart(10)}`
   );
-  console.log(`  ${"-".repeat(75)}`);
+  console.log(`  ${"-".repeat(85)}`);
   for (const r of results) {
     console.log(
-      `  ${r.label.padEnd(35)} ${fmtMs(r.median_ms).padStart(10)} ${fmtMs(r.mean_ms).padStart(10)} ${fmtMs(r.min_ms).padStart(10)} ${fmtMs(r.max_ms).padStart(10)} ${fmtMs(r.stddev_ms).padStart(10)}`
+      `  ${r.label.padEnd(35)} ${fmtMs(r.median_ms).padStart(10)} ${fmtMs(r.mean_ms).padStart(10)} ${fmtMs(r.min_ms).padStart(10)} ${fmtMs(r.max_ms).padStart(10)} ${fmtMs(r.stddev_ms).padStart(10)} ${fmtUsPerLine(r.median_ms, r.lines).padStart(10)}`
     );
   }
 }
 
 function printComparison(mogResults: TimingResult[], goResults: TimingResult[], rustResults: TimingResult[]) {
-  console.log(`\n${"=".repeat(80)}`);
+  console.log(`\n${"=".repeat(100)}`);
   console.log(`  CROSS-LANGUAGE COMPARISON (median, end-to-end compile to object/binary)`);
-  console.log(`${"=".repeat(80)}`);
+  console.log(`${"=".repeat(100)}`);
   console.log(
     `  ${"Size".padEnd(10)} ${"Mog -O0".padStart(12)} ${"Mog -O1".padStart(12)} ${"Mog -O2".padStart(12)} ${"Go default".padStart(12)} ${"Go noopt".padStart(12)} ${"Rust debug".padStart(12)} ${"Rust -O2".padStart(12)}`
   );
-  console.log(`  ${"-".repeat(78)}`);
+  console.log(`  ${"-".repeat(95)}`);
 
   for (const size of SIZES) {
     const mogO0 = mogResults.find(r => r.label === `mog/${size}/e2e_-O0`);
@@ -292,6 +301,30 @@ function printComparison(mogResults: TimingResult[], goResults: TimingResult[], 
 
     console.log(
       `  ${size.padEnd(10)} ${fmtMs(mogO0?.median_ms ?? 0).padStart(12)} ${fmtMs(mogO1?.median_ms ?? 0).padStart(12)} ${fmtMs(mogO2?.median_ms ?? 0).padStart(12)} ${fmtMs(goDef?.median_ms ?? 0).padStart(12)} ${fmtMs(goNo?.median_ms ?? 0).padStart(12)} ${fmtMs(rustDbg?.median_ms ?? 0).padStart(12)} ${fmtMs(rustO2?.median_ms ?? 0).padStart(12)}`
+    );
+  }
+
+  // µs/line comparison
+  console.log(`\n  Compilation speed (µs per source line, median):`);
+  console.log(`  ${"-".repeat(95)}`);
+  console.log(
+    `  ${"Size".padEnd(10)} ${"Mog -O0".padStart(12)} ${"Mog -O1".padStart(12)} ${"Mog -O2".padStart(12)} ${"Go default".padStart(12)} ${"Go noopt".padStart(12)} ${"Rust debug".padStart(12)} ${"Rust -O2".padStart(12)}`
+  );
+  console.log(`  ${"-".repeat(95)}`);
+
+  for (const size of SIZES) {
+    const mogO0 = mogResults.find(r => r.label === `mog/${size}/e2e_-O0`);
+    const mogO1 = mogResults.find(r => r.label === `mog/${size}/e2e_-O1`);
+    const mogO2 = mogResults.find(r => r.label === `mog/${size}/e2e_-O2`);
+    const goDef = goResults.find(r => r.label === `go/${size}/build_default`);
+    const goNo = goResults.find(r => r.label === `go/${size}/build_noopt`);
+    const rustDbg = rustResults.find(r => r.label === `rust/${size}/debug`);
+    const rustO2 = rustResults.find(r => r.label === `rust/${size}/opt_O2`);
+
+    const fmt = (r: TimingResult | undefined) => r ? fmtUsPerLine(r.median_ms, r.lines) : "—";
+
+    console.log(
+      `  ${size.padEnd(10)} ${fmt(mogO0).padStart(12)} ${fmt(mogO1).padStart(12)} ${fmt(mogO2).padStart(12)} ${fmt(goDef).padStart(12)} ${fmt(goNo).padStart(12)} ${fmt(rustDbg).padStart(12)} ${fmt(rustO2).padStart(12)}`
     );
   }
 
@@ -322,11 +355,13 @@ async function main() {
   console.log(`Clang: ${execSync("clang --version").toString().trim().split("\n")[0]}`);
 
   // Line counts
+  const lineCounts: Record<string, { mog: number; go: number; rust: number }> = {};
   console.log("\nProgram sizes:");
   for (const size of SIZES) {
     const mogLines = readFileSync(`benchmarks/mog/${size}.mog`, "utf-8").split("\n").length;
     const goLines = readFileSync(`benchmarks/go/${size}.go`, "utf-8").split("\n").length;
     const rustLines = readFileSync(`benchmarks/rust/${size}.rs`, "utf-8").split("\n").length;
+    lineCounts[size] = { mog: mogLines, go: goLines, rust: rustLines };
     console.log(`  ${size}: Mog ${mogLines} lines, Go ${goLines} lines, Rust ${rustLines} lines`);
   }
 
@@ -337,53 +372,56 @@ async function main() {
   // --- Mog benchmarks ---
   for (const size of SIZES) {
     const source = readFileSync(`benchmarks/mog/${size}.mog`, "utf-8");
+    const lines = lineCounts[size].mog;
 
     console.log(`\nBenchmarking Mog ${size}...`);
 
     // Phase breakdown
-    const phaseResults = benchmarkMogPhases(size, source);
+    const phaseResults = benchmarkMogPhases(size, source, lines);
     allMogResults.push(...phaseResults);
-    printTable(`Mog Frontend Phases — ${size}`, phaseResults);
+    printTable(`Mog Frontend Phases — ${size} (${lines} lines)`, phaseResults);
 
     // Backend (clang on IR)
     const { llvmIR } = mogFrontend(source);
-    const backendResults = benchmarkMogBackend(size, llvmIR);
+    const backendResults = benchmarkMogBackend(size, llvmIR, lines);
     allMogResults.push(...backendResults);
-    printTable(`Mog Backend (clang on IR) — ${size}`, backendResults);
+    printTable(`Mog Backend (clang on IR) — ${size} (${lines} lines)`, backendResults);
 
     // End-to-end
-    const e2eResults = benchmarkMogE2E(size, source);
+    const e2eResults = benchmarkMogE2E(size, source, lines);
     allMogResults.push(...e2eResults);
-    printTable(`Mog End-to-End — ${size}`, e2eResults);
+    printTable(`Mog End-to-End — ${size} (${lines} lines)`, e2eResults);
   }
 
   // --- Go benchmarks ---
   for (const size of SIZES) {
+    const lines = lineCounts[size].go;
     console.log(`\nBenchmarking Go ${size}...`);
-    const goResults = benchmarkGo(size);
+    const goResults = benchmarkGo(size, lines);
     allGoResults.push(...goResults);
-    printTable(`Go — ${size}`, goResults);
+    printTable(`Go — ${size} (${lines} lines)`, goResults);
   }
 
   // --- Rust benchmarks ---
   for (const size of SIZES) {
+    const lines = lineCounts[size].rust;
     console.log(`\nBenchmarking Rust ${size}...`);
-    const rustResults = benchmarkRust(size);
+    const rustResults = benchmarkRust(size, lines);
     allRustResults.push(...rustResults);
-    printTable(`Rust — ${size}`, rustResults);
+    printTable(`Rust — ${size} (${lines} lines)`, rustResults);
   }
 
   // --- Cross-language comparison ---
   printComparison(allMogResults, allGoResults, allRustResults);
 
   // --- Mog frontend-only comparison ---
-  console.log(`\n${"=".repeat(80)}`);
+  console.log(`\n${"=".repeat(90)}`);
   console.log(`  MOG FRONTEND-ONLY (no LLVM backend) — what embedding would need`);
-  console.log(`${"=".repeat(80)}`);
+  console.log(`${"=".repeat(90)}`);
   for (const size of SIZES) {
     const fe = allMogResults.find(r => r.label === `mog/${size}/frontend_total`);
     if (fe) {
-      console.log(`  ${size.padEnd(10)} ${fmtMs(fe.median_ms).padStart(10)} median  (lex+parse+analyze+codegen_ir)`);
+      console.log(`  ${size.padEnd(10)} ${fmtMs(fe.median_ms).padStart(10)} median  ${fmtUsPerLine(fe.median_ms, fe.lines).padStart(10)}  (lex+parse+analyze+codegen_ir)`);
     }
   }
 
