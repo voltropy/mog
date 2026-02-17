@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { generateLLVMIR, LLVMIRGenerator } from "./llvm_codegen"
-import { i64, f64, voidType, array, map } from "./types"
+import { i64, f64, voidType, array, map, StructType, SOAType } from "./types"
 
 describe("LLVM IR Generator", () => {
   describe("Program Structure", () => {
@@ -1091,6 +1091,134 @@ describe("Optimization Features", () => {
     test("can be instantiated with release mode enabled", () => {
       const generator = new LLVMIRGenerator({ releaseMode: true })
       expect(generator).toBeDefined()
+    })
+  })
+
+  describe("f64 math builtin walrus declaration", () => {
+    test("math builtin sqrt result allocated as double", () => {
+      // AST: result := sqrt(2.0)
+      // Walrus declaration becomes VariableDeclaration with value = CallExpression
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "result",
+            varType: f64,
+            value: {
+              type: "CallExpression",
+              callee: { type: "Identifier", name: "sqrt" },
+              arguments: [
+                {
+                  type: "NumberLiteral",
+                  value: "2.0",
+                  literalType: f64,
+                },
+              ],
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("alloca double")
+      expect(ir).toContain("call double @llvm.sqrt.f64")
+      expect(ir).toContain("store double")
+    })
+  })
+
+  describe("f64 reassignment", () => {
+    test("f64 variable reassignment uses store double", () => {
+      // AST: x: f64 = 1.0; x = 2.0
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "x",
+            varType: f64,
+            value: {
+              type: "NumberLiteral",
+              value: "1.0",
+              literalType: f64,
+            },
+          },
+          {
+            type: "Assignment",
+            name: "x",
+            value: {
+              type: "NumberLiteral",
+              value: "2.0",
+              literalType: f64,
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      // Initial declaration should alloca double
+      expect(ir).toContain("%x = alloca double")
+      // Initial store
+      expect(ir).toContain("store double")
+      // Reassignment should also use store double, not store i64
+      const storeDoubleCount = (ir.match(/store double/g) || []).length
+      expect(storeDoubleCount).toBeGreaterThanOrEqual(2)
+      // Must NOT contain store i64 for x
+      expect(ir).not.toContain("store i64 2")
+    })
+  })
+
+  describe("SoA f64 field access", () => {
+    test("SoA f64 field access produces double", () => {
+      // AST: particles is soa Particle[] where Particle has x: f64
+      // val := particles[0].x  should allocate val as double
+      const particleStruct = new StructType(
+        "Particle",
+        new Map<string, any>([
+          ["x", f64],
+          ["y", f64],
+        ])
+      )
+      const soaType = new SOAType(particleStruct, 100)
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "particles",
+            varType: soaType,
+            value: {
+              type: "SoAConstructor",
+              structName: "Particle",
+              capacity: 100,
+              inferredType: soaType,
+            },
+          },
+          {
+            type: "VariableDeclaration",
+            name: "val",
+            varType: f64,
+            value: {
+              type: "MemberExpression",
+              object: {
+                type: "IndexExpression",
+                object: { type: "Identifier", name: "particles" },
+                index: {
+                  type: "NumberLiteral",
+                  value: "0",
+                  literalType: i64,
+                },
+              },
+              property: "x",
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      // val should be allocated as double since particles[0].x is f64
+      expect(ir).toContain("%val = alloca double")
+      // Should use array_get_f64 for the SoA column access
+      expect(ir).toContain("@array_get_f64")
+      // Should store the result as double
+      expect(ir).toContain("store double")
     })
   })
 })

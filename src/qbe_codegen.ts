@@ -85,6 +85,13 @@ class QBECodeGen {
     return func?.isAsync === true
   }
 
+  private getCapabilityReturnType(capName: string, funcName: string): any | null {
+    const decl = this.capabilityDecls.get(capName)
+    if (!decl) return null
+    const func = decl.functions?.find((f: any) => f.name === funcName)
+    return func?.returnType || null
+  }
+
   // --- Register & Label Management ---
   private nextReg(): string {
     return `%v.${this.regCounter++}`
@@ -612,6 +619,9 @@ class QBECodeGen {
       case "TryCatch":
         this.generateTryCatch(ir, stmt)
         break
+      case "WithBlock":
+        this.generateWithBlock(ir, stmt)
+        break
       case "PackageDeclaration":
       case "ImportDeclaration":
         // Module declarations handled at top level
@@ -825,6 +835,44 @@ class QBECodeGen {
     if (expr.callee?.type === "Identifier") {
       const name = expr.callee.name
 
+      // --- all()/race() combinators for structured concurrency ---
+      if ((name === "all" || name === "race") && this.isInAsyncFunction) {
+        const args = expr.args || []
+        const arg = args[0]
+        if (arg && arg.type === "ArrayLiteral") {
+          const elements = arg.elements || []
+          const count = elements.length
+          if (count === 0) {
+            return "0"
+          }
+
+          // Evaluate each element expression (each returns a MogFuture*)
+          const futureRegs: string[] = []
+          for (const elem of elements) {
+            futureRegs.push(this.generateExpression(ir, elem))
+          }
+
+          // Allocate a pointer array and store futures
+          const arrayBuf = this.nextReg()
+          ir.push(`  ${arrayBuf} =l call $gc_alloc(l ${count * 8})`)
+          for (let i = 0; i < count; i++) {
+            if (i === 0) {
+              ir.push(`  storel ${futureRegs[i]}, ${arrayBuf}`)
+            } else {
+              const off = this.nextReg()
+              ir.push(`  ${off} =l add ${arrayBuf}, ${i * 8}`)
+              ir.push(`  storel ${futureRegs[i]}, ${off}`)
+            }
+          }
+
+          // Call mog_all or mog_race
+          const combFn = name === "all" ? "mog_all" : "mog_race"
+          const resultFuture = this.nextReg()
+          ir.push(`  ${resultFuture} =l call $${combFn}(l ${arrayBuf}, l ${count})`)
+          return resultFuture
+        }
+      }
+
       // Generate all argument registers first
       const argRegs: string[] = []
       for (const arg of (expr.args || [])) {
@@ -914,6 +962,29 @@ class QBECodeGen {
       if (name === "tensor_print") {
         ir.push(`  call $tensor_print(l ${argRegs[0]})`)
         return "0"
+      }
+
+      // --- tensor activation free functions ---
+      if (name === "relu" && argRegs.length === 1) {
+        const r = this.nextReg()
+        ir.push(`  ${r} =l call $tensor_relu(l ${argRegs[0]})`)
+        return r
+      }
+      if (name === "sigmoid" && argRegs.length === 1) {
+        const r = this.nextReg()
+        ir.push(`  ${r} =l call $tensor_sigmoid(l ${argRegs[0]})`)
+        return r
+      }
+      if (name === "tanh" && argRegs.length === 1) {
+        const r = this.nextReg()
+        ir.push(`  ${r} =l call $tensor_tanh_act(l ${argRegs[0]})`)
+        return r
+      }
+      if (name === "softmax") {
+        const dimArg = argRegs.length > 1 ? argRegs[1] : "-1"
+        const r = this.nextReg()
+        ir.push(`  ${r} =l call $tensor_softmax(l ${argRegs[0]}, l ${dimArg})`)
+        return r
       }
 
       // --- GC functions ---
@@ -1046,9 +1117,32 @@ class QBECodeGen {
           ir.push(`  call $array_reverse(l ${objReg})`)
           return "0"
         }
+        if (method === "join") {
+          const r = this.nextReg()
+          ir.push(`  ${r} =l call $array_join(l ${objReg}, l ${argRegs[0]})`)
+          return r
+        }
         if (method === "len") {
           const r = this.nextReg()
           ir.push(`  ${r} =l call $array_len(l ${objReg})`)
+          return r
+        }
+      }
+
+      // --- tensor static constructors: tensor.zeros(), tensor.ones(), tensor.randn() ---
+      if (obj.type === "Identifier" && obj.name === "tensor") {
+        if (method === "zeros" || method === "ones" || method === "randn") {
+          const shapeArr = argRegs[0]
+          // Load ndim from shape array's length (offset 0)
+          const ndim = this.nextReg()
+          ir.push(`  ${ndim} =l loadl ${shapeArr}`)
+          // Load shape data pointer (offset 16)
+          const shapeDpOff = this.nextReg()
+          ir.push(`  ${shapeDpOff} =l add ${shapeArr}, 16`)
+          const shapePtr = this.nextReg()
+          ir.push(`  ${shapePtr} =l loadl ${shapeDpOff}`)
+          const r = this.nextReg()
+          ir.push(`  ${r} =l call $tensor_${method}(l ${shapePtr}, l ${ndim})`)
           return r
         }
       }
@@ -1092,6 +1186,32 @@ class QBECodeGen {
         if (method === "size") {
           const r = this.nextReg()
           ir.push(`  ${r} =l call $tensor_size(l ${objReg})`)
+          return r
+        }
+        if (method === "relu") {
+          const r = this.nextReg()
+          ir.push(`  ${r} =l call $tensor_relu(l ${objReg})`)
+          return r
+        }
+        if (method === "sigmoid") {
+          const r = this.nextReg()
+          ir.push(`  ${r} =l call $tensor_sigmoid(l ${objReg})`)
+          return r
+        }
+        if (method === "tanh") {
+          const r = this.nextReg()
+          ir.push(`  ${r} =l call $tensor_tanh_act(l ${objReg})`)
+          return r
+        }
+        if (method === "softmax") {
+          const dimArg = argRegs.length > 0 ? argRegs[0] : "-1"
+          const r = this.nextReg()
+          ir.push(`  ${r} =l call $tensor_softmax(l ${objReg}, l ${dimArg})`)
+          return r
+        }
+        if (method === "transpose") {
+          const r = this.nextReg()
+          ir.push(`  ${r} =l call $tensor_transpose(l ${objReg})`)
           return r
         }
       }
@@ -1231,6 +1351,19 @@ class QBECodeGen {
           this.variableTypes.set(name, new ArrayType(new IntegerType("i64"), []))
         } else if (expr.value.type === "MapLiteral") {
           this.variableTypes.set(name, new MapType(new StringType(), new IntegerType("i64")))
+        } else if (expr.value.type === "StringLiteral" || expr.value.type === "TemplateLiteral") {
+          this.variableTypes.set(name, new StringType())
+        } else if (expr.value.type === "AwaitExpression") {
+          // Infer type from awaited capability call
+          const inner = expr.value.expression || expr.value.argument
+          if (inner?.type === "CallExpression" && inner?.callee?.type === "MemberExpression" &&
+              this.capabilities.has(inner.callee.object?.name)) {
+            const rt = this.getCapabilityReturnType(inner.callee.object.name, inner.callee.property)
+            if (rt) {
+              if (rt === "string" || rt instanceof StringType) this.variableTypes.set(name, new StringType())
+              else if (rt === "float" || rt === "f64" || rt instanceof FloatType) this.variableTypes.set(name, new FloatType("f64"))
+            }
+          }
         }
       }
 
@@ -3240,29 +3373,67 @@ class QBECodeGen {
 
   // --- Capabilities (qbe-d89) ---
   private generateCapabilityCall(ir: string[], capName: string, funcName: string, args: string[], expr: any): string {
-    // Build args buffer: allocate n*8 bytes, store each arg at offset i*8
+    // mog_cap_call_out(MogValue *out, MogVM *vm, const char *cap_name, const char *func_name, MogValue *args, int nargs)
+    // MogValue is 24 bytes: { i32 tag, pad(4), union(16) } — data.i is at offset 8.
     const argCount = args.length
-    const bufSize = Math.max(argCount * 8, 8)
-    const argsBuf = this.nextReg()
-    ir.push(`  ${argsBuf} =l call $gc_alloc(l ${bufSize})`)
-
-    for (let i = 0; i < argCount; i++) {
-      if (i === 0) {
-        ir.push(`  storel ${args[i]}, ${argsBuf}`)
-      } else {
-        const off = this.nextReg()
-        ir.push(`  ${off} =l add ${argsBuf}, ${i * 8}`)
-        ir.push(`  storel ${args[i]}, ${off}`)
-      }
-    }
 
     // Create string constants for cap name and func name
     const capStr = this.getOrCreateString(capName)
     const funcStr = this.getOrCreateString(funcName)
 
-    // Call the capability dispatcher
+    // Allocate MogValue output buffer (24 bytes) on the heap
+    // (Using gc_alloc instead of alloc8 because QBE's mem2reg can mishandle
+    //  24-byte stack slots that are written to by external C functions)
+    const outBuf = this.nextReg()
+    ir.push(`  ${outBuf} =l call $gc_alloc(l 24)`)
+
+    if (argCount > 0) {
+      // Allocate MogValue array for arguments: argCount * 24 bytes
+      const argsBuf = this.nextReg()
+      ir.push(`  ${argsBuf} =l call $gc_alloc(l ${argCount * 24})`)
+
+      const argExprs = expr?.args || expr?.arguments || []
+      for (let i = 0; i < argCount; i++) {
+        const argExpr = argExprs[i]
+        const argVal = args[i]
+
+        // Determine tag from expression type
+        const isFloat = argExpr && this.isFloatOperand(argExpr)
+        const isString = argExpr && (argExpr.type === "StringLiteral" || argExpr.type === "TemplateLiteral")
+
+        const elemBase = i === 0 ? argsBuf : (() => {
+          const off = this.nextReg()
+          ir.push(`  ${off} =l add ${argsBuf}, ${i * 24}`)
+          return off
+        })()
+
+        // Store tag at offset 0 (i32)
+        if (isString) {
+          ir.push(`  storew 3, ${elemBase}`)  // MOG_STRING = 3
+        } else if (isFloat) {
+          ir.push(`  storew 1, ${elemBase}`)  // MOG_FLOAT = 1
+        } else {
+          ir.push(`  storew 0, ${elemBase}`)  // MOG_INT = 0
+        }
+
+        // Store data at offset 8 (i64)
+        const dataOff = this.nextReg()
+        ir.push(`  ${dataOff} =l add ${elemBase}, 8`)
+        ir.push(`  storel ${argVal}, ${dataOff}`)
+      }
+
+      // Call mog_cap_call_out with explicit output pointer
+      ir.push(`  call $mog_cap_call_out(l ${outBuf}, l 0, l ${capStr}, l ${funcStr}, l ${argsBuf}, l ${argCount})`)
+    } else {
+      // No arguments
+      ir.push(`  call $mog_cap_call_out(l ${outBuf}, l 0, l ${capStr}, l ${funcStr}, l 0, l 0)`)
+    }
+
+    // Load the data field from output MogValue (offset 8)
+    const dataPtr = this.nextReg()
+    ir.push(`  ${dataPtr} =l add ${outBuf}, 8`)
     const result = this.nextReg()
-    ir.push(`  ${result} =l call $mog_cap_call_out(l ${capStr}, l ${funcStr}, l ${argsBuf}, l ${argCount})`)
+    ir.push(`  ${result} =l loadl ${dataPtr}`)
     return result
   }
 
@@ -3568,6 +3739,39 @@ class QBECodeGen {
     }
   }
 
+  private generateWithBlock(ir: string[], stmt: any): void {
+    // For `with no_grad() { ... }`:
+    // 1. Call mog_no_grad_begin() to set the flag
+    // 2. Generate body
+    // 3. Call mog_no_grad_end() to clear the flag
+
+    const ctx = stmt.context
+    const isNoGrad =
+      ctx.type === "CallExpression" &&
+      ((ctx.callee?.name === "no_grad") ||
+       (ctx.callee?.type === "Identifier" && ctx.callee?.name === "no_grad"))
+
+    if (isNoGrad) {
+      ir.push(`  call $mog_no_grad_begin()`)
+    } else {
+      // Generic with block: evaluate the context expression
+      this.generateExpression(ir, ctx)
+    }
+
+    // Generate body
+    for (const s of stmt.body.statements) {
+      this.generateStatement(ir, s)
+      if (this.blockTerminated) break
+    }
+
+    if (isNoGrad) {
+      if (!this.blockTerminated) {
+        ir.push(`  call $mog_no_grad_end()`)
+      }
+    }
+    this.blockTerminated = false
+  }
+
   // ============================================================
   // PRINT CALL GENERATION (shared utility, used by calls task)
   // ============================================================
@@ -3745,9 +3949,19 @@ class QBECodeGen {
         ir.push(`@start`)
         ir.push(`  call $gc_init()`)
         if (this.capabilities.size > 0) {
-          const vmReg = this.nextReg()
-          ir.push(`  ${vmReg} =l call $mog_vm_new()`)
-          // TODO: register capabilities
+          // Reuse host VM if already set (e.g., by __attribute__((constructor)))
+          const existingVm = this.nextReg()
+          ir.push(`  ${existingVm} =l call $mog_vm_get_global()`)
+          const vmIsNull = this.nextReg()
+          ir.push(`  ${vmIsNull} =w ceql ${existingVm}, 0`)
+          ir.push(`  jnz ${vmIsNull}, @create_vm, @have_vm`)
+          ir.push(`@create_vm`)
+          const newVm = this.nextReg()
+          ir.push(`  ${newVm} =l call $mog_vm_new()`)
+          ir.push(`  call $mog_vm_set_global(l ${newVm})`)
+          ir.push(`  call $mog_register_posix_host(l ${newVm})`)
+          ir.push(`  jmp @have_vm`)
+          ir.push(`@have_vm`)
         }
         const loopReg = this.nextReg()
         ir.push(`  ${loopReg} =l call $mog_loop_new()`)
@@ -3771,8 +3985,19 @@ class QBECodeGen {
         ir.push(`  call $gc_init()`)
         ir.push(`  call $gc_push_frame()`)
         if (this.capabilities.size > 0) {
-          const vmReg = this.nextReg()
-          ir.push(`  ${vmReg} =l call $mog_vm_new()`)
+          // Reuse host VM if already set (e.g., by __attribute__((constructor)))
+          const existingVm = this.nextReg()
+          ir.push(`  ${existingVm} =l call $mog_vm_get_global()`)
+          const vmIsNull = this.nextReg()
+          ir.push(`  ${vmIsNull} =w ceql ${existingVm}, 0`)
+          ir.push(`  jnz ${vmIsNull}, @create_vm, @have_vm`)
+          ir.push(`@create_vm`)
+          const newVm = this.nextReg()
+          ir.push(`  ${newVm} =l call $mog_vm_new()`)
+          ir.push(`  call $mog_vm_set_global(l ${newVm})`)
+          ir.push(`  call $mog_register_posix_host(l ${newVm})`)
+          ir.push(`  jmp @have_vm`)
+          ir.push(`@have_vm`)
         }
         ir.push(`  call $program_user()`)
         ir.push(`  call $gc_pop_frame()`)

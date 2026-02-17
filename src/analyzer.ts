@@ -86,6 +86,7 @@ type StatementNode =
   | RequiresDeclarationNode
   | OptionalDeclarationNode
   | TryCatchNode
+  | WithBlockNode
   | PackageDeclarationNode
   | ImportDeclarationNode
 
@@ -441,6 +442,12 @@ interface TryCatchNode extends ASTNode {
   tryBody: BlockNode
   errorVar: string
   catchBody: BlockNode
+}
+
+interface WithBlockNode extends ASTNode {
+  type: "WithBlock"
+  context: ExpressionNode
+  body: BlockNode
 }
 
 interface OkExpressionNode extends ASTNode {
@@ -2300,6 +2307,12 @@ class SemanticAnalyzer {
           case "sort":
           case "reverse":
             return new IntegerType("i64") // void-like (in-place)
+          case "join": {
+            for (const arg of args) {
+              this.visitExpression(arg)
+            }
+            return new StringType()
+          }
           case "len":
             return new UnsignedType("u64")
           case "map":
@@ -2771,14 +2784,40 @@ class SemanticAnalyzer {
   }
 
   private visitMatchExpression(node: any): Type | null {
-    this.visitExpression(node.subject)
+    const subjectType = this.visitExpression(node.subject)
+
+    // Determine the binding type for variant patterns based on the subject type
+    const getBindingType = (patternName: string): Type => {
+      if (subjectType) {
+        if (isResultType(subjectType) && (patternName === "ok" || patternName === "err")) {
+          // ok(x) binds to the inner type; err(e) binds to i64 (error code)
+          return patternName === "ok" ? subjectType.innerType : new IntegerType("i64")
+        }
+        if (isOptionalType(subjectType) && patternName === "some") {
+          // some(x) binds to the inner type
+          return subjectType.innerType
+        }
+      }
+      return new IntegerType("i64")
+    }
 
     let resultType: Type | null = null
+    const patternNames = new Set<string>()
+
     for (const arm of node.arms) {
+      // Collect pattern types for exhaustiveness checking
+      if (arm.pattern) {
+        if (arm.pattern.type === "WildcardPattern") {
+          patternNames.add("_")
+        } else if (arm.pattern.type === "VariantPattern") {
+          patternNames.add(arm.pattern.name)
+        }
+      }
+
       // If this arm has a VariantPattern with a binding, declare it in a new scope
       if (arm.pattern && arm.pattern.type === "VariantPattern" && arm.pattern.binding) {
         this.symbolTable.pushScope()
-        this.symbolTable.declare(arm.pattern.binding, "variable", new IntegerType("i64"))
+        this.symbolTable.declare(arm.pattern.binding, "variable", getBindingType(arm.pattern.name))
         const armType = this.visitExpression(arm.body)
         if (!resultType && armType) {
           resultType = armType
@@ -2789,6 +2828,50 @@ class SemanticAnalyzer {
         const armType = this.visitExpression(arm.body)
         if (!resultType && armType) {
           resultType = armType
+        }
+      }
+    }
+
+    // Exhaustiveness checking for Result and Optional types
+    if (subjectType && !patternNames.has("_")) {
+      if (isResultType(subjectType)) {
+        const hasOk = patternNames.has("ok")
+        const hasErr = patternNames.has("err")
+        if (!hasOk && !hasErr) {
+          this.emitWarning(
+            `Non-exhaustive match on ${subjectType.toString()}: missing 'ok' and 'err' arms`,
+            node.position
+          )
+        } else if (!hasOk) {
+          this.emitWarning(
+            `Non-exhaustive match on ${subjectType.toString()}: missing 'ok' arm`,
+            node.position
+          )
+        } else if (!hasErr) {
+          this.emitWarning(
+            `Non-exhaustive match on ${subjectType.toString()}: missing 'err' arm`,
+            node.position
+          )
+        }
+      }
+      if (isOptionalType(subjectType)) {
+        const hasSome = patternNames.has("some")
+        const hasNone = patternNames.has("none")
+        if (!hasSome && !hasNone) {
+          this.emitWarning(
+            `Non-exhaustive match on ${subjectType.toString()}: missing 'some' and 'none' arms`,
+            node.position
+          )
+        } else if (!hasSome) {
+          this.emitWarning(
+            `Non-exhaustive match on ${subjectType.toString()}: missing 'some' arm`,
+            node.position
+          )
+        } else if (!hasNone) {
+          this.emitWarning(
+            `Non-exhaustive match on ${subjectType.toString()}: missing 'none' arm`,
+            node.position
+          )
         }
       }
     }

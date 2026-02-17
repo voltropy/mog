@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <math.h>
 
 /* Platform-specific includes for page allocation */
 #ifdef _WIN32
@@ -920,6 +921,46 @@ void array_reverse(void* array_ptr) {
   }
 }
 
+// Forward declaration for i64_to_string (defined in String Conversion section below)
+char* i64_to_string(int64_t value);
+
+const char* array_join(void* array_ptr, const char* separator) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0 || arr->dimensions[0] == 0) {
+    char* empty = (char*)gc_alloc(1);
+    empty[0] = '\0';
+    return empty;
+  }
+  uint64_t len = arr->dimensions[0];
+  uint64_t sep_len = strlen(separator);
+
+  // First pass: convert all elements to strings and compute total length
+  char** strings = (char**)gc_alloc(len * sizeof(char*));
+  uint64_t total_len = 0;
+  for (uint64_t i = 0; i < len; i++) {
+    int64_t val = ((int64_t*)arr->data)[i];
+    strings[i] = i64_to_string(val);
+    total_len += strlen(strings[i]);
+  }
+  // Add separator lengths between elements
+  total_len += sep_len * (len - 1);
+
+  // Second pass: concatenate into result buffer
+  char* result = (char*)gc_alloc(total_len + 1);
+  uint64_t pos = 0;
+  for (uint64_t i = 0; i < len; i++) {
+    if (i > 0) {
+      memcpy(result + pos, separator, sep_len);
+      pos += sep_len;
+    }
+    uint64_t slen = strlen(strings[i]);
+    memcpy(result + pos, strings[i], slen);
+    pos += slen;
+  }
+  result[pos] = '\0';
+  return result;
+}
+
 /* --- Map Implementation --- */
 /* MapEntry and Map structs defined above for tracing */
 
@@ -1717,6 +1758,178 @@ MogTensor* tensor_reshape(MogTensor* t, int64_t new_ndim, int64_t* new_shape) {
   MogTensor* r = tensor_create(new_ndim, new_shape, 0);
   memcpy(r->data, t->data, t->size * sizeof(float));
   return r;
+}
+
+MogTensor* tensor_relu(MogTensor* t) {
+  MogTensor* r = tensor_create(t->ndim, t->shape, 0);
+  for (int64_t i = 0; i < t->size; i++) {
+    r->data[i] = t->data[i] > 0.0f ? t->data[i] : 0.0f;
+  }
+  return r;
+}
+
+MogTensor* tensor_sigmoid(MogTensor* t) {
+  MogTensor* r = tensor_create(t->ndim, t->shape, 0);
+  for (int64_t i = 0; i < t->size; i++) {
+    r->data[i] = 1.0f / (1.0f + expf(-t->data[i]));
+  }
+  return r;
+}
+
+MogTensor* tensor_tanh_act(MogTensor* t) {
+  MogTensor* r = tensor_create(t->ndim, t->shape, 0);
+  for (int64_t i = 0; i < t->size; i++) {
+    r->data[i] = tanhf(t->data[i]);
+  }
+  return r;
+}
+
+MogTensor* tensor_softmax(MogTensor* t, int64_t dim) {
+  MogTensor* r = tensor_create(t->ndim, t->shape, 0);
+  if (t->ndim == 1) {
+    /* 1D: softmax over the entire vector */
+    float max_val = t->data[0];
+    for (int64_t i = 1; i < t->size; i++) {
+      if (t->data[i] > max_val) max_val = t->data[i];
+    }
+    float sum = 0.0f;
+    for (int64_t i = 0; i < t->size; i++) {
+      r->data[i] = expf(t->data[i] - max_val);
+      sum += r->data[i];
+    }
+    for (int64_t i = 0; i < t->size; i++) {
+      r->data[i] /= sum;
+    }
+  } else if (t->ndim == 2) {
+    /* 2D: softmax along specified dimension */
+    int64_t rows = t->shape[0], cols = t->shape[1];
+    if (dim == 1 || dim == -1) {
+      /* Softmax along columns (each row independently) */
+      for (int64_t i = 0; i < rows; i++) {
+        float max_val = t->data[i * cols];
+        for (int64_t j = 1; j < cols; j++) {
+          if (t->data[i * cols + j] > max_val) max_val = t->data[i * cols + j];
+        }
+        float sum = 0.0f;
+        for (int64_t j = 0; j < cols; j++) {
+          r->data[i * cols + j] = expf(t->data[i * cols + j] - max_val);
+          sum += r->data[i * cols + j];
+        }
+        for (int64_t j = 0; j < cols; j++) {
+          r->data[i * cols + j] /= sum;
+        }
+      }
+    } else {
+      /* dim == 0: softmax along rows (each column independently) */
+      for (int64_t j = 0; j < cols; j++) {
+        float max_val = t->data[j];
+        for (int64_t i = 1; i < rows; i++) {
+          if (t->data[i * cols + j] > max_val) max_val = t->data[i * cols + j];
+        }
+        float sum = 0.0f;
+        for (int64_t i = 0; i < rows; i++) {
+          r->data[i * cols + j] = expf(t->data[i * cols + j] - max_val);
+          sum += r->data[i * cols + j];
+        }
+        for (int64_t i = 0; i < rows; i++) {
+          r->data[i * cols + j] /= sum;
+        }
+      }
+    }
+  } else {
+    /* General nD: treat last dim as softmax dim (fallback) */
+    int64_t inner = t->shape[t->ndim - 1];
+    int64_t outer = t->size / inner;
+    for (int64_t o = 0; o < outer; o++) {
+      float max_val = t->data[o * inner];
+      for (int64_t i = 1; i < inner; i++) {
+        if (t->data[o * inner + i] > max_val) max_val = t->data[o * inner + i];
+      }
+      float sum = 0.0f;
+      for (int64_t i = 0; i < inner; i++) {
+        r->data[o * inner + i] = expf(t->data[o * inner + i] - max_val);
+        sum += r->data[o * inner + i];
+      }
+      for (int64_t i = 0; i < inner; i++) {
+        r->data[o * inner + i] /= sum;
+      }
+    }
+  }
+  return r;
+}
+
+MogTensor* tensor_transpose(MogTensor* t) {
+  /* Transpose last two dimensions */
+  if (t->ndim < 2) return t;
+  int64_t* new_shape = (int64_t*)gc_alloc(t->ndim * sizeof(int64_t));
+  for (int64_t i = 0; i < t->ndim - 2; i++) new_shape[i] = t->shape[i];
+  new_shape[t->ndim - 2] = t->shape[t->ndim - 1];
+  new_shape[t->ndim - 1] = t->shape[t->ndim - 2];
+  MogTensor* r = tensor_create(t->ndim, new_shape, 0);
+  if (t->ndim == 2) {
+    int64_t rows = t->shape[0], cols = t->shape[1];
+    for (int64_t i = 0; i < rows; i++) {
+      for (int64_t j = 0; j < cols; j++) {
+        r->data[j * rows + i] = t->data[i * cols + j];
+      }
+    }
+  } else {
+    /* Batch transpose: swap last two dims */
+    int64_t batch = 1;
+    for (int64_t i = 0; i < t->ndim - 2; i++) batch *= t->shape[i];
+    int64_t rows = t->shape[t->ndim - 2], cols = t->shape[t->ndim - 1];
+    for (int64_t b = 0; b < batch; b++) {
+      for (int64_t i = 0; i < rows; i++) {
+        for (int64_t j = 0; j < cols; j++) {
+          r->data[b * cols * rows + j * rows + i] = t->data[b * rows * cols + i * cols + j];
+        }
+      }
+    }
+  }
+  return r;
+}
+
+MogTensor* tensor_zeros(int64_t* shape, int64_t ndims) {
+  /* tensor_create already zero-initializes data */
+  return tensor_create(ndims, shape, 0);
+}
+
+MogTensor* tensor_ones(int64_t* shape, int64_t ndims) {
+  MogTensor* r = tensor_create(ndims, shape, 0);
+  for (int64_t i = 0; i < r->size; i++) r->data[i] = 1.0f;
+  return r;
+}
+
+MogTensor* tensor_randn(int64_t* shape, int64_t ndims) {
+  static int seeded = 0;
+  if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
+  MogTensor* r = tensor_create(ndims, shape, 0);
+  /* Box-Muller transform for approximate normal distribution */
+  for (int64_t i = 0; i < r->size; i += 2) {
+    float u1 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
+    float u2 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
+    float mag = sqrtf(-2.0f * logf(u1));
+    r->data[i] = mag * cosf(2.0f * 3.14159265358979f * u2);
+    if (i + 1 < r->size) {
+      r->data[i + 1] = mag * sinf(2.0f * 3.14159265358979f * u2);
+    }
+  }
+  return r;
+}
+
+/* --- No-grad context management (for `with no_grad()` blocks) --- */
+static int mog_no_grad_flag = 0;
+
+void mog_no_grad_begin(void) {
+  mog_no_grad_flag = 1;
+}
+
+void mog_no_grad_end(void) {
+  mog_no_grad_flag = 0;
+}
+
+int64_t mog_is_no_grad(void) {
+  return (int64_t)mog_no_grad_flag;
 }
 
 /* --- Terminal I/O utilities --- */

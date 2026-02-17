@@ -127,6 +127,9 @@ class Parser {
     if (this.matchType("try")) {
       return this.tryCatchStatement()
     }
+    if (this.matchType("with")) {
+      return this.withStatement()
+    }
     if (this.matchType("break")) {
       return this.breakStatement()
     }
@@ -869,6 +872,45 @@ class Parser {
       catchBody,
       position: {
         start: { line: 1, column: 1, index: 0 },
+        end: this.lastPosition(),
+      },
+    } as any
+  }
+
+  private withStatement(): StatementNode {
+    const startPos = this.previous().position?.start || { line: 1, column: 1, index: 0 }
+
+    // Parse the context expression (e.g., no_grad())
+    // Disable struct literal parsing so { starts the body block
+    const prevAllow = this.allowStructLiteral
+    this.allowStructLiteral = false
+    const context = this.expression()
+    this.allowStructLiteral = prevAllow
+
+    // Parse body block
+    this.consume("LBRACE", "Expected { after with expression")
+    const bodyStatements: StatementNode[] = []
+    while (!this.checkType("RBRACE") && !this.isAtEnd()) {
+      const stmt = this.statement()
+      if (stmt) bodyStatements.push(stmt)
+    }
+    this.consume("RBRACE", "Expected } after with body")
+
+    const body: BlockNode = {
+      type: "Block",
+      statements: bodyStatements,
+      position: {
+        start: startPos,
+        end: this.lastPosition(),
+      },
+    } as any
+
+    return {
+      type: "WithBlock" as any,
+      context,
+      body,
+      position: {
+        start: startPos,
         end: this.lastPosition(),
       },
     } as any

@@ -80,8 +80,9 @@ type TokenType =
    | "spawn"
    | "package"
    | "import"
-   | "pub"
-   | "COMMENT"
+    | "pub"
+    | "with"
+    | "COMMENT"
 
 interface Position {
   line: number
@@ -172,6 +173,7 @@ class Lexer {
     const packageRegex = /package\b/y
     const importRegex = /import\b/y
     const pubRegex = /pub\b/y
+    const withRegex = /with\b/y
     const trueRegex = /true\b/y
     const falseRegex = /false\b/y
     const questionMarkRegex = /\?/y
@@ -678,6 +680,18 @@ class Lexer {
       value = this.match(pubRegex)
       if (value) {
         type = "pub"
+        this.advance(value.length)
+        tokens.push({
+          type,
+          value,
+          position: { start: startPos, end: this.currentPosition() },
+        })
+        continue
+      }
+
+      value = this.match(withRegex)
+      if (value) {
+        type = "with"
         this.advance(value.length)
         tokens.push({
           type,

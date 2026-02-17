@@ -88,6 +88,7 @@ import { parseTokens } from "../src/parser";
 import { SemanticAnalyzer } from "../src/analyzer";
 import { generateLLVMIR } from "../src/llvm_codegen";
 import { generateQBEIR } from "../src/qbe_codegen";
+import { qbeCompile, qbeAssemble } from "../src/mog_backend_ffi";
 
 const QBE_BIN = "/opt/homebrew/bin/qbe";
 
@@ -270,6 +271,79 @@ function benchmarkMogQBEE2E(size: string, source: string, lines: number) {
 }
 
 // ---------------------------------------------------------------------------
+// Benchmark: Mog QBE backend in-process (libqbe via FFI + as)
+// ---------------------------------------------------------------------------
+
+function benchmarkMogQBEInProcessBackend(size: string, qbeIR: string, lines: number) {
+  const results: TimingResult[] = [];
+
+  // QBE in-process compilation only (IL -> assembly string)
+  {
+    // Warmup
+    for (let i = 0; i < WARMUP; i++) qbeCompile(qbeIR);
+    const samples: number[] = [];
+    for (let i = 0; i < ITERATIONS; i++) {
+      const start = performance.now();
+      qbeCompile(qbeIR);
+      samples.push(performance.now() - start);
+    }
+    results.push(stats(`mog/${size}/qbe_inproc`, samples, lines));
+  }
+
+  // QBE in-process + as (IL -> .o file)
+  {
+    const objPath = `${BUILD_DIR}/bench_${size}_qbe_inproc.o`;
+    // Warmup
+    for (let i = 0; i < WARMUP; i++) qbeAssemble(qbeIR, objPath);
+    const samples: number[] = [];
+    for (let i = 0; i < ITERATIONS; i++) {
+      const start = performance.now();
+      qbeAssemble(qbeIR, objPath);
+      samples.push(performance.now() - start);
+    }
+    results.push(stats(`mog/${size}/qbe_inproc+as`, samples, lines));
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark: Mog end-to-end with in-process QBE (frontend + libqbe + as)
+// ---------------------------------------------------------------------------
+
+function benchmarkMogQBEInProcessE2E(size: string, source: string, lines: number) {
+  const results: TimingResult[] = [];
+  const objPath = `${BUILD_DIR}/bench_${size}_qbe_inproc_e2e.o`;
+
+  // Warmup
+  for (let i = 0; i < WARMUP; i++) {
+    const tokens = tokenize(source);
+    const filtered = tokens.filter((t: any) => t.type !== "WHITESPACE" && t.type !== "COMMENT");
+    const ast = parseTokens(filtered);
+    const analyzer = new SemanticAnalyzer();
+    analyzer.analyze(ast);
+    const qbeIR = generateQBEIR(ast);
+    qbeAssemble(qbeIR, objPath);
+  }
+
+  const samples: number[] = [];
+  for (let i = 0; i < ITERATIONS; i++) {
+    const start = performance.now();
+    const tokens = tokenize(source);
+    const filtered = tokens.filter((t: any) => t.type !== "WHITESPACE" && t.type !== "COMMENT");
+    const ast = parseTokens(filtered);
+    const analyzer = new SemanticAnalyzer();
+    analyzer.analyze(ast);
+    const qbeIR = generateQBEIR(ast);
+    qbeAssemble(qbeIR, objPath);
+    samples.push(performance.now() - start);
+  }
+  results.push(stats(`mog/${size}/qbe_inproc_e2e`, samples, lines));
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Benchmark: Mog end-to-end with LLVM (frontend + clang backend)
 // ---------------------------------------------------------------------------
 
@@ -379,6 +453,7 @@ function printComparison(mogResults: TimingResult[], goResults: TimingResult[], 
   const hdr = [
     "Size", "LLVM -O0", "LLVM -O1", "LLVM -O2",
     "QBE -O0", "QBE -O1", "QBE -O2",
+    "QBE InProc", 
     "Go default", "Go noopt", "Rust debug", "Rust -O2",
   ];
   console.log(`  ${hdr[0].padEnd(10)} ${hdr.slice(1).map(h => h.padStart(12)).join(" ")}`);
@@ -389,6 +464,7 @@ function printComparison(mogResults: TimingResult[], goResults: TimingResult[], 
     const vals = [
       get(`mog/${size}/e2e_-O0`), get(`mog/${size}/e2e_-O1`), get(`mog/${size}/e2e_-O2`),
       get(`mog/${size}/qbe_e2e_-O0`), get(`mog/${size}/qbe_e2e_-O1`), get(`mog/${size}/qbe_e2e_-O2`),
+      get(`mog/${size}/qbe_inproc_e2e`),
       get(`go/${size}/build_default`), get(`go/${size}/build_noopt`),
       get(`rust/${size}/debug`), get(`rust/${size}/opt_O2`),
     ];
@@ -406,6 +482,7 @@ function printComparison(mogResults: TimingResult[], goResults: TimingResult[], 
     const vals = [
       get(`mog/${size}/e2e_-O0`), get(`mog/${size}/e2e_-O1`), get(`mog/${size}/e2e_-O2`),
       get(`mog/${size}/qbe_e2e_-O0`), get(`mog/${size}/qbe_e2e_-O1`), get(`mog/${size}/qbe_e2e_-O2`),
+      get(`mog/${size}/qbe_inproc_e2e`),
       get(`go/${size}/build_default`), get(`go/${size}/build_noopt`),
       get(`rust/${size}/debug`), get(`rust/${size}/opt_O2`),
     ];
@@ -415,31 +492,47 @@ function printComparison(mogResults: TimingResult[], goResults: TimingResult[], 
 
   // --- LLVM vs QBE head-to-head ---
   console.log(`\n  LLVM vs QBE Backend (end-to-end, median):`);
-  console.log(`  ${"-".repeat(80)}`);
-  console.log(`  ${"Size".padEnd(10)} ${"LLVM -O0".padStart(12)} ${"QBE -O0".padStart(12)} ${"Speedup".padStart(10)} ${"LLVM -O1".padStart(12)} ${"QBE -O1".padStart(12)} ${"Speedup".padStart(10)}`);
-  console.log(`  ${"-".repeat(80)}`);
+  console.log(`  ${"-".repeat(110)}`);
+  console.log(`  ${"Size".padEnd(10)} ${"LLVM -O0".padStart(12)} ${"QBE spawn".padStart(12)} ${"Speedup".padStart(10)} ${"QBE InProc".padStart(12)} ${"Speedup".padStart(10)} ${"LLVM -O1".padStart(12)} ${"QBE spawn".padStart(12)} ${"Speedup".padStart(10)}`);
+  console.log(`  ${"-".repeat(110)}`);
   for (const size of SIZES) {
     const llvmO0 = mogResults.find(r => r.label === `mog/${size}/e2e_-O0`)?.median_ms ?? 1;
     const qbeO0 = mogResults.find(r => r.label === `mog/${size}/qbe_e2e_-O0`)?.median_ms ?? 1;
+    const qbeInProc = mogResults.find(r => r.label === `mog/${size}/qbe_inproc_e2e`)?.median_ms ?? 1;
     const llvmO1 = mogResults.find(r => r.label === `mog/${size}/e2e_-O1`)?.median_ms ?? 1;
     const qbeO1 = mogResults.find(r => r.label === `mog/${size}/qbe_e2e_-O1`)?.median_ms ?? 1;
     console.log(
-      `  ${size.padEnd(10)} ${fmtMs(llvmO0).padStart(12)} ${fmtMs(qbeO0).padStart(12)} ${(llvmO0 / qbeO0).toFixed(2).padStart(8)}x ${fmtMs(llvmO1).padStart(12)} ${fmtMs(qbeO1).padStart(12)} ${(llvmO1 / qbeO1).toFixed(2).padStart(8)}x`
+      `  ${size.padEnd(10)} ${fmtMs(llvmO0).padStart(12)} ${fmtMs(qbeO0).padStart(12)} ${(llvmO0 / qbeO0).toFixed(2).padStart(8)}x ${fmtMs(qbeInProc).padStart(12)} ${(llvmO0 / qbeInProc).toFixed(2).padStart(8)}x ${fmtMs(llvmO1).padStart(12)} ${fmtMs(qbeO1).padStart(12)} ${(llvmO1 / qbeO1).toFixed(2).padStart(8)}x`
     );
   }
 
-  // --- Ratios vs Mog QBE -O0 (fastest Mog backend) ---
-  console.log(`\n  Ratios (vs Mog QBE -O0 end-to-end, lower = faster):`);
+  // --- QBE spawn vs in-process head-to-head ---
+  console.log(`\n  QBE Backend: spawn vs in-process (backend-only, median):`);
+  console.log(`  ${"-".repeat(80)}`);
+  console.log(`  ${"Size".padEnd(10)} ${"QBE spawn".padStart(12)} ${"QBE InProc".padStart(12)} ${"Speedup".padStart(10)} ${"Saved".padStart(12)}`);
+  console.log(`  ${"-".repeat(80)}`);
+  for (const size of SIZES) {
+    const qbeSpawn = mogResults.find(r => r.label === `mog/${size}/qbe`)?.median_ms ?? 1;
+    const qbeInProc = mogResults.find(r => r.label === `mog/${size}/qbe_inproc`)?.median_ms ?? 1;
+    const saved = qbeSpawn - qbeInProc;
+    console.log(
+      `  ${size.padEnd(10)} ${fmtMs(qbeSpawn).padStart(12)} ${fmtMs(qbeInProc).padStart(12)} ${(qbeSpawn / qbeInProc).toFixed(2).padStart(8)}x ${fmtMs(saved).padStart(12)}`
+    );
+  }
+
+  // --- Ratios vs Mog QBE InProc (fastest Mog backend) ---
+  console.log(`\n  Ratios (vs Mog QBE in-process e2e, lower = faster):`);
   console.log(`  ${"-".repeat(90)}`);
   for (const size of SIZES) {
-    const qbeO0 = mogResults.find(r => r.label === `mog/${size}/qbe_e2e_-O0`)?.median_ms ?? 1;
+    const qbeInProc = mogResults.find(r => r.label === `mog/${size}/qbe_inproc_e2e`)?.median_ms ?? 1;
+    const llvmO0 = mogResults.find(r => r.label === `mog/${size}/e2e_-O0`)?.median_ms ?? 1;
     const llvmO1 = mogResults.find(r => r.label === `mog/${size}/e2e_-O1`)?.median_ms ?? 1;
     const goDef = goResults.find(r => r.label === `go/${size}/build_default`)?.median_ms ?? 1;
     const rustDbg = rustResults.find(r => r.label === `rust/${size}/debug`)?.median_ms ?? 1;
     const rustO2 = rustResults.find(r => r.label === `rust/${size}/opt_O2`)?.median_ms ?? 1;
 
     console.log(
-      `  ${size.padEnd(10)} QBE -O0: 1.00x   LLVM -O1: ${(llvmO1 / qbeO0).toFixed(2)}x   Go: ${(goDef / qbeO0).toFixed(2)}x   Rust debug: ${(rustDbg / qbeO0).toFixed(2)}x   Rust -O2: ${(rustO2 / qbeO0).toFixed(2)}x`
+      `  ${size.padEnd(10)} QBE InProc: 1.00x   LLVM -O0: ${(llvmO0 / qbeInProc).toFixed(2)}x   LLVM -O1: ${(llvmO1 / qbeInProc).toFixed(2)}x   Go: ${(goDef / qbeInProc).toFixed(2)}x   Rust debug: ${(rustDbg / qbeInProc).toFixed(2)}x   Rust -O2: ${(rustO2 / qbeInProc).toFixed(2)}x`
     );
   }
 }
@@ -501,10 +594,20 @@ async function main() {
     allMogResults.push(...e2eResults);
     printTable(`Mog LLVM End-to-End — ${size} (${lines} lines)`, e2eResults);
 
-    // QBE End-to-end
+    // QBE End-to-end (spawning qbe binary)
     const qbeE2eResults = benchmarkMogQBEE2E(size, source, lines);
     allMogResults.push(...qbeE2eResults);
-    printTable(`Mog QBE End-to-End — ${size} (${lines} lines)`, qbeE2eResults);
+    printTable(`Mog QBE End-to-End (spawn) — ${size} (${lines} lines)`, qbeE2eResults);
+
+    // QBE in-process backend
+    const qbeInProcBackendResults = benchmarkMogQBEInProcessBackend(size, qbeIR, lines);
+    allMogResults.push(...qbeInProcBackendResults);
+    printTable(`Mog QBE In-Process Backend — ${size} (${lines} lines)`, qbeInProcBackendResults);
+
+    // QBE in-process end-to-end
+    const qbeInProcE2eResults = benchmarkMogQBEInProcessE2E(size, source, lines);
+    allMogResults.push(...qbeInProcE2eResults);
+    printTable(`Mog QBE In-Process End-to-End — ${size} (${lines} lines)`, qbeInProcE2eResults);
   }
 
   // --- Go benchmarks ---

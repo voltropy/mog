@@ -46,6 +46,7 @@ class LLVMIRGenerator {
   private variableTypes: Map<string, any> = new Map()
   private functionTypes: Map<string, any> = new Map()
   private loopStack: { breakLabel: string; continueLabel: string }[] = []
+  private tryStack: { catchLabel: string; errorVar: string }[] = []
   private blockTerminated = false
   private opts: OptimizationOptions
   private currentFunctionBasicBlocks = 0
@@ -520,6 +521,7 @@ class LLVMIRGenerator {
     ir.push("declare i64 @array_contains(ptr %array, i64 %value)")
     ir.push("declare void @array_sort(ptr %array)")
     ir.push("declare void @array_reverse(ptr %array)")
+    ir.push("declare ptr @array_join(ptr %array, ptr %separator)")
     ir.push("")
 
     ir.push("; Declare map functions")
@@ -584,6 +586,20 @@ class LLVMIRGenerator {
     ir.push("declare double @tensor_mean(ptr %tensor)")
     ir.push("declare void @tensor_print(ptr %tensor)")
     ir.push("declare ptr @tensor_reshape(ptr %tensor, i64 %ndim, ptr %shape)")
+    ir.push("declare ptr @tensor_relu(ptr %tensor)")
+    ir.push("declare ptr @tensor_sigmoid(ptr %tensor)")
+    ir.push("declare ptr @tensor_tanh_act(ptr %tensor)")
+    ir.push("declare ptr @tensor_softmax(ptr %tensor, i64 %dim)")
+    ir.push("declare ptr @tensor_transpose(ptr %tensor)")
+    ir.push("declare ptr @tensor_zeros(ptr %shape, i64 %ndims)")
+    ir.push("declare ptr @tensor_ones(ptr %shape, i64 %ndims)")
+    ir.push("declare ptr @tensor_randn(ptr %shape, i64 %ndims)")
+    ir.push("")
+
+    ir.push("; Declare no_grad context management functions")
+    ir.push("declare void @mog_no_grad_begin()")
+    ir.push("declare void @mog_no_grad_end()")
+    ir.push("declare i64 @mog_is_no_grad()")
     ir.push("")
 
     ir.push("; Cooperative interrupt flag (checked at every loop back-edge)")
@@ -961,6 +977,9 @@ class LLVMIRGenerator {
         break
       case "TryCatch":
         this.generateTryCatch(ir, statement)
+        break
+      case "WithBlock":
+        this.generateWithBlock(ir, statement)
         break
       default:
         break
@@ -1804,6 +1823,29 @@ class LLVMIRGenerator {
         return "0"
       }
 
+      // Handle tensor activation functions as free functions
+      if (funcName === "relu" && args.length === 1 && this.isTensorType(positionalArgs[0])) {
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call ptr @tensor_relu(ptr ${args[0]})`)
+        return reg
+      }
+      if (funcName === "sigmoid" && args.length === 1 && this.isTensorType(positionalArgs[0])) {
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call ptr @tensor_sigmoid(ptr ${args[0]})`)
+        return reg
+      }
+      if (funcName === "tanh" && args.length === 1 && this.isTensorType(positionalArgs[0])) {
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call ptr @tensor_tanh_act(ptr ${args[0]})`)
+        return reg
+      }
+      if (funcName === "softmax" && this.isTensorType(positionalArgs[0])) {
+        const dimArg = args.length > 1 ? args[1] : "-1"
+        const reg = `%${this.valueCounter++}`
+        ir.push(`  ${reg} = call ptr @tensor_softmax(ptr ${args[0]}, i64 ${dimArg})`)
+        return reg
+      }
+
       // Handle input functions
       const inputFunctions = ["input_i64", "input_u64", "input_f64", "input_string"]
       if (inputFunctions.includes(funcName)) {
@@ -2177,9 +2219,40 @@ class LLVMIRGenerator {
             ir.push(`  call void @array_reverse(ptr ${arrReg})`)
             return "0" // void return
           }
+          case "join": {
+            const sepReg = this.generateExpression(ir, callArgs[0])
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @array_join(ptr ${arrReg}, ptr ${sepReg})`)
+            return reg
+          }
           case "len": {
             const reg = `%${this.valueCounter++}`
             ir.push(`  ${reg} = call i64 @array_length(ptr ${arrReg})`)
+            return reg
+          }
+        }
+      }
+
+      // Handle tensor static constructors: tensor.zeros(), tensor.ones(), tensor.randn()
+      if (memberExpr.object.type === "Identifier" && memberExpr.object.name === "tensor") {
+        const method = memberExpr.property
+        const callArgs = expr.args || expr.arguments || []
+        if (method === "zeros" || method === "ones" || method === "randn") {
+          const shapeArg = callArgs[0]
+          if (shapeArg && shapeArg.type === "ArrayLiteral") {
+            const shapeElements = shapeArg.elements || []
+            const ndim = shapeElements.length
+            const shapeAlloca = `%${this.valueCounter++}`
+            ir.push(`  ${shapeAlloca} = alloca [${ndim} x i64]`)
+            for (let i = 0; i < ndim; i++) {
+              const dimVal = this.generateExpression(ir, shapeElements[i])
+              const gepReg = `%${this.valueCounter++}`
+              ir.push(`  ${gepReg} = getelementptr [${ndim} x i64], ptr ${shapeAlloca}, i64 0, i64 ${i}`)
+              ir.push(`  store i64 ${dimVal}, ptr ${gepReg}`)
+            }
+            const funcName = `tensor_${method}`
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @${funcName}(ptr ${shapeAlloca}, i64 ${ndim})`)
             return reg
           }
         }
@@ -2250,6 +2323,32 @@ class LLVMIRGenerator {
           case "size": {
             const reg = `%${this.valueCounter++}`
             ir.push(`  ${reg} = call i64 @tensor_size(ptr ${tensorReg})`)
+            return reg
+          }
+          case "relu": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @tensor_relu(ptr ${tensorReg})`)
+            return reg
+          }
+          case "sigmoid": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @tensor_sigmoid(ptr ${tensorReg})`)
+            return reg
+          }
+          case "tanh": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @tensor_tanh_act(ptr ${tensorReg})`)
+            return reg
+          }
+          case "softmax": {
+            const dimArg = callArgs.length > 0 ? this.generateExpression(ir, callArgs[0]) : "-1"
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @tensor_softmax(ptr ${tensorReg}, i64 ${dimArg})`)
+            return reg
+          }
+          case "transpose": {
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call ptr @tensor_transpose(ptr ${tensorReg})`)
             return reg
           }
         }
@@ -2640,6 +2739,21 @@ class LLVMIRGenerator {
     if (expr.type === "CallExpression" && expr.callee?.type === "Identifier") {
       const retType = this.functionTypes.get(expr.callee.name)
       if (retType?.type === "FloatType") return true
+      // Math builtins always return float
+      const callee = expr.callee.name
+      const mathBuiltins = new Set([
+        "sqrt", "sin", "cos", "tan", "asin", "acos",
+        "exp", "log", "log2", "floor", "ceil", "round", "abs",
+        "pow", "atan2", "min", "max",
+      ])
+      if (callee && mathBuiltins.has(callee)) return true
+      // Check user-defined functions that return float types
+      if (callee) {
+        const func = this.functions.get(callee)
+        if (func && (func.returnType === "double" || func.returnType === "float" || func.returnType === "half" || func.returnType === "fp128")) {
+          return true
+        }
+      }
     }
     // Variable known to be float
     if (expr.type === "Identifier") {
@@ -2651,6 +2765,19 @@ class LLVMIRGenerator {
       const objType = this.variableTypes.get(expr.object.name)
       if (objType?.type === "StructType" && objType.fields) {
         const fieldType = objType.fields.get(expr.property)
+        if (fieldType?.type === "FloatType") return true
+      }
+      // SOAType direct member access (e.g., particles.x where x is f64)
+      if (objType?.type === "SOAType") {
+        const fieldType = objType.structType?.fields?.get(expr.property)
+        if (fieldType?.type === "FloatType") return true
+      }
+    }
+    // SoA transposed access: datums[i].field where datums is SOAType
+    if (expr.type === "MemberExpression" && expr.object?.type === "IndexExpression" && expr.object?.object?.type === "Identifier") {
+      const objType = this.variableTypes.get(expr.object.object.name)
+      if (objType?.type === "SOAType") {
+        const fieldType = objType.structType?.fields?.get(expr.property)
         if (fieldType?.type === "FloatType") return true
       }
     }
@@ -2677,11 +2804,23 @@ class LLVMIRGenerator {
     if (expr.type === "CallExpression" && expr.callee?.type === "Identifier" && expr.callee.name === "matmul") {
       return true
     }
+    // Free tensor functions: relu(), sigmoid(), tanh(), softmax()
+    if (expr.type === "CallExpression" && expr.callee?.type === "Identifier") {
+      const tensorFuncs = ["relu", "sigmoid", "tanh", "softmax"]
+      if (tensorFuncs.includes(expr.callee.name)) return true
+    }
+    // Static constructors: tensor.zeros(), tensor.ones(), tensor.randn()
+    if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
+      if (expr.callee.object?.name === "tensor") {
+        const staticMethods = ["zeros", "ones", "randn"]
+        if (staticMethods.includes(expr.callee.property)) return true
+      }
+    }
     // Tensor method calls that return tensors (matmul, reshape, etc.)
     if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
       const method = expr.callee.property
       if (this.isTensorType(expr.callee.object)) {
-        const tensorMethods = ["matmul", "reshape", "transpose", "view", "flatten", "squeeze", "unsqueeze"]
+        const tensorMethods = ["matmul", "reshape", "transpose", "view", "flatten", "squeeze", "unsqueeze", "relu", "sigmoid", "tanh", "softmax"]
         if (tensorMethods.includes(method)) return true
       }
     }
@@ -3766,7 +3905,7 @@ class LLVMIRGenerator {
     // String method calls (e.g., s.upper(), s.trim())
     if (expr.type === "CallExpression" && expr.callee?.type === "MemberExpression") {
       const method = expr.callee.property
-      if (["upper", "lower", "trim", "replace", "split"].includes(method)) {
+      if (["upper", "lower", "trim", "replace", "split", "join"].includes(method)) {
         return true
       }
     }
@@ -5877,6 +6016,8 @@ private getIntBits(type: LLVMType): number {
     const isOkLabel = this.nextLabel()
     const propagateLabel = this.nextLabel()
 
+    const tryCtx = this.tryStack.length > 0 ? this.tryStack[this.tryStack.length - 1] : null
+
     if (isOptional) {
       const isSome = `%${this.valueCounter++}`
       ir.push(`  ${isSome} = call i64 @mog_optional_is_some(ptr ${valuePtr})`)
@@ -5885,9 +6026,26 @@ private getIntBits(type: LLVMType): number {
       ir.push(`  br i1 ${cmp}, label %${isOkLabel}, label %${propagateLabel}`)
 
       ir.push(`${propagateLabel}:`)
-      // Return the none value from the current function
-      ir.push(`  call void @gc_pop_frame()`)
-      ir.push(`  ret i64 ${value}`)
+      if (tryCtx) {
+        // Inside try block: create a "none" error string and branch to catch
+        let noneStrName = this.stringNameMap.get("none")
+        if (!noneStrName) {
+          noneStrName = `@str${this.stringCounter++}`
+          this.stringNameMap.set("none", noneStrName)
+          this.stringByteLengths.set("none", 4)
+          this.stringConstants.push(`${noneStrName} = private unnamed_addr constant [5 x i8] c"none\\00"`)
+        }
+        const noneStr = `%${this.valueCounter++}`
+        ir.push(`  ${noneStr} = call ptr @mog_string_new(ptr ${noneStrName}, i64 4)`)
+        const noneInt = `%${this.valueCounter++}`
+        ir.push(`  ${noneInt} = ptrtoint ptr ${noneStr} to i64`)
+        ir.push(`  store i64 ${noneInt}, ptr ${tryCtx.errorVar}`)
+        ir.push(`  br label %${tryCtx.catchLabel}`)
+      } else {
+        // Return the none value from the current function
+        ir.push(`  call void @gc_pop_frame()`)
+        ir.push(`  ret i64 ${value}`)
+      }
 
       ir.push(`${isOkLabel}:`)
       const unwrapped = `%${this.valueCounter++}`
@@ -5902,9 +6060,19 @@ private getIntBits(type: LLVMType): number {
       ir.push(`  br i1 ${cmp}, label %${isOkLabel}, label %${propagateLabel}`)
 
       ir.push(`${propagateLabel}:`)
-      // Return the error Result from the current function
-      ir.push(`  call void @gc_pop_frame()`)
-      ir.push(`  ret i64 ${value}`)
+      if (tryCtx) {
+        // Inside try block: extract error string from Result and branch to catch
+        const errPtr = `%${this.valueCounter++}`
+        ir.push(`  ${errPtr} = call ptr @mog_result_unwrap_err(ptr ${valuePtr})`)
+        const errInt = `%${this.valueCounter++}`
+        ir.push(`  ${errInt} = ptrtoint ptr ${errPtr} to i64`)
+        ir.push(`  store i64 ${errInt}, ptr ${tryCtx.errorVar}`)
+        ir.push(`  br label %${tryCtx.catchLabel}`)
+      } else {
+        // Return the error Result from the current function
+        ir.push(`  call void @gc_pop_frame()`)
+        ir.push(`  ret i64 ${value}`)
+      }
 
       ir.push(`${isOkLabel}:`)
       const unwrapped = `%${this.valueCounter++}`
@@ -6016,6 +6184,9 @@ private getIntBits(type: LLVMType): number {
     const catchLabel = this.nextLabel()
     const endLabel = this.nextLabel()
 
+    // Push try context so ? operator branches to catch instead of returning
+    this.tryStack.push({ catchLabel, errorVar: errorValue })
+
     // Generate try body
     for (const stmt of statement.tryBody.statements) {
       this.generateStatement(ir, stmt)
@@ -6024,6 +6195,8 @@ private getIntBits(type: LLVMType): number {
         break
       }
     }
+
+    this.tryStack.pop()
     ir.push(`  br label %${tryEndLabel}`)
 
     // Try completed successfully - skip catch
@@ -6050,6 +6223,41 @@ private getIntBits(type: LLVMType): number {
     this.blockTerminated = false
 
     ir.push(`${endLabel}:`)
+  }
+
+  private generateWithBlock(ir: string[], statement: any): void {
+    // For `with no_grad() { ... }`:
+    // 1. Evaluate the context expression (e.g., call no_grad())
+    // 2. Call mog_no_grad_begin() to set the flag
+    // 3. Generate body
+    // 4. Call mog_no_grad_end() to clear the flag
+
+    // Check if context is a no_grad() call
+    const ctx = statement.context
+    const isNoGrad =
+      ctx.type === "CallExpression" &&
+      ((ctx.callee?.name === "no_grad") ||
+       (ctx.callee?.type === "Identifier" && ctx.callee?.name === "no_grad"))
+
+    if (isNoGrad) {
+      ir.push("  call void @mog_no_grad_begin()")
+    } else {
+      // Generic with block: evaluate the context expression
+      this.generateExpression(ir, ctx)
+    }
+
+    // Generate body
+    for (const stmt of statement.body.statements) {
+      this.generateStatement(ir, stmt)
+      if (this.blockTerminated) break
+    }
+
+    if (isNoGrad) {
+      if (!this.blockTerminated) {
+        ir.push("  call void @mog_no_grad_end()")
+      }
+    }
+    this.blockTerminated = false
   }
 }
 
