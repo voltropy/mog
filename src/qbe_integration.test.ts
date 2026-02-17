@@ -141,3 +141,68 @@ describe("QBE Integration Tests", () => {
     expect(output).toBe("1\n")
   })
 })
+
+describe("QBE Async Integration Tests", () => {
+  test("simple async function returning a value", async () => {
+    const output = await compileAndRunQBE(`
+async fn compute() -> int {
+  return 42;
+}
+
+async fn main() -> int {
+  x := await compute()
+  println_i64(x)
+  return 0;
+}
+`)
+    expect(output).toBe("42\n")
+  })
+
+  test("async function with arithmetic", async () => {
+    const output = await compileAndRunQBE(`
+async fn add_async(a: int, b: int) -> int {
+  return a + b;
+}
+
+async fn main() -> int {
+  result := await add_async(10, 32)
+  println_i64(result)
+  return 0;
+}
+`)
+    expect(output).toBe("42\n")
+  })
+
+  test("multiple sequential awaits", async () => {
+    const output = await compileAndRunQBE(`
+async fn double(x: int) -> int {
+  return x * 2;
+}
+
+async fn main() -> int {
+  a := await double(5)
+  b := await double(a)
+  println_i64(b)
+  return 0;
+}
+`)
+    expect(output).toBe("20\n")
+  })
+
+  test("async with sync code between awaits", async () => {
+    const output = await compileAndRunQBE(`
+async fn identity(x: int) -> int {
+  return x;
+}
+
+async fn main() -> int {
+  a := await identity(10)
+  b := a + 5
+  c := await identity(b)
+  println_i64(c)
+  return 0;
+}
+`)
+    expect(output).toBe("15\n")
+  })
+})

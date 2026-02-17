@@ -51,6 +51,16 @@ class QBECodeGen {
   private hasAsyncFunctions = false
   private runtimeAsyncFunctions: Set<string> = new Set(["async_read_line"])
 
+  // Coroutine state machine (for async functions)
+  private coroFrame = ""            // register holding coroutine frame pointer
+  private coroFuture = ""           // register holding the MogFuture* for this async function
+  private awaitCounter = 0          // number of await points in current async function
+  private coroSpilledVars: string[] = []  // variable names that need spilling at await points
+  private coroFrameSize = 0         // total frame size in bytes
+  private coroResumeBlocks: string[][] = []  // resume continuation blocks (one per await point)
+  // Offset layout: [0]=resume_fn_ptr, [8]=state_index, [16]=future_ptr, [24..]=spilled vars
+  private readonly CORO_HEADER_SIZE = 24  // bytes reserved for resume_fn, state_index, future_ptr
+
   public packagePrefix = ""
   public importedPackages: Map<string, string> = new Map()
 
@@ -100,11 +110,19 @@ class QBECodeGen {
 
   private emitAlloc(line: string): void {
     this.entryAllocs.push(line)
+    // QBE promotes alloc slots to SSA registers. If a slot is loaded before
+    // being stored on some CFG path, QBE reports "ssa temporary is used undefined".
+    // Zero-initialize every slot to prevent this.
+    const match = line.match(/^\s*(%\S+)\s*=l\s+alloc/)
+    if (match) {
+      this.entryAllocs.push(`  storel 0, ${match[1]}`)
+    }
   }
 
   // --- Type Mapping ---
   toQBEType(type: any): QBEType {
     if (!type) return "l"
+    if (type === "void") return "void"
     if (type instanceof IntegerType) return "l"
     if (type instanceof UnsignedType) return "l"
     if (type instanceof FloatType) {
@@ -420,13 +438,13 @@ class QBECodeGen {
     const allFuncs = this.findFunctionDeclarationsRecursive(ast.statements)
     for (const func of allFuncs) {
       const name = func.name === "main" ? "program_user" : (this.packagePrefix + func.name)
-      const retType = func.returnType ? this.toQBEType(func.returnType) : "l"
+      const retType = func.returnType ? this.toQBEType(func.returnType) : "void"
       // Async functions return a pointer (MogFuture*)
       if (func.type === "AsyncFunctionDeclaration" || func.isAsync) {
         this.functionTypes.set(name, func.returnType || new IntegerType("i64"))
         this.asyncFunctions.add(name)
       } else {
-        this.functionTypes.set(name, func.returnType)
+        this.functionTypes.set(name, func.returnType || "void")
       }
       // Store param info for named/default arg resolution
       if (func.params) {
@@ -714,8 +732,8 @@ class QBECodeGen {
     if (op === "+") { const r = this.nextReg(); ir.push(`  ${r} =l add ${left}, ${right}`); return r }
     if (op === "-") { const r = this.nextReg(); ir.push(`  ${r} =l sub ${left}, ${right}`); return r }
     if (op === "*") { const r = this.nextReg(); ir.push(`  ${r} =l mul ${left}, ${right}`); return r }
-    if (op === "/") { const r = this.nextReg(); ir.push(`  ${r} =l sdiv ${left}, ${right}`); return r }
-    if (op === "%") { const r = this.nextReg(); ir.push(`  ${r} =l srem ${left}, ${right}`); return r }
+    if (op === "/") { const r = this.nextReg(); ir.push(`  ${r} =l div ${left}, ${right}`); return r }
+    if (op === "%") { const r = this.nextReg(); ir.push(`  ${r} =l rem ${left}, ${right}`); return r }
 
     // --- Integer comparisons (return w, extend to l) ---
     let intCmpOp = ""
@@ -1793,8 +1811,8 @@ class QBECodeGen {
     this.regCounter = 0
     this.labelCounter = 0
 
-    // Determine return type
-    const retQBE = stmt.returnType ? this.toQBEType(stmt.returnType) : "l"
+    // Determine return type (no return annotation = void)
+    const retQBE = stmt.returnType ? this.toQBEType(stmt.returnType) : "void"
     this.currentReturnType = retQBE
 
     // Build parameter list
@@ -1903,6 +1921,11 @@ class QBECodeGen {
     const outerRegCounter = this.regCounter
     const outerLabelCounter = this.labelCounter
     const outerIsInAsync = this.isInAsyncFunction
+    const outerCoroFrame = this.coroFrame
+    const outerCoroFuture = this.coroFuture
+    const outerAwaitCounter = this.awaitCounter
+    const outerCoroSpilledVars = this.coroSpilledVars
+    const outerCoroResumeBlocks = this.coroResumeBlocks
 
     // Reset for new function scope
     this.variables = new Map()
@@ -1915,6 +1938,9 @@ class QBECodeGen {
     this.blockTerminated = false
     this.regCounter = 0
     this.labelCounter = 0
+    this.awaitCounter = 0
+    this.coroSpilledVars = []
+    this.coroResumeBlocks = []
 
     // Async functions always return a future pointer (l)
     this.currentReturnType = "l"
@@ -1927,69 +1953,255 @@ class QBECodeGen {
       params.push({ name: p.name, qbeType: qbeT === "d" || qbeT === "s" ? qbeT : "l" })
     }
 
-    // Allocate a future at the start
-    this.currentFunc.push(`  %future =l call $mog_future_new()`)
+    // ============================================================
+    // COROUTINE STATE MACHINE LOWERING
+    //
+    // Since QBE has no coroutine intrinsics, we manually implement
+    // what LLVM's CoroSplit pass does. We use a "switch-resume"
+    // pattern where the async function body is generated ONCE and
+    // structured as a state machine:
+    //
+    // Frame layout (allocated with malloc):
+    //    [0]  resume_fn_ptr  - pointer to $funcName.resume
+    //    [8]  state_index    - which await point to resume at (-1=initial)
+    //    [16] future_ptr     - the MogFuture* for this function
+    //    [24+] spilled vars  - saved local variables (8 bytes each)
+    //    [24+N*8] awaited_future - the future being awaited (extra slot)
+    //
+    // Two functions generated:
+    //   $funcName(params...) — allocates frame, stores params, calls body eagerly
+    //   $funcName.resume(frame) — called by event loop, dispatches to await cont.
+    //
+    // The body code is generated once, using labeled sections. At each await:
+    //   1. Spill all locals to frame
+    //   2. Set state_index, call mog_await, return (suspend)
+    //   3. Label for resume continuation follows
+    //
+    // The resume function restores locals from frame and jumps to the right label.
+    // Since initial function and resume function are separate QBE functions,
+    // the resume function must re-execute code after each await point. We achieve
+    // this by generating resume continuation blocks in the resume function itself.
+    // ============================================================
 
-    // Allocate stack slots for parameters and store them
+    // Collect all variables that need spilling (params + locals declared in body)
+    const spilledVarNames: string[] = []
+    for (const p of params) {
+      spilledVarNames.push(p.name)
+    }
+    const body = stmt.body
+    const bodyStmts = body ? (body.body || body.statements || []) : []
+    this.collectDeclaredVars(bodyStmts, spilledVarNames)
+    this.coroSpilledVars = spilledVarNames
+
+    // Frame size: header (24) + spilled vars (N*8) + 1 extra slot for awaited future
+    const numSpilledVars = spilledVarNames.length
+    const frameSize = this.CORO_HEADER_SIZE + (numSpilledVars + 1) * 8
+    this.coroFrameSize = frameSize
+
+    // ============================================================
+    // SINGLE-FUNCTION COROUTINE DESIGN
+    //
+    // We generate ONE function $funcName.coro(l %frame) that:
+    //   - On entry: loads state_index from frame
+    //   - state == -1: initial path (loads params from frame, runs body from start)
+    //   - state == N: restores locals from frame, jumps to @awaitN.cont
+    //   - At each await: spills locals, sets state_index, returns
+    //
+    // The initial function $funcName(params...) allocates the frame,
+    // stores params, sets state=-1, and calls $funcName.coro(frame).
+    //
+    // The resume function pointer stored at frame[0] IS $funcName.coro,
+    // so mog_coro_resume(handle) calls it directly.
+    // ============================================================
+
+    const coroFuncName = `${funcName}.coro`
+
+    // Set coroutine registers — in the coro function, frame is the parameter
+    this.coroFrame = "%frame"
+    this.coroFuture = "%c.future"
+
+    // Allocate stack slots for variables (used during body generation)
     for (const p of params) {
       const slot = this.nextReg()
       this.emitAlloc(`  ${slot} =l alloc8 8`)
       this.variables.set(p.name, slot)
-      // Track parameter types
       const paramDef = (stmt.params || []).find((pp: any) => pp.name === p.name)
       if (paramDef) {
         const pt = paramDef.paramType || paramDef.typeAnnotation
         if (pt) this.variableTypes.set(p.name, pt)
       }
+    }
+
+    // Generate body statements — await expressions will emit suspend/continue code
+    // The body code goes into currentFunc, which will be placed after the dispatch
+    for (const s of bodyStmts) {
+      this.generateStatement(this.currentFunc, s)
+      if (this.blockTerminated) break
+    }
+
+    const totalAwaits = this.awaitCounter
+
+    // === BUILD THE CORO FUNCTION ===
+    // $funcName.coro(l %frame) — called both initially and on resume
+    const coroLines: string[] = []
+    coroLines.push(`function $${coroFuncName}(l %frame) {`)
+    coroLines.push(`@c.entry`)
+    coroLines.push(`  call $gc_push_frame()`)
+
+    // Entry allocs (QBE requires allocs in the entry block)
+    for (const alloc of this.entryAllocs) {
+      coroLines.push(alloc)
+    }
+
+    // Load future from frame[16]
+    coroLines.push(`  %c.future.ptr =l add %frame, 16`)
+    coroLines.push(`  %c.future =l loadl %c.future.ptr`)
+
+    // Load state_index from frame[8]
+    coroLines.push(`  %c.state.ptr =l add %frame, 8`)
+    coroLines.push(`  %c.state =l loadl %c.state.ptr`)
+
+    // Dispatch based on state_index
+    // state == -1: initial path (load params from frame, run body)
+    // state == N: restore locals, jump to awaitN.cont
+    const initialLabel = `@c.initial`
+    const dispatchCmp = `%c.is_initial`
+    coroLines.push(`  ${dispatchCmp} =w ceql %c.state, -1`)
+    coroLines.push(`  jnz ${dispatchCmp}, ${initialLabel}, @c.dispatch`)
+
+    // --- Dispatch block: resume path ---
+    coroLines.push(`@c.dispatch`)
+
+    // Restore all spilled variables from frame
+    for (let i = 0; i < numSpilledVars; i++) {
+      const varName = spilledVarNames[i]
+      const slot = this.variables.get(varName)
+      if (slot) {
+        const offset = this.CORO_HEADER_SIZE + i * 8
+        const frameOff = `%c.restore.${i}.ptr`
+        coroLines.push(`  ${frameOff} =l add %frame, ${offset}`)
+        const val = `%c.restore.${i}.val`
+        coroLines.push(`  ${val} =l loadl ${frameOff}`)
+        coroLines.push(`  storel ${val}, ${slot}`)
+      }
+    }
+
+    // Jump to the correct await continuation
+    if (totalAwaits === 0) {
+      // No await points — should never be called as resume, just return
+      coroLines.push(`  call $gc_pop_frame()`)
+      coroLines.push(`  ret`)
+    } else if (totalAwaits === 1) {
+      coroLines.push(`  jmp @await0.cont`)
+    } else {
+      for (let i = 0; i < totalAwaits; i++) {
+        const cmpReg = `%c.dispatch.${i}`
+        coroLines.push(`  ${cmpReg} =w ceql %c.state, ${i}`)
+        const nextLabel = i < totalAwaits - 1 ? `@c.dispatch.${i + 1}` : `@c.dispatch.end`
+        coroLines.push(`  jnz ${cmpReg}, @await${i}.cont, ${nextLabel}`)
+        if (i < totalAwaits - 1) {
+          coroLines.push(`@c.dispatch.${i + 1}`)
+        }
+      }
+      coroLines.push(`@c.dispatch.end`)
+      coroLines.push(`  call $gc_pop_frame()`)
+      coroLines.push(`  ret`)
+    }
+
+    // --- Initial path: load params from frame and run body ---
+    coroLines.push(initialLabel)
+
+    // Load parameters from frame (stored by the initial function)
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i]
+      const slot = this.variables.get(p.name)!
+      const offset = this.CORO_HEADER_SIZE + i * 8
+      const frameOff = `%c.param.${i}.ptr`
+      coroLines.push(`  ${frameOff} =l add %frame, ${offset}`)
+      const val = `%c.param.${i}.val`
       if (p.qbeType === "d") {
-        this.currentFunc.push(`  stored %${p.name}, ${slot}`)
+        coroLines.push(`  ${val} =d loadd ${frameOff}`)
+        coroLines.push(`  stored ${val}, ${slot}`)
       } else {
-        this.currentFunc.push(`  storel %${p.name}, ${slot}`)
+        coroLines.push(`  ${val} =l loadl ${frameOff}`)
+        coroLines.push(`  storel ${val}, ${slot}`)
       }
     }
 
-    // Generate body statements
-    const body = stmt.body
-    if (body) {
-      const stmts = body.body || body.statements || []
-      for (const s of stmts) {
-        this.generateStatement(this.currentFunc, s)
-      }
+    // Body code (with await suspend/continue labels inline)
+    for (const line of this.currentFunc) {
+      coroLines.push(line)
     }
 
-    // Build the function signature — async functions always return l (future pointer)
+    // If body doesn't end with return, complete future and return
+    if (!this.blockTerminated) {
+      coroLines.push(`  call $mog_future_complete(l %c.future, l 0)`)
+      coroLines.push(`  call $gc_pop_frame()`)
+      coroLines.push(`  ret`)
+    }
+
+    coroLines.push(`}`)
+    coroLines.push("")
+
+    // === BUILD THE INITIAL FUNCTION ===
+    // $funcName(params...) — allocates frame, stores params, calls coro
     const exportPrefix = stmt.isPublic ? "export " : ""
     const paramSig = params.map(p => `${p.qbeType} %${p.name}`).join(", ")
 
-    // Assemble the function
     const funcLines: string[] = []
     funcLines.push(`${exportPrefix}function l $${funcName}(${paramSig}) {`)
     funcLines.push(`@start`)
 
-    // GC frame push
-    funcLines.push(`  call $gc_push_frame()`)
+    // Allocate coroutine frame
+    funcLines.push(`  %init.frame =l call $malloc(l ${frameSize})`)
+    // Store coro function pointer at frame[0] (resume fn ptr)
+    funcLines.push(`  storel $${coroFuncName}, %init.frame`)
+    // Store state_index = -1 at frame[8] (initial state)
+    funcLines.push(`  %init.state.ptr =l add %init.frame, 8`)
+    funcLines.push(`  storel -1, %init.state.ptr`)
+    // Create future and store at frame[16]
+    funcLines.push(`  %init.future =l call $mog_future_new()`)
+    funcLines.push(`  %init.future.ptr =l add %init.frame, 16`)
+    funcLines.push(`  storel %init.future, %init.future.ptr`)
+    // Transfer frame ownership to the future
+    funcLines.push(`  call $mog_future_set_coro_frame(l %init.future, l %init.frame)`)
 
-    // Entry allocs (stack slots)
-    for (const alloc of this.entryAllocs) {
-      funcLines.push(alloc)
+    // Store parameters into frame (at spill slots)
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i]
+      const offset = this.CORO_HEADER_SIZE + i * 8
+      if (i === 0 && offset === this.CORO_HEADER_SIZE) {
+        const ptr = `%init.param.${i}.ptr`
+        funcLines.push(`  ${ptr} =l add %init.frame, ${offset}`)
+        if (p.qbeType === "d") {
+          funcLines.push(`  stored %${p.name}, ${ptr}`)
+        } else {
+          funcLines.push(`  storel %${p.name}, ${ptr}`)
+        }
+      } else {
+        const ptr = `%init.param.${i}.ptr`
+        funcLines.push(`  ${ptr} =l add %init.frame, ${offset}`)
+        if (p.qbeType === "d") {
+          funcLines.push(`  stored %${p.name}, ${ptr}`)
+        } else {
+          funcLines.push(`  storel %${p.name}, ${ptr}`)
+        }
+      }
     }
 
-    // Body
-    for (const line of this.currentFunc) {
-      funcLines.push(line)
-    }
+    // Call the coro function (runs eagerly until first await or completion)
+    funcLines.push(`  call $${coroFuncName}(l %init.frame)`)
 
-    // If body doesn't end with return, complete future with 0 and return it
-    if (!this.blockTerminated) {
-      funcLines.push(`  call $mog_future_complete(l %future, l 0)`)
-      funcLines.push(`  call $gc_pop_frame()`)
-      funcLines.push(`  ret %future`)
-    }
+    // Return the future
+    funcLines.push(`  ret %init.future`)
 
     funcLines.push(`}`)
     funcLines.push("")
 
-    // Append to ir
+    // Append both functions to ir (coro first, then initial)
+    for (const line of coroLines) {
+      ir.push(line)
+    }
     for (const line of funcLines) {
       ir.push(line)
     }
@@ -2006,25 +2218,40 @@ class QBECodeGen {
     this.regCounter = outerRegCounter
     this.labelCounter = outerLabelCounter
     this.isInAsyncFunction = outerIsInAsync
+    this.coroFrame = outerCoroFrame
+    this.coroFuture = outerCoroFuture
+    this.awaitCounter = outerAwaitCounter
+    this.coroSpilledVars = outerCoroSpilledVars
+    this.coroResumeBlocks = outerCoroResumeBlocks
   }
 
   private generateReturn(ir: string[], stmt: any): void {
     if (this.isInAsyncFunction) {
-      // In async functions, complete the future and return the future pointer
+      // In async functions (inside the coro function), complete the future and return.
+      // The coro function returns void — the initial wrapper returns the future.
       if (stmt.value) {
         const val = this.generateExpression(ir, stmt.value)
-        ir.push(`  call $mog_future_complete(l %future, l ${val})`)
+        ir.push(`  call $mog_future_complete(l ${this.coroFuture}, l ${val})`)
       } else {
-        ir.push(`  call $mog_future_complete(l %future, l 0)`)
+        ir.push(`  call $mog_future_complete(l ${this.coroFuture}, l 0)`)
       }
       ir.push(`  call $gc_pop_frame()`)
-      ir.push(`  ret %future`)
+      ir.push(`  ret`)
     } else {
-      if (stmt.value) {
+      if (this.currentReturnType === "void") {
+        // Void function: generate side effects but don't return a value
+        if (stmt.value) {
+          this.generateExpression(ir, stmt.value)
+        }
+        ir.push(`  call $gc_pop_frame()`)
+        ir.push(`  ret`)
+      } else if (stmt.value) {
         const val = this.generateExpression(ir, stmt.value)
+        ir.push(`  call $gc_pop_frame()`)
         ir.push(`  ret ${val}`)
       } else {
-        ir.push(`  ret`)
+        ir.push(`  call $gc_pop_frame()`)
+        ir.push(`  ret 0`)
       }
     }
     this.blockTerminated = true
@@ -3089,15 +3316,26 @@ class QBECodeGen {
     const typeName = typeof targetType === "string" ? targetType : targetType.name || targetType.kind
 
     if (typeName === "float" || typeName === "f64" || typeName === "double") {
-      // int -> float: swtof (signed word to float/double)
+      // Check if source is already a float (float->float is a no-op)
+      const sourceExpr = expr.value || expr.expression
+      if (sourceExpr && this.isFloatOperand(sourceExpr)) {
+        return val
+      }
+      // int -> float: sltof (signed long to double)
       const result = this.nextReg()
-      ir.push(`  ${result} =d swtof ${val}`)
+      ir.push(`  ${result} =d sltof ${val}`)
       return result
     } else if (typeName === "int" || typeName === "i64" || typeName === "i32") {
-      // float -> int: dtosi (double to signed integer)
-      const result = this.nextReg()
-      ir.push(`  ${result} =l dtosi ${val}`)
-      return result
+      // Check if source is already an integer (int->int is a no-op)
+      const sourceExpr = expr.value || expr.expression
+      if (sourceExpr && this.isFloatOperand(sourceExpr)) {
+        // float -> int: dtosi (double to signed integer)
+        const result = this.nextReg()
+        ir.push(`  ${result} =l dtosi ${val}`)
+        return result
+      }
+      // int -> int: no-op (or truncation, but QBE l covers i64)
+      return val
     } else if (typeName === "string") {
       // int -> string via runtime
       const result = this.nextReg()
@@ -3155,24 +3393,167 @@ class QBECodeGen {
     return result
   }
 
-  // --- Async (stubs for non-coroutine generation) ---
+  // --- Coroutine helpers ---
+
+  /** Pre-scan AST to collect all variable names declared in the body */
+  private collectDeclaredVars(stmts: any[], vars: string[]): void {
+    for (const s of stmts) {
+      if (!s) continue
+      // VariableDeclaration: `let x = ...` or `var x = ...`
+      if (s.type === "VariableDeclaration" && s.name) {
+        if (!vars.includes(s.name)) vars.push(s.name)
+      }
+      // ExpressionStatement with AssignmentExpression (`:=` declarations)
+      if (s.type === "ExpressionStatement" && s.expression?.type === "AssignmentExpression") {
+        const assign = s.expression
+        if (assign.name && !vars.includes(assign.name)) {
+          vars.push(assign.name)
+        }
+      }
+      // ForLoop: `for i := ...` declares i
+      if (s.type === "ForLoop" || s.type === "ForInRange" || s.type === "ForInIndex") {
+        if (s.variable && !vars.includes(s.variable)) vars.push(s.variable)
+        if (s.indexVar && !vars.includes(s.indexVar)) vars.push(s.indexVar)
+      }
+      // ForEachLoop: `for item in ...`
+      if (s.type === "ForEachLoop") {
+        if (s.variable && !vars.includes(s.variable)) vars.push(s.variable)
+        if (s.indexVar && !vars.includes(s.indexVar)) vars.push(s.indexVar)
+      }
+      // Recurse into blocks
+      if (s.body) {
+        const inner = s.body.statements || s.body.body || (Array.isArray(s.body) ? s.body : [])
+        this.collectDeclaredVars(inner, vars)
+      }
+      if (s.consequent) {
+        const inner = s.consequent.statements || s.consequent.body || (Array.isArray(s.consequent) ? s.consequent : [])
+        this.collectDeclaredVars(inner, vars)
+      }
+      if (s.alternate) {
+        const inner = s.alternate.statements || s.alternate.body || (Array.isArray(s.alternate) ? s.alternate : [])
+        this.collectDeclaredVars(inner, vars)
+      }
+      // Match statement arms
+      if (s.type === "MatchExpression" && s.arms) {
+        for (const arm of s.arms) {
+          if (arm.body) {
+            const inner = arm.body.statements || arm.body.body || (Array.isArray(arm.body) ? arm.body : [])
+            this.collectDeclaredVars(inner, vars)
+          }
+        }
+      }
+    }
+  }
+
+  /** Emit code to spill all local variables to the coroutine frame */
+  private emitCoroSpill(ir: string[], prefix: string): void {
+    for (let i = 0; i < this.coroSpilledVars.length; i++) {
+      const varName = this.coroSpilledVars[i]
+      const slot = this.variables.get(varName)
+      if (!slot) continue
+      const offset = this.CORO_HEADER_SIZE + i * 8
+      const val = `%${prefix}.spill.${i}`
+      ir.push(`  ${val} =l loadl ${slot}`)
+      const frameOff = `%${prefix}.spill.ptr.${i}`
+      ir.push(`  ${frameOff} =l add ${this.coroFrame}, ${offset}`)
+      ir.push(`  storel ${val}, ${frameOff}`)
+    }
+  }
+
+  // --- Async await/spawn ---
   private generateAwaitExpression(ir: string[], expr: any): string {
-    // Generate the argument — should be an expression returning a future pointer
-    const futurePtr = this.generateExpression(ir, expr.argument)
-    // Wait for the future (passing 0 for coro_handle since we're not doing real suspension)
-    ir.push(`  call $mog_await(l ${futurePtr}, l 0)`)
-    // Get the result from the future
-    const result = this.nextReg()
-    ir.push(`  ${result} =l call $mog_future_get_result(l ${futurePtr})`)
-    return result
+    const awaitIdx = this.awaitCounter++
+    const innerExpr = expr.argument
+
+    // The awaited future slot is at the end of the spilled vars in the frame
+    const awaitedFutureOffset = this.CORO_HEADER_SIZE + this.coroSpilledVars.length * 8
+
+    // --- Evaluate the inner expression to get a future pointer ---
+    let innerFuture: string
+    const isCapabilityAwait = innerExpr?.type === "CallExpression" &&
+      innerExpr?.callee?.type === "MemberExpression" &&
+      this.capabilities.has(innerExpr?.callee?.object?.name)
+
+    if (isCapabilityAwait) {
+      const capName = innerExpr.callee.object.name
+      const funcNameCap = innerExpr.callee.property
+      const capArgs = (innerExpr.args || innerExpr.arguments || []).map((a: any) =>
+        this.generateExpression(ir, a))
+
+      if (this.isAsyncCapabilityFunc(capName, funcNameCap)) {
+        // Async capability — host returns MogFuture* as i64
+        innerFuture = this.generateCapabilityCall(ir, capName, funcNameCap, capArgs, innerExpr)
+      } else {
+        // Sync capability — wrap in immediately-completed future
+        const capResult = this.generateCapabilityCall(ir, capName, funcNameCap, capArgs, innerExpr)
+        const newFuture = this.nextReg()
+        ir.push(`  ${newFuture} =l call $mog_future_new()`)
+        ir.push(`  call $mog_future_complete(l ${newFuture}, l ${capResult})`)
+        innerFuture = newFuture
+      }
+    } else {
+      // Regular async function call — evaluates to a MogFuture* (ptr)
+      innerFuture = this.generateExpression(ir, innerExpr)
+
+      // Check if this is a runtime async builtin (like async_read_line)
+      const isRuntimeAsync = innerExpr?.type === "CallExpression" &&
+        innerExpr?.callee?.type === "Identifier" &&
+        this.runtimeAsyncFunctions.has(innerExpr?.callee?.name)
+
+      if (!isRuntimeAsync) {
+        // Resume the child coroutine eagerly (runs until it suspends or completes)
+        const childHandle = this.nextReg()
+        ir.push(`  ${childHandle} =l call $mog_future_get_coro_handle(l ${innerFuture})`)
+        ir.push(`  call $mog_coro_resume(l ${childHandle})`)
+      }
+    }
+
+    // ---- SUSPEND POINT ----
+    // 1. Spill all local variables to coroutine frame
+    this.emitCoroSpill(ir, `aw${awaitIdx}`)
+
+    // 2. Store the awaited future pointer in the extra frame slot
+    const afutPtr = `%aw${awaitIdx}.afut.ptr`
+    ir.push(`  ${afutPtr} =l add ${this.coroFrame}, ${awaitedFutureOffset}`)
+    ir.push(`  storel ${innerFuture}, ${afutPtr}`)
+
+    // 3. Set state_index = awaitIdx in frame[8]
+    const statePtr = `%aw${awaitIdx}.state.ptr`
+    ir.push(`  ${statePtr} =l add ${this.coroFrame}, 8`)
+    ir.push(`  storel ${awaitIdx}, ${statePtr}`)
+
+    // 4. Call mog_await — registers frame as waiter on this future.
+    //    If the future is already ready, mog_await enqueues it for
+    //    immediate resumption by the event loop.
+    ir.push(`  call $mog_await(l ${innerFuture}, l ${this.coroFrame})`)
+
+    // 5. Suspend: gc_pop_frame and return (control goes to caller/event loop)
+    ir.push(`  call $gc_pop_frame()`)
+    ir.push(`  ret`)
+
+    // 6. Await continuation label — when the coro function is called again
+    //    with state_index == awaitIdx, the dispatch jumps here.
+    ir.push(`@await${awaitIdx}.cont`)
+
+    // 7. Load the awaited future from frame and get its result
+    const rAfutPtr = `%aw${awaitIdx}.r.afut.ptr`
+    ir.push(`  ${rAfutPtr} =l add ${this.coroFrame}, ${awaitedFutureOffset}`)
+    const rFuture = `%aw${awaitIdx}.r.future`
+    ir.push(`  ${rFuture} =l loadl ${rAfutPtr}`)
+    const resultReg = this.nextReg()
+    ir.push(`  ${resultReg} =l call $mog_future_get_result(l ${rFuture})`)
+
+    return resultReg
   }
 
   private generateSpawnExpression(ir: string[], expr: any): string {
-    // Generate the expression (typically a function call that returns a future)
-    const futurePtr = this.generateExpression(ir, expr.expression)
-    // Schedule the future on the event loop (fire-and-forget)
-    ir.push(`  call $mog_loop_enqueue_ready(l 0, l ${futurePtr})`)
-    return futurePtr
+    // spawn <async_call> — call the async function, which returns a MogFuture*.
+    // The child coroutine runs eagerly via the initial function call.
+    // We don't need to explicitly resume because the initial function
+    // already calls the coro function which runs eagerly.
+    const innerExpr = expr.argument || expr.expression
+    const futureReg = this.generateExpression(ir, innerExpr)
+    return futureReg
   }
 
   // --- Try/Catch ---
@@ -3252,6 +3633,14 @@ class QBECodeGen {
 
     // Generate all function declarations first
     const allFuncs = this.findFunctionDeclarationsRecursive(ast.statements)
+
+    // Rename user's main() to program_user to avoid conflict with C main
+    const hasMain = allFuncs.some((f: any) => f.name === "main")
+    if (hasMain) {
+      const mainFunc = allFuncs.find((f: any) => f.name === "main")
+      if (mainFunc) mainFunc.name = "program_user"
+    }
+
     for (const func of allFuncs) {
       if (func.type === "AsyncFunctionDeclaration" || func.isAsync) {
         this.generateAsyncFunctionDeclaration(this.funcSection, func)
@@ -3259,9 +3648,6 @@ class QBECodeGen {
         this.generateFunctionDeclaration(this.funcSection, func)
       }
     }
-
-    // Generate top-level statements as program() or program_user()
-    const hasMain = allFuncs.some((f: any) => f.name === "main")
     const topLevelStmts = ast.statements.filter((s: any) =>
       s.type !== "FunctionDeclaration" &&
       s.type !== "AsyncFunctionDeclaration" &&
@@ -3365,12 +3751,14 @@ class QBECodeGen {
         }
         const loopReg = this.nextReg()
         ir.push(`  ${loopReg} =l call $mog_loop_new()`)
+        ir.push(`  call $mog_loop_set_global(l ${loopReg})`)
+        ir.push(`  call $gc_push_frame()`)
         const futureReg = this.nextReg()
         ir.push(`  ${futureReg} =l call $program_user()`)
         ir.push(`  call $mog_loop_run(l ${loopReg})`)
         const resultReg = this.nextReg()
         ir.push(`  ${resultReg} =l call $mog_future_get_result(l ${futureReg})`)
-        ir.push(`  call $mog_loop_destroy(l ${loopReg})`)
+        ir.push(`  call $mog_loop_free(l ${loopReg})`)
         ir.push(`  call $gc_pop_frame()`)
         const retReg = this.nextReg()
         ir.push(`  ${retReg} =w copy 0`)

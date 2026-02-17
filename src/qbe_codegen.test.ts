@@ -132,18 +132,18 @@ describe("QBE Codegen - Binary Expressions", () => {
     expect(ir.some(line => line.includes("=l mul"))).toBe(true)
   })
 
-  test("integer division emits sdiv", () => {
+  test("integer division emits div", () => {
     const gen = new QBECodeGen()
     const ir: string[] = []
     gen.generateExpression(ir, makeIntBinExpr("/"))
-    expect(ir.some(line => line.includes("=l sdiv"))).toBe(true)
+    expect(ir.some(line => line.includes("=l div"))).toBe(true)
   })
 
-  test("integer modulo emits srem", () => {
+  test("integer modulo emits rem", () => {
     const gen = new QBECodeGen()
     const ir: string[] = []
     gen.generateExpression(ir, makeIntBinExpr("%"))
-    expect(ir.some(line => line.includes("=l srem"))).toBe(true)
+    expect(ir.some(line => line.includes("=l rem"))).toBe(true)
   })
 
   test("integer equality emits ceql and extsw", () => {
@@ -2093,7 +2093,7 @@ describe("QBE Codegen - Return Statement", () => {
     expect(gen.blockTerminated).toBe(true)
   })
 
-  test("generateReturn without value emits bare ret", () => {
+  test("generateReturn without value emits gc_pop_frame and ret 0", () => {
     const gen = new QBECodeGen() as any
     const ir: string[] = []
     const stmt = {
@@ -2101,7 +2101,7 @@ describe("QBE Codegen - Return Statement", () => {
       value: null,
     }
     gen.generateReturn(ir, stmt)
-    expect(ir).toEqual(["  ret"])
+    expect(ir).toEqual(["  call $gc_pop_frame()", "  ret 0"])
     expect(gen.blockTerminated).toBe(true)
   })
 })
@@ -2872,7 +2872,7 @@ describe("QBE Codegen - Capability Calls", () => {
 // Cast Expression Tests
 // ============================================================
 describe("QBE Codegen - Cast Expression", () => {
-  test("cast int to float generates swtof", () => {
+  test("cast int to float generates sltof", () => {
     const gen = new QBECodeGen()
     const ir: string[] = []
     const expr = {
@@ -2882,7 +2882,7 @@ describe("QBE Codegen - Cast Expression", () => {
     }
     const result = gen.generateExpression(ir, expr)
     const irStr = ir.join("\n")
-    expect(irStr).toContain("swtof")
+    expect(irStr).toContain("sltof")
     expect(result).toMatch(/^%v\.\d+$/)
   })
 
@@ -2891,7 +2891,7 @@ describe("QBE Codegen - Cast Expression", () => {
     const ir: string[] = []
     const expr = {
       type: "CastExpression",
-      value: { type: "Identifier", name: "x" },
+      value: { type: "NumberLiteral", value: 3.14, kind: "f64" },
       targetType: { name: "int" }
     }
     const result = gen.generateExpression(ir, expr)
@@ -2946,15 +2946,21 @@ describe("QBE Codegen - Async Functions", () => {
     }
     ;(gen as any).generateAsyncFunctionDeclaration(ir, stmt)
     const irStr = ir.join("\n")
-    // Should create a future
+    // Should generate the .coro coroutine function
+    expect(irStr).toContain("function $fetchData.coro(l %frame)")
+    // Should generate the wrapper function with l return type
+    expect(irStr).toContain("function l $fetchData()")
+    // Wrapper should create a future via mog_future_new
     expect(irStr).toContain("call $mog_future_new()")
-    // Should complete future with 0 (no explicit return)
-    expect(irStr).toContain("call $mog_future_complete(l %future, l 0)")
-    // Should return the future pointer
-    expect(irStr).toContain("ret %future")
-    // Should have function signature with l return type
-    expect(irStr).toContain("function l $fetchData")
-    // Should have gc frame management
+    // Wrapper should set coro frame on the future
+    expect(irStr).toContain("call $mog_future_set_coro_frame(")
+    // Wrapper should eagerly call the coro
+    expect(irStr).toContain("call $fetchData.coro(l %init.frame)")
+    // Wrapper should return the future
+    expect(irStr).toContain("ret %init.future")
+    // Coro should complete future with 0 (no explicit return)
+    expect(irStr).toContain("call $mog_future_complete(l %c.future, l 0)")
+    // Should have gc frame management in the coro
     expect(irStr).toContain("call $gc_push_frame()")
     expect(irStr).toContain("call $gc_pop_frame()")
   })
@@ -2996,9 +3002,10 @@ describe("QBE Codegen - Async Functions", () => {
     }
     ;(gen as any).generateAsyncFunctionDeclaration(ir, stmt)
     const irStr = ir.join("\n")
-    // Should complete future with the value
-    expect(irStr).toContain("call $mog_future_complete(l %future, l 42)")
-    expect(irStr).toContain("ret %future")
+    // Coro should complete future with the return value
+    expect(irStr).toContain("call $mog_future_complete(l %c.future, l 42)")
+    // Wrapper should return the future
+    expect(irStr).toContain("ret %init.future")
   })
 })
 
@@ -3015,10 +3022,12 @@ describe("QBE Codegen - Await Expression", () => {
     }
     const result = gen.generateExpression(ir, expr)
     const irStr = ir.join("\n")
-    // Should call mog_await with the future and 0 coro handle
+    // Should eagerly resume the child coroutine
+    expect(irStr).toContain("call $mog_future_get_coro_handle(")
+    expect(irStr).toContain("call $mog_coro_resume(")
+    // Should call mog_await to register suspension
     expect(irStr).toContain("call $mog_await(")
-    expect(irStr).toContain(", l 0)")
-    // Should get the result
+    // Should get the result from the awaited future
     expect(irStr).toContain("call $mog_future_get_result(")
     expect(result).toMatch(/^%v\.\d+$/)
   })
@@ -3062,11 +3071,9 @@ describe("QBE Codegen - Spawn Expression", () => {
     }
     const result = gen.generateExpression(ir, expr)
     const irStr = ir.join("\n")
-    // Should call the function
+    // Should call the async function (which runs eagerly and returns a future)
     expect(irStr).toContain("call $doWork(")
-    // Should enqueue on the event loop
-    expect(irStr).toContain("call $mog_loop_enqueue_ready(l 0,")
-    // Returns the future pointer
+    // Returns the future pointer from the eager call
     expect(result).toMatch(/^%v\.\d+$/)
   })
 
@@ -3078,9 +3085,9 @@ describe("QBE Codegen - Spawn Expression", () => {
       expression: { type: "NumberLiteral", value: 99 },
     }
     const result = gen.generateExpression(ir, expr)
-    const irStr = ir.join("\n")
-    expect(irStr).toContain("call $mog_loop_enqueue_ready(")
-    // The literal 99 is the "future" — returned as-is
+    // Spawn just evaluates the inner expression (which runs eagerly)
+    // No mog_loop_enqueue_ready — the async function wrapper handles everything
+    // The literal 99 is returned as-is
     expect(result).toBe("99")
   })
 })
