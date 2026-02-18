@@ -256,6 +256,21 @@ class QBECodeGen {
       return false
     }
     if (expr.type === "MemberExpression") {
+      // SoA transposed access: particles[i].field
+      if (expr.object?.type === "IndexExpression" && expr.object?.object?.type === "Identifier") {
+        const varType = this.variableTypes.get(expr.object.object.name)
+        if (varType instanceof SOAType || varType?.type === "SOAType") {
+          const soaType = varType as SOAType
+          const fieldName = expr.property?.name || expr.property
+          const fieldType = soaType.structType?.fields?.get(fieldName)
+          if (fieldType instanceof FloatType || fieldType?.type === "FloatType") return true
+          const structInfo = this.structDefs.get(expr.object.object.name)
+          if (structInfo) {
+            const field = structInfo.find((f: any) => f.name === fieldName)
+            if (field?.fieldType instanceof FloatType || field?.fieldType?.type === "FloatType") return true
+          }
+        }
+      }
       const objType = this.variableTypes.get(expr.object?.name)
       if (objType instanceof StructType) {
         const fields = this.structDefs.get(objType.name)
@@ -1381,7 +1396,19 @@ class QBECodeGen {
 
       // Infer and track type from initializer
       if (expr.value) {
-        if (expr.value.type === "StructLiteral") {
+        if (expr.value.type === "SoAConstructor") {
+          const structName = expr.value.name || expr.value.structName
+          const structFields = this.structDefs.get(structName)
+          if (structFields) {
+            const fieldMap = new Map<string, any>()
+            for (const f of structFields) {
+              fieldMap.set(f.name, f.fieldType)
+            }
+            const soaType = new SOAType(new StructType(structName, fieldMap), expr.value.count)
+            this.variableTypes.set(name, soaType)
+            this.structDefs.set(name, structFields)
+          }
+        } else if (expr.value.type === "StructLiteral") {
           const sn = expr.value.structName || expr.value.name
           if (sn) this.variableTypes.set(name, new StructType(sn))
         } else if (expr.value.type === "ArrayLiteral" || expr.value.type === "ArrayFill") {
@@ -1438,6 +1465,72 @@ class QBECodeGen {
 
     // Case E: Member assignment (s.field = val)
     if (expr.target?.type === "MemberExpression") {
+      // SoA transposed field write: particles[i].x = val
+      // Pattern: MemberExpression > IndexExpression > Identifier (SOAType)
+      const target = expr.target
+      if (target.object?.type === "IndexExpression" && target.object?.object?.type === "Identifier") {
+        const varName = target.object.object.name
+        const varType = this.variableTypes.get(varName)
+        if (varType instanceof SOAType || varType?.type === "SOAType") {
+          const fieldName = target.property?.name || target.property
+          const soaType = varType as SOAType
+
+          // Find field index from structDefs (keyed by variable name or struct name)
+          let fields = this.structDefs.get(varName)
+          if (!fields && soaType.structType) {
+            fields = this.structDefs.get((soaType.structType as any).name)
+          }
+          let fieldIndex = -1
+          let fieldDef: any = null
+          if (fields) {
+            fieldIndex = fields.findIndex((f: any) => f.name === fieldName)
+            if (fieldIndex >= 0) fieldDef = fields[fieldIndex]
+          }
+          // Also check SOAType's structType fields
+          if (fieldIndex < 0 && soaType.structType?.fields) {
+            let idx = 0
+            for (const [fname, ftype] of (soaType.structType as any).fields) {
+              if (fname === fieldName) {
+                fieldIndex = idx
+                fieldDef = { name: fname, fieldType: ftype }
+                break
+              }
+              idx++
+            }
+          }
+
+          if (fieldIndex >= 0) {
+            // Generate the value and index expressions
+            const val = this.generateExpression(ir, expr.value)
+            const index = this.generateExpression(ir, target.object.index)
+            // Load the SoA header pointer from the variable's stack slot
+            const slot = this.variables.get(varName)
+            const header = this.nextReg()
+            ir.push(`  ${header} =l loadl ${slot}`)
+            // Compute column pointer offset: (fieldIndex + 1) * 8
+            const colOffset = (fieldIndex + 1) * 8
+            const colAddr = this.nextReg()
+            ir.push(`  ${colAddr} =l add ${header}, ${colOffset}`)
+            // Load the column array pointer
+            const colPtr = this.nextReg()
+            ir.push(`  ${colPtr} =l loadl ${colAddr}`)
+            // Compute element address: index * 8
+            const elemOff = this.nextReg()
+            ir.push(`  ${elemOff} =l mul ${index}, 8`)
+            const elemAddr = this.nextReg()
+            ir.push(`  ${elemAddr} =l add ${colPtr}, ${elemOff}`)
+            // Store the value — use stored for float fields, storel for integer fields
+            const isFloat = fieldDef?.fieldType instanceof FloatType || fieldDef?.fieldType?.type === "FloatType"
+            if (isFloat) {
+              ir.push(`  stored ${val}, ${elemAddr}`)
+            } else {
+              ir.push(`  storel ${val}, ${elemAddr}`)
+            }
+            return val
+          }
+        }
+      }
+
       const val = this.generateExpression(ir, expr.value)
       const structPtr = this.generateExpression(ir, expr.target.object)
       const fieldName = expr.target.property
@@ -2633,6 +2726,71 @@ class QBECodeGen {
 
   // --- Member/Index (qbe-b0e) ---
   private generateMemberExpression(ir: string[], expr: any): string {
+    // SoA transposed field access: particles[i].x
+    // Pattern: MemberExpression > IndexExpression > Identifier (SOAType)
+    if (expr.type === "MemberExpression" && expr.object?.type === "IndexExpression" && expr.object?.object?.type === "Identifier") {
+      const varName = expr.object.object.name
+      const varType = this.variableTypes.get(varName)
+      if (varType instanceof SOAType || varType?.type === "SOAType") {
+        const fieldName = expr.property?.name || expr.property
+        const soaType = varType as SOAType
+
+        // Find field index from structDefs (keyed by variable name or struct name)
+        let fields = this.structDefs.get(varName)
+        if (!fields && soaType.structType) {
+          fields = this.structDefs.get((soaType.structType as any).name)
+        }
+        let fieldIndex = -1
+        let fieldDef: any = null
+        if (fields) {
+          fieldIndex = fields.findIndex((f: any) => f.name === fieldName)
+          if (fieldIndex >= 0) fieldDef = fields[fieldIndex]
+        }
+        // Also check SOAType's structType fields
+        if (fieldIndex < 0 && soaType.structType?.fields) {
+          let idx = 0
+          for (const [fname, ftype] of (soaType.structType as any).fields) {
+            if (fname === fieldName) {
+              fieldIndex = idx
+              fieldDef = { name: fname, fieldType: ftype }
+              break
+            }
+            idx++
+          }
+        }
+
+        if (fieldIndex >= 0) {
+          // Generate the index expression
+          const index = this.generateExpression(ir, expr.object.index)
+          // Load the SoA header pointer from the variable's stack slot
+          const slot = this.variables.get(varName)
+          const header = this.nextReg()
+          ir.push(`  ${header} =l loadl ${slot}`)
+          // Compute column pointer offset: (fieldIndex + 1) * 8
+          const colOffset = (fieldIndex + 1) * 8
+          const colAddr = this.nextReg()
+          ir.push(`  ${colAddr} =l add ${header}, ${colOffset}`)
+          // Load the column array pointer
+          const colPtr = this.nextReg()
+          ir.push(`  ${colPtr} =l loadl ${colAddr}`)
+          // Compute element address: index * 8
+          const elemOff = this.nextReg()
+          ir.push(`  ${elemOff} =l mul ${index}, 8`)
+          const elemAddr = this.nextReg()
+          ir.push(`  ${elemAddr} =l add ${colPtr}, ${elemOff}`)
+          // Load the value — use loadd for float fields, loadl for integer fields
+          const val = this.nextReg()
+          const isFloat = fieldDef?.fieldType instanceof FloatType || fieldDef?.fieldType?.type === "FloatType"
+          if (isFloat) {
+            ir.push(`  ${val} =d loadd ${elemAddr}`)
+          } else {
+            ir.push(`  ${val} =l loadl ${elemAddr}`)
+          }
+          return val
+        }
+      }
+    }
+
     const obj = this.generateExpression(ir, expr.object)
     const property = expr.property
 

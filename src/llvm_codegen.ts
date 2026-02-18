@@ -1,5 +1,5 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
-import { isArrayType, isMapType, isFloatType, isTensorType, IntegerType, UnsignedType, FloatType, ArrayType, StructType, SOAType, ResultType, OptionalType, FunctionType, TensorType } from "./types.js"
+import { isArrayType, isMapType, isFloatType, isTensorType, IntegerType, UnsignedType, FloatType, ArrayType, MapType, StructType, SOAType, ResultType, OptionalType, FunctionType, TensorType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -837,8 +837,13 @@ class LLVMIRGenerator {
             const funcType = (statement.value as any)?.resultType || new FunctionType([], { type: "VoidType" } as any)
             this.variableTypes.set(statement.name, funcType)
            } else if (statement.value?.type === "MapLiteral") {
-            // Register as MapType
-            this.variableTypes.set(statement.name, { type: "MapType" } as any)
+            // Register as MapType, preserving key/value types from resultType if available
+            const mapResultType = (statement.value as any)?.resultType
+            if (mapResultType?.type === "MapType" && mapResultType.keyType && mapResultType.valueType) {
+              this.variableTypes.set(statement.name, mapResultType)
+            } else {
+              this.variableTypes.set(statement.name, { type: "MapType" } as any)
+            }
           } else if (this.isStringProducingExpression(statement.value)) {
             // For inferred string types, register as StringType
             this.variableTypes.set(statement.name, { type: "StringType" } as any)
@@ -3336,8 +3341,13 @@ class LLVMIRGenerator {
             this.variableTypes.set(name, { type: "FunctionType" })
           }
          } else if (isMapExpr) {
-          // Track as map type for later map operations
-          this.variableTypes.set(name, { type: "MapType" } as any)
+          // Track as map type for later map operations, preserving key/value types if available
+          const mapResultType = value?.resultType
+          if (mapResultType?.type === "MapType" && mapResultType.keyType && mapResultType.valueType) {
+            this.variableTypes.set(name, mapResultType)
+          } else {
+            this.variableTypes.set(name, { type: "MapType" } as any)
+          }
         } else if (isStructLiteral) {
           // Track as struct type for field access
           const structName = value.name || value.structName
@@ -3549,7 +3559,19 @@ class LLVMIRGenerator {
       const key = entry.key || entry.name
       const value = entry.value || (entry.values && entry.values[0])
       if (!value) continue
-      const valueReg = this.generateExpression(ir, value)
+      let valueReg = this.generateExpression(ir, value)
+      // Float values from generateExpression are hex constants (e.g., 0x3ff8000000000000)
+      // which LLVM treats as double-type constants. For map_set's i64 parameter, we need
+      // to bitcast double -> i64 so LLVM accepts the constant.
+      const valStr = String(value.value || "")
+      const isFloatVal = (valStr.includes(".") || valStr.toLowerCase().includes("e"))
+        || value.resultType?.type === "FloatType"
+        || value.literalType?.type === "FloatType"
+      if (isFloatVal) {
+        const bitcastReg = `%${this.valueCounter++}`
+        ir.push(`  ${bitcastReg} = bitcast double ${valueReg} to i64`)
+        valueReg = bitcastReg
+      }
       // Use pre-registered map key constant from collection pass
       const keyName = this.stringNameMap.get(`__map_key_${key}`) || `@map_key_${this.stringCounter++}`
       ir.push(`  call void @map_set(ptr ${tableReg}, ptr ${keyName}, i64 ${key.length}, i64 ${valueReg})`)
@@ -3963,6 +3985,25 @@ class LLVMIRGenerator {
     // Check if the expression itself has a resultType (from analyzer)
     if (expr.resultType?.type === "ArrayType") {
       return expr.resultType.elementType
+    }
+
+    return null
+  }
+
+  private getMapValueType(expr: any): any {
+    if (!expr) return null
+
+    // If it's an identifier, look up the variable type
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType?.type === "MapType" && (varType as MapType).valueType) {
+        return (varType as MapType).valueType
+      }
+    }
+
+    // Check if the expression itself has a resultType
+    if (expr.resultType?.type === "MapType" && expr.resultType.valueType) {
+      return expr.resultType.valueType
     }
 
     return null
@@ -4682,13 +4723,22 @@ class LLVMIRGenerator {
     const valueReg = `%${valueVariable}`
     const idxReg = `%__map_idx_${this.valueCounter++}`
 
+    // Determine map value type for float-aware handling
+    const mapValueType = this.getMapValueType(mapExpr)
+    const isFloatValue = mapValueType?.type === "FloatType"
+    const valueAllocaType = isFloatValue ? "double" : "i64"
+
     // Allocate loop index, key variable, and value variable
     ir.push(`  ${idxReg} = alloca i64`)
     ir.push(`  store i64 0, ptr ${idxReg}`)
     ir.push(`  ${keyReg} = alloca i64`)
-    ir.push(`  ${valueReg} = alloca i64`)
+    ir.push(`  ${valueReg} = alloca ${valueAllocaType}`)
     this.variableTypes.set(keyVariable, { type: "PointerType" })
-    this.variableTypes.set(valueVariable, { type: "IntegerType", kind: "i64" })
+    if (isFloatValue) {
+      this.variableTypes.set(valueVariable, new FloatType("f64"))
+    } else {
+      this.variableTypes.set(valueVariable, { type: "IntegerType", kind: "i64" })
+    }
 
     // Get map size
     const sizeReg = `%${this.valueCounter++}`
@@ -4717,7 +4767,13 @@ class LLVMIRGenerator {
 
     const valResult = `%${this.valueCounter++}`
     ir.push(`  ${valResult} = call i64 @map_value_at(ptr ${mapPtr}, i64 ${currentIdx})`)
-    ir.push(`  store i64 ${valResult}, ptr ${valueReg}`)
+    if (isFloatValue) {
+      const floatVal = `%${this.valueCounter++}`
+      ir.push(`  ${floatVal} = bitcast i64 ${valResult} to double`)
+      ir.push(`  store double ${floatVal}, ptr ${valueReg}`)
+    } else {
+      ir.push(`  store i64 ${valResult}, ptr ${valueReg}`)
+    }
 
     this.generateStatement(ir, body)
     if (!this.blockTerminated) {
@@ -5954,6 +6010,27 @@ private getIntBits(type: LLVMType): number {
       }
     }
 
+    // SoA transposed access: particles[i].field where particles is SOAType
+    if (expr.type === "MemberExpression" && expr.object?.type === "IndexExpression" && expr.object?.object?.type === "Identifier") {
+      const varType = this.variableTypes.get(expr.object.object.name)
+      if (varType?.type === "SOAType") {
+        const soaType = varType as SOAType
+        const fieldName = expr.property?.name || expr.property
+        const fieldType = soaType.structType?.fields?.get(fieldName)
+        if (fieldType?.type === "FloatType") {
+          return floatKindToLLVM((fieldType as any).kind)
+        }
+        // Also check via structDefs
+        const structInfo = this.structDefs.get(expr.object.object.name) || this.structDefs.get(varType.name)
+        if (structInfo) {
+          const field = structInfo.find((f: any) => f.name === fieldName)
+          if (field?.fieldType?.type === "FloatType") {
+            return floatKindToLLVM(field.fieldType.kind)
+          }
+        }
+      }
+    }
+
     return "float" // default to float
   }
 
@@ -6033,7 +6110,9 @@ private getIntBits(type: LLVMType): number {
   }
 
   private floatToIntBits(value: number, kind: string): string {
-    // Convert float value to LLVM hex float format (e.g., 0x40091eb851eb851f for 3.14)
+    // Convert float value to LLVM hex float format (e.g., 0x40091eb851eb851f for 3.14).
+    // LLVM interprets 0x... as IEEE 754 hex bits for float types (double, float, etc.)
+    // and also accepts them for i64 in most contexts.
     switch (kind) {
       case "f32": {
         const buffer = new ArrayBuffer(4)
