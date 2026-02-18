@@ -710,6 +710,7 @@ class SemanticAnalyzer {
       table_new: { params: [{ name: "capacity", type: i64Type }], returnType: ptrType },
       table_get: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }], returnType: i64Type },
       table_set: { params: [{ name: "table", type: ptrType }, { name: "key", type: i64Type }, { name: "key_len", type: i64Type }, { name: "value", type: i64Type }], returnType: voidType },
+      map_has: { params: [{ name: "map", type: ptrType }, { name: "key", type: ptrType }, { name: "key_len", type: i64Type }], returnType: i64Type },
       map_size: { params: [{ name: "map", type: ptrType }], returnType: i64Type },
       map_key_at: { params: [{ name: "map", type: ptrType }, { name: "index", type: i64Type }], returnType: ptrType },
       map_value_at: { params: [{ name: "map", type: ptrType }, { name: "index", type: i64Type }], returnType: i64Type },
@@ -749,6 +750,7 @@ class SemanticAnalyzer {
       string_eq: { params: [{ name: "a", type: ptrType }, { name: "b", type: ptrType }], returnType: i64Type },
       flush_stdout: { params: [], returnType: voidType },
       parse_int: { params: [{ name: "s", type: ptrType }], returnType: i64Type },
+      parse_float: { params: [{ name: "s", type: ptrType }], returnType: new FloatType("f64") },
       async_read_line: { params: [], returnType: new FutureType(ptrType) },
     }
 
@@ -1873,6 +1875,11 @@ class SemanticAnalyzer {
         return leftType
       }
 
+      // Allow string concatenation: string + string
+      if (operator === "+" && isStringType(leftType) && isStringType(rightType)) {
+        return new StringType()
+      }
+
       if (!isNumericType(leftType) || !isNumericType(rightType)) {
         this.emitError(`Operator '${operator}' requires numeric types`, node.position)
         return leftType
@@ -2340,6 +2347,19 @@ class SemanticAnalyzer {
         }
       }
 
+      // Handle map method calls
+      if (objectType && isMapType(objectType)) {
+        const method = memberExpr.property
+        const args = (node as any).args ?? node.arguments
+        for (const arg of args) {
+          this.visitExpression(arg)
+        }
+        switch (method) {
+          case "has":
+            return new IntegerType("i64") // bool as i64 (0 or 1)
+        }
+      }
+
       // Handle array indexing via call syntax for string-like arrays
       if (objectType && isArrayType(objectType) && this.isStringLikeType(objectType)) {
         // Already handled above in string method section; this is a fallback for call-as-index
@@ -2593,6 +2613,11 @@ class SemanticAnalyzer {
       if (stepType && !(isIntegerType(stepType) || isUnsignedType(stepType))) {
         this.emitError(`Slice step must be integer type, got ${stepType.toString()}`, node.step.position)
       }
+    }
+
+    // Allow slicing strings - returns a string
+    if (isStringType(objectType)) {
+      return new StringType()
     }
 
     if (isArrayType(objectType)) {

@@ -2468,6 +2468,29 @@ describe("QBE Codegen - Index Expression", () => {
     expect(ir.some((line: string) => line.includes("call $map_get"))).toBe(true)
   })
 
+  test("map.has() calls map_has", () => {
+    const gen = new QBECodeGen() as any
+    gen.variables.set("m", "%m.slot")
+    gen.variableTypes.set("m", new MapType(new StringType(), new IntegerType("i64")))
+    const ir: string[] = []
+    const expr = {
+      type: "CallExpression",
+      callee: {
+        type: "MemberExpression",
+        object: { type: "Identifier", name: "m" },
+        property: "has",
+      },
+      args: [{ type: "Identifier", name: "k" }],
+    }
+    // Set up the key variable too
+    gen.variables.set("k", "%k.slot")
+    gen.variableTypes.set("k", new StringType())
+    const result = gen.generateExpression(ir, expr)
+    expect(result).toMatch(/^%v\.\d+$/)
+    expect(ir.some((line: string) => line.includes("call $map_has"))).toBe(true)
+    expect(ir.some((line: string) => line.includes("call $string_length"))).toBe(true)
+  })
+
   test("float array index uses loadd", () => {
     const gen = new QBECodeGen() as any
     gen.variables.set("arr", "%arr.slot")

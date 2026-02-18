@@ -208,3 +208,284 @@ fn main() -> int {
     expect(ir).toContain('tensor_softmax')
   })
 })
+
+describe('Math builtins', () => {
+  test('single-arg math builtins generate correct LLVM IR calls', () => {
+    const source = `
+fn main() -> int {
+  x := 1.0;
+  a := sqrt(x);
+  b := sin(x);
+  c := cos(x);
+  d := tan(x);
+  e := asin(x);
+  f := acos(x);
+  g := exp(x);
+  h := log(x);
+  i := log2(x);
+  j := floor(x);
+  k := ceil(x);
+  l := round(x);
+  m := abs(x);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@llvm.sqrt.f64')
+    expect(ir).toContain('@llvm.sin.f64')
+    expect(ir).toContain('@llvm.cos.f64')
+    expect(ir).toContain('@tan')
+    expect(ir).toContain('@asin')
+    expect(ir).toContain('@acos')
+    expect(ir).toContain('@llvm.exp.f64')
+    expect(ir).toContain('@llvm.log.f64')
+    expect(ir).toContain('@llvm.log2.f64')
+    expect(ir).toContain('@llvm.floor.f64')
+    expect(ir).toContain('@llvm.ceil.f64')
+    expect(ir).toContain('@llvm.round.f64')
+    expect(ir).toContain('@llvm.fabs.f64')
+  })
+
+  test('two-arg math builtins generate correct LLVM IR calls', () => {
+    const source = `
+fn main() -> int {
+  x := 2.0;
+  y := 3.0;
+  a := pow(x, y);
+  b := atan2(x, y);
+  c := min(x, y);
+  d := max(x, y);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@llvm.pow.f64')
+    expect(ir).toContain('@atan2')
+    expect(ir).toContain('@llvm.minnum.f64')
+    expect(ir).toContain('@llvm.maxnum.f64')
+  })
+
+  test('math library function declarations are present', () => {
+    const source = `
+fn main() -> int {
+  x := 1.0;
+  a := tan(x);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('declare double @tan(double)')
+    expect(ir).toContain('declare double @asin(double)')
+    expect(ir).toContain('declare double @acos(double)')
+    expect(ir).toContain('declare double @atan2(double, double)')
+  })
+})
+
+describe('println(str()) dispatches to println_string', () => {
+  test('str() on float generates println_string not println_i64', () => {
+    const source = `
+fn main() -> int {
+  x: float = 3.14;
+  println(str(x));
+  return 0;
+}
+`
+    const ir = getIR(source)
+    // str() returns a string (ptr), so println should dispatch to println_string
+    expect(ir).toContain('println_string')
+    expect(ir).not.toContain('call void @println_i64')
+  })
+
+  test('str() on int generates println_string', () => {
+    const source = `
+fn main() -> int {
+  x := 42;
+  println(str(x));
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('println_string')
+  })
+})
+
+describe('String slice', () => {
+  test('string slice generates string_slice call in IR', () => {
+    const source = `
+fn main() -> int {
+  s := "hello world";
+  sub := s[0:5];
+  println(sub);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@string_slice')
+  })
+
+  test('string slice end-to-end', async () => {
+    const source = `
+fn main() -> int {
+  s := "hello world";
+  sub := s[0:5];
+  println(sub);
+  return 0;
+}
+`
+    const result = await compileAndRun(source)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toBe("hello")
+  })
+
+  test('string slice with variables', async () => {
+    const source = `
+fn main() -> int {
+  s := "abcdef";
+  start := 2;
+  end := 5;
+  println(s[start:end]);
+  return 0;
+}
+`
+    const result = await compileAndRun(source)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toBe("cde")
+  })
+})
+
+describe('String concatenation with +', () => {
+  test('string + string generates string_concat call in IR', () => {
+    const source = `
+fn main() -> int {
+  a := "hello";
+  b := " world";
+  c := a + b;
+  println(c);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@string_concat')
+  })
+
+  test('string + string end-to-end', async () => {
+    const source = `
+fn main() -> int {
+  a := "hello";
+  b := " world";
+  c := a + b;
+  println(c);
+  return 0;
+}
+`
+    const result = await compileAndRun(source)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toBe("hello world")
+  })
+
+  test('string literal + literal', async () => {
+    const source = `
+fn main() -> int {
+  c := "foo" + "bar";
+  println(c);
+  return 0;
+}
+`
+    const result = await compileAndRun(source)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toBe("foobar")
+  })
+
+  test('chained string concatenation', async () => {
+    const source = `
+fn main() -> int {
+  a := "a" + "b" + "c";
+  println(a);
+  return 0;
+}
+`
+    const result = await compileAndRun(source)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toBe("abc")
+  })
+})
+
+describe('parse_int and parse_float', () => {
+  test('parse_int generates correct IR', () => {
+    const source = `
+fn main() -> int {
+  s := "42";
+  n := parse_int(s);
+  println(n);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@parse_int')
+  })
+
+  test('parse_int end-to-end', async () => {
+    const source = `
+fn main() -> int {
+  s := "123";
+  n := parse_int(s);
+  println(n);
+  return 0;
+}
+`
+    const result = await compileAndRun(source)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toBe("123")
+  })
+
+  test('parse_float generates correct IR', () => {
+    const source = `
+fn main() -> int {
+  s := "3.14";
+  f := parse_float(s);
+  println(f);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@parse_float')
+  })
+
+  test('parse_float end-to-end', async () => {
+    const source = `
+fn main() -> int {
+  s := "3.14";
+  f := parse_float(s);
+  println(f);
+  return 0;
+}
+`
+    const result = await compileAndRun(source)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toContain("3.14")
+  })
+
+  test('int_from_string returns Result', () => {
+    const source = `
+fn main() -> int {
+  r := int_from_string("456");
+  println(r);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@int_from_string')
+  })
+
+  test('float_from_string returns Result', () => {
+    const source = `
+fn main() -> int {
+  r := float_from_string("2.71");
+  println(r);
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@float_from_string')
+  })
+})

@@ -315,3 +315,121 @@ describe("Closure Integration", () => {
     expect(exitCode).toBe(15)
   })
 })
+
+// ============================================================
+// Integration tests — array.filter() and array.map()
+// ============================================================
+describe("Array filter and map integration", () => {
+  test("array.filter with inline lambda (no captures)", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [1, 2, 3, 4, 5, 6];
+    evens: [i64] = arr.filter(fn(x: i64) -> i64 { return x % 2 == 0; });
+    return evens.len();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(3)  // [2, 4, 6] -> length 3
+  })
+
+  test("array.map with inline lambda (no captures)", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [1, 2, 3];
+    doubled: [i64] = arr.map(fn(x: i64) -> i64 { return x * 2; });
+    return doubled.pop();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(6)  // last element: 3*2 = 6
+  })
+
+  test("array.filter with closure capturing variable", async () => {
+    const source = `{
+  fn main() -> i64 {
+    threshold: i64 = 3;
+    arr: [i64] = [1, 2, 3, 4, 5];
+    big: [i64] = arr.filter(fn(x: i64) -> i64 { return x > threshold; });
+    return big.len();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(2)  // [4, 5] -> length 2
+  })
+
+  test("array.map with closure capturing variable", async () => {
+    const source = `{
+  fn main() -> i64 {
+    offset: i64 = 100;
+    arr: [i64] = [1, 2, 3];
+    shifted: [i64] = arr.map(fn(x: i64) -> i64 { return x + offset; });
+    return shifted.pop();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(103)  // last element: 3+100 = 103
+  })
+
+  test("array.filter then array.map chained", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [1, 2, 3, 4, 5, 6];
+    result: [i64] = arr.filter(fn(x: i64) -> i64 { return x % 2 == 0; });
+    doubled: [i64] = result.map(fn(x: i64) -> i64 { return x * 2; });
+    return doubled.len();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(3)  // filter -> [2,4,6], map -> [4,8,12], len -> 3
+  })
+
+  test("array.filter returns empty array when nothing matches", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [1, 2, 3];
+    result: [i64] = arr.filter(fn(x: i64) -> i64 { return x > 100; });
+    return result.len();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(0)  // nothing passes -> length 0
+  })
+
+  test("array.map preserves array length", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [10, 20, 30, 40];
+    mapped: [i64] = arr.map(fn(x: i64) -> i64 { return x + 1; });
+    return mapped.len();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(4)  // same length as input
+  })
+
+  test("array.filter with named closure variable", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [1, 2, 3, 4, 5];
+    pred: fn(i64) -> i64 = fn(x: i64) -> i64 { return x >= 3; };
+    result: [i64] = arr.filter(pred);
+    return result.len();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(3)  // [3, 4, 5] -> length 3
+  })
+
+  test("array.map with named closure variable", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [5, 10, 15];
+    neg: fn(i64) -> i64 = fn(x: i64) -> i64 { return 0 - x; };
+    result: [i64] = arr.map(neg);
+    return result.len();
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(3)  // same length
+  })
+})

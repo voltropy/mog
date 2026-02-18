@@ -863,6 +863,66 @@ describe("LLVM IR Generator", () => {
     })
   })
 
+  describe("Map Method Expressions", () => {
+    test("generates map.has() with string literal key", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "m",
+            varType: map(String, i64),
+            value: null,
+          },
+          {
+            type: "ExpressionStatement",
+            expression: {
+              type: "CallExpression",
+              callee: {
+                type: "MemberExpression",
+                object: { type: "Identifier", name: "m" },
+                property: "has",
+              },
+              args: [{ type: "StringLiteral", value: "hello" }],
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("map_has")
+      expect(ir).toContain("hello")
+    })
+
+    test("generates map.has() with variable key", () => {
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "m",
+            varType: map(String, i64),
+            value: null,
+          },
+          {
+            type: "ExpressionStatement",
+            expression: {
+              type: "CallExpression",
+              callee: {
+                type: "MemberExpression",
+                object: { type: "Identifier", name: "m" },
+                property: "has",
+              },
+              args: [{ type: "Identifier", name: "key" }],
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("map_has")
+      expect(ir).toContain("string_length")
+    })
+  })
+
   describe("Complex Expressions", () => {
     test("handles nested binary expressions", () => {
       const ast = {

@@ -696,6 +696,15 @@ class QBECodeGen {
       }
     }
 
+    // --- String concatenation ---
+    if (op === "+" && (this.isStringProducingExpression(expr.left) || this.isStringProducingExpression(expr.right))) {
+      const left = this.generateExpression(ir, expr.left)
+      const right = this.generateExpression(ir, expr.right)
+      const r = this.nextReg()
+      ir.push(`  ${r} =l call $string_concat(l ${left}, l ${right})`)
+      return r
+    }
+
     // Generate operands
     let left = this.generateExpression(ir, expr.left)
     let right = this.generateExpression(ir, expr.right)
@@ -1125,6 +1134,34 @@ class QBECodeGen {
         if (method === "len") {
           const r = this.nextReg()
           ir.push(`  ${r} =l call $array_len(l ${objReg})`)
+          return r
+        }
+        if (method === "filter" || method === "map") {
+          // The closure argument is a 16-byte struct: {fn_ptr, env_ptr}
+          const closureReg = argRegs[0]
+          // Extract fn_ptr from closure[0]
+          const fnPtr = this.nextReg()
+          ir.push(`  ${fnPtr} =l loadl ${closureReg}`)
+          // Extract env_ptr from closure[8]
+          const envOff = this.nextReg()
+          ir.push(`  ${envOff} =l add ${closureReg}, 8`)
+          const envPtr = this.nextReg()
+          ir.push(`  ${envPtr} =l loadl ${envOff}`)
+          const r = this.nextReg()
+          const rtName = method === "filter" ? "array_filter" : "array_map"
+          ir.push(`  ${r} =l call $${rtName}(l ${objReg}, l ${fnPtr}, l ${envPtr})`)
+          return r
+        }
+      }
+
+      // --- Map methods ---
+      if (objType instanceof MapType || this.isMapExpression(obj)) {
+        if (method === "has") {
+          const keyReg = argRegs[0]
+          const lenReg = this.nextReg()
+          ir.push(`  ${lenReg} =l call $string_length(l ${keyReg})`)
+          const r = this.nextReg()
+          ir.push(`  ${r} =l call $map_has(l ${objReg}, l ${keyReg}, l ${lenReg})`)
           return r
         }
       }
@@ -2719,6 +2756,19 @@ class QBECodeGen {
   private generateSliceExpression(ir: string[], expr: any): string {
     // Generate the source array
     const obj = this.generateExpression(ir, expr.object)
+
+    // Check if this is a string slice - delegate to runtime
+    if (this.isStringProducingExpression(expr.object)) {
+      const start = expr.start
+        ? this.generateExpression(ir, expr.start)
+        : "0"
+      const end = expr.end
+        ? this.generateExpression(ir, expr.end)
+        : (() => { const r = this.nextReg(); ir.push(`  ${r} =l call $string_length(l ${obj})`); return r })()
+      const r = this.nextReg()
+      ir.push(`  ${r} =l call $string_slice(l ${obj}, l ${start}, l ${end})`)
+      return r
+    }
 
     // Load length from offset 0
     const srcLen = this.nextReg()

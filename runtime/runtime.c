@@ -961,6 +961,80 @@ const char* array_join(void* array_ptr, const char* separator) {
   return result;
 }
 
+/* --- Array filter & map (closure-based) --- */
+
+/*
+ * Mog closure calling convention: fn(env_ptr, element)
+ * The env pointer is always the FIRST argument.
+ */
+void* array_filter(void* array_ptr, int64_t (*fn)(int64_t, int64_t), int64_t env) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0) {
+    uint64_t dims[1] = {0};
+    return array_alloc(8, 1, dims);
+  }
+
+  uint64_t len = arr->dimensions[0];
+  uint64_t elem_size = arr->element_size;
+
+  /* First pass: call predicate and record which elements pass */
+  uint8_t* keep = (uint8_t*)gc_alloc(len);
+  uint64_t keep_count = 0;
+  uint8_t* data = (uint8_t*)arr->data;
+  for (uint64_t i = 0; i < len; i++) {
+    uint64_t elem = *(uint64_t*)(data + i * elem_size);
+    int64_t result = fn(env, (int64_t)elem);
+    if (result) {
+      keep[i] = 1;
+      keep_count++;
+    } else {
+      keep[i] = 0;
+    }
+  }
+
+  /* Allocate result array */
+  uint64_t dims[1] = {keep_count};
+  Array* result = (Array*)array_alloc(elem_size, 1, dims);
+  uint8_t* dst = (uint8_t*)result->data;
+
+  /* Second pass: copy kept elements */
+  uint64_t j = 0;
+  for (uint64_t i = 0; i < len; i++) {
+    if (keep[i]) {
+      memcpy(dst + j * elem_size, data + i * elem_size, elem_size);
+      j++;
+    }
+  }
+
+  return result;
+}
+
+void* array_map(void* array_ptr, int64_t (*fn)(int64_t, int64_t), int64_t env) {
+  Array* arr = (Array*)array_ptr;
+  if (!arr || arr->dimension_count == 0) {
+    uint64_t dims[1] = {0};
+    return array_alloc(8, 1, dims);
+  }
+
+  uint64_t len = arr->dimensions[0];
+  uint64_t elem_size = arr->element_size;
+
+  /* Allocate result array with same length */
+  uint64_t dims[1] = {len};
+  Array* result = (Array*)array_alloc(elem_size, 1, dims);
+
+  uint8_t* src_data = (uint8_t*)arr->data;
+  uint8_t* dst_data = (uint8_t*)result->data;
+
+  for (uint64_t i = 0; i < len; i++) {
+    uint64_t elem = *(uint64_t*)(src_data + i * elem_size);
+    int64_t mapped = fn(env, (int64_t)elem);
+    *(int64_t*)(dst_data + i * elem_size) = mapped;
+  }
+
+  return result;
+}
+
 /* --- Map Implementation --- */
 /* MapEntry and Map structs defined above for tracing */
 
@@ -993,6 +1067,21 @@ uint64_t map_get(void* map_ptr, const char* key, uint64_t key_len) {
   while (entry) {
     if (entry->key_len == key_len && memcmp(entry->key, key, key_len) == 0) {
       return entry->value;
+    }
+    entry = entry->next;
+  }
+
+  return 0;
+}
+
+uint64_t map_has(void* map_ptr, const char* key, uint64_t key_len) {
+  Map* map = (Map*)map_ptr;
+  uint64_t hash = map_hash(key, key_len) % map->capacity;
+
+  MapEntry* entry = map->buckets[hash];
+  while (entry) {
+    if (entry->key_len == key_len && memcmp(entry->key, key, key_len) == 0) {
+      return 1;
     }
     entry = entry->next;
   }
@@ -1994,4 +2083,13 @@ int64_t parse_int(const char* s) {
   long long val = strtoll(s, &end, 10);
   if (end == s) return 0;  /* no digits parsed */
   return (int64_t)val;
+}
+
+/* Parse a float from a string. Returns the parsed value, or 0.0 on failure. */
+double parse_float(const char* s) {
+  if (s == NULL || s[0] == '\0') return 0.0;
+  char* end;
+  double val = strtod(s, &end);
+  if (end == s) return 0.0;  /* no digits parsed */
+  return val;
 }

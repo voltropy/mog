@@ -445,15 +445,15 @@ The core language is fully implemented and tested. The main gaps are in the tens
 | **Async** | `async fn`, `await`, `spawn`, `all()`, `race()`, coroutine-based with host event loop (LLVM + QBE backends) |
 | **Control flow** | `if`/`else`/`elif`, if-as-expression, `while`, `for i in 0..N`, `for item in array`, `for i, item in array`, `for key, value in map`, `break`, `continue`, `match` with literal/variant/wildcard patterns |
 | **Error handling** | `Result<T>` with `ok`/`err`, `?` propagation, `try`/`catch`, `match` on Result/Optional |
-| **Composite types** | Arrays (`.push`, `.pop`, `.len`, `.contains`, `.sort`, `.reverse`, `.slice`, `.join()`), Maps (create, get, set, iterate), Structs (declare, construct, field access/mutation), SoA (`soa Struct[N]` with AoS syntax) |
-| **Strings** | UTF-8 literals, f-string interpolation, `.len`, `.upper()`, `.lower()`, `.trim()`, `.split()`, `.contains()`, `.starts_with()`, `.ends_with()`, `.replace()`, `str()` conversion |
-| **Math builtins** | `sqrt`, `sin`, `cos`, `tan`, `exp`, `log`, `floor`, `ceil`, `PI`, `E` |
+| **Composite types** | Arrays (`.push`, `.pop`, `.len`, `.contains`, `.sort`, `.reverse`, `.slice`, `.join()`, `.filter()`, `.map()`), Maps (create, get, set, iterate, `.has()`), Structs (declare, construct, field access/mutation), SoA (`soa Struct[N]` with AoS syntax) |
+| **Strings** | UTF-8 literals, f-string interpolation, `.len`, `.upper()`, `.lower()`, `.trim()`, `.split()`, `.contains()`, `.starts_with()`, `.ends_with()`, `.replace()`, `str()` conversion, `s[start:end]` slice syntax, `+` operator concatenation, `parse_float()` |
+| **Math builtins** | `sqrt`, `sin`, `cos`, `tan`, `exp`, `log`, `floor`, `ceil`, `abs`, `pow`, `asin`, `acos`, `atan2`, `log2`, `round`, `min`, `max`, `PI`, `E` |
 | **Host capabilities** | `requires`/`optional` declarations, `.mogdecl` files, C API for registration, `fs` (read/write/append/exists/remove/size), `process` (sleep/getenv/cwd/exit/timestamp), `env` (custom host functions, including async) |
 | **Module system** | `package`, `import`, `pub`, `mog.mod`, name mangling, circular import detection |
 | **Tensors** | Creation from literals, `.zeros()`, `.ones()`, `.randn()`, `+`, `-`, `*`, `matmul`, `.sum()`, `.mean()`, `.reshape()`, `.transpose()`, `.shape`, `.ndim`, `relu`, `sigmoid`, `tanh`, `softmax` |
 | **Scoped contexts** | `with no_grad() { ... }` for disabling gradient tracking |
 | **Match exhaustiveness** | Warnings for non-exhaustive `match` on `Result<T>` and `?T` types |
-| **Backends** | LLVM IR backend (full optimization), QBE lightweight backend (~2x faster compile than LLVM -O1) |
+| **Backends** | LLVM IR backend (full optimization), QBE lightweight backend (~2x faster compile than LLVM -O1), f64 codegen with proper `str()`/`println` dispatch |
 | **Runtime** | Mark-and-sweep GC, `select()`-based async event loop with fd watchers and timers |
 | **Safety** | Cooperative interrupt polling at loop back-edges, `mog_request_interrupt()` host API, `mog_arm_timeout(ms)` for CPU time limits, automatic timeout via `MogLimits.max_cpu_ms` |
 | **Operators** | Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison, logical (`and`, `or`, `not`), bitwise (`&`, `\|`, `^`, `~`, `<<`, `>>`), `?` propagation, `..` range, `as` cast |
@@ -467,12 +467,10 @@ The core language is fully implemented and tested. The main gaps are in the tens
 | **Tensor reduction** | `.sum()`, `.mean()` | `.max()`, `.min()`, `.argmax()`, `.argmin()`, `.prod()`, `.any()`, `.all()`, dim-based variants |
 | **Tensor elementwise** | `+`, `-`, `*` | `/`, `**`, comparison (bool tensor), `abs`, `neg`, `exp`, `log`, `sqrt`, `clamp`, trig on tensors |
 | **Tensor linear algebra** | `matmul()`, `dot()` | `norm()`, `cross()` |
-| **Math builtins** | Core set above | `abs()`, `pow()`, `asin()`, `acos()`, `atan2()`, `log2()`, `round()`, `min()`, `max()` |
-| **String ops** | All methods above | `s[start:end]` slice syntax, `int("42")` / `float("3.14")` parse functions |
 | **Named args** | Parser support | Default parameter values in codegen |
-| **Array methods** | `.push`, `.pop`, `.len`, `.contains`, `.sort`, `.reverse`, `.slice`, `.join()` | `.filter()`, `.map()` (higher-order) |
-| **Map ops** | Create, get, set, iterate | `.has()` key existence check |
-| **String `+`** | Works via `string_concat()` | `+` operator overload for string concatenation |
+| **f64 struct fields** | Basic codegen, `str()` dispatch | `for-in` loop iteration over structs with f64 fields (some cases) |
+| **SoA with f64** | Basic SoA layout | SoA structs containing f64 fields |
+| **`?` in try blocks** | `?` propagation, `try`/`catch` | `?` used inside `try` block bodies |
 
 ### Not Yet Implemented
 
@@ -483,6 +481,7 @@ The core language is fully implemented and tested. The main gaps are in the tens
 | **Tensor dtype conversion** | `t.to(f16)`, `t.to(f32)`, `t.to(i32)` |
 | **Tensor advanced indexing** | `matrix[0, :]`, `volume[:, 0:10, :]` multi-dim slice syntax |
 | **Implicit widening** | `i32` → `int`, `f32` → `float` automatic promotion |
+| **Generics** | Out of scope per spec — Mog uses concrete types and type aliases instead |
 | **`http`, `model`, `log`, `db` capabilities** | Reference host implementations (the capability system itself works — hosts can register any capability) |
 
 ## Future Work
@@ -511,7 +510,7 @@ The tensor system has basic operations but no gradient tracking. Implementing `.
 bun test
 ```
 
-1275 tests passing across 30 test files.
+1307 tests passing across 30 test files.
 
 ## Architecture
 

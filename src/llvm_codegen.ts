@@ -522,12 +522,15 @@ class LLVMIRGenerator {
     ir.push("declare void @array_sort(ptr %array)")
     ir.push("declare void @array_reverse(ptr %array)")
     ir.push("declare ptr @array_join(ptr %array, ptr %separator)")
+    ir.push("declare ptr @array_filter(ptr %array, ptr %fn, i64 %env)")
+    ir.push("declare ptr @array_map(ptr %array, ptr %fn, i64 %env)")
     ir.push("")
 
     ir.push("; Declare map functions")
     ir.push("declare ptr @map_new(i64 %initial_capacity)")
     ir.push("declare i64 @map_get(ptr %map, ptr %key, i64 %key_len)")
     ir.push("declare void @map_set(ptr %map, ptr %key, i64 %key_len, i64 %value)")
+    ir.push("declare i64 @map_has(ptr %map, ptr %key, i64 %key_len)")
     ir.push("declare i64 @map_size(ptr %map)")
     ir.push("declare ptr @map_key_at(ptr %map, i64 %index)")
     ir.push("declare i64 @map_value_at(ptr %map, i64 %index)")
@@ -614,6 +617,7 @@ class LLVMIRGenerator {
     ir.push("declare i64 @string_eq(ptr %a, ptr %b)")
     ir.push("declare void @flush_stdout()")
     ir.push("declare i64 @parse_int(ptr %s)")
+    ir.push("declare double @parse_float(ptr %s)")
     ir.push("")
   }
 
@@ -1412,6 +1416,13 @@ class LLVMIRGenerator {
       return this.generatePointerArithmetic(ir, expr, left, right)
     }
 
+    // Handle string concatenation: string + string
+    if (expr.operator === "+" && (this.isStringType(expr.left) || this.isStringType(expr.right))) {
+      const concatReg = `%${this.valueCounter++}`
+      ir.push(`  ${concatReg} = call ptr @string_concat(ptr ${left}, ptr ${right})`)
+      return concatReg
+    }
+
     const opMap: Record<string, string[]> = {
       "+": ["add i64", "fadd"],
       "-": ["sub i64", "fsub"],
@@ -2010,8 +2021,9 @@ class LLVMIRGenerator {
         map_new: { params: ["i64"], ret: "ptr" },
         map_get: { params: ["ptr", "ptr", "i64"], ret: "i64" },
         map_set: { params: ["ptr", "ptr", "i64", "i64"], ret: "void" },
-        map_size: { params: ["ptr"], ret: "i64" },
-        map_key_at: { params: ["ptr", "i64"], ret: "ptr" },
+    map_has: { params: ["ptr", "ptr", "i64"], ret: "i64" },
+    map_size: { params: ["ptr"], ret: "i64" },
+    map_key_at: { params: ["ptr", "i64"], ret: "ptr" },
         map_value_at: { params: ["ptr", "i64"], ret: "i64" },
         string_length: { params: ["ptr"], ret: "i64" },
         string_concat: { params: ["ptr", "ptr"], ret: "ptr" },
@@ -2034,6 +2046,7 @@ class LLVMIRGenerator {
         string_eq: { params: ["ptr", "ptr"], ret: "i64" },
         flush_stdout: { params: [], ret: "void" },
         parse_int: { params: ["ptr"], ret: "i64" },
+        parse_float: { params: ["ptr"], ret: "double" },
         async_read_line: { params: [], ret: "ptr" },
       }
 
@@ -2228,6 +2241,64 @@ class LLVMIRGenerator {
           case "len": {
             const reg = `%${this.valueCounter++}`
             ir.push(`  ${reg} = call i64 @array_length(ptr ${arrReg})`)
+            return reg
+          }
+          case "filter":
+          case "map": {
+            // The closure argument is a 16-byte struct: {fn_ptr, env_ptr}
+            const closureReg = this.generateExpression(ir, callArgs[0])
+            // Extract fn_ptr from closure[0]
+            const fnPtr = `%${this.valueCounter++}`
+            ir.push(`  ${fnPtr} = load ptr, ptr ${closureReg}`)
+            // Extract env_ptr from closure[8]
+            const envSlot = `%${this.valueCounter++}`
+            ir.push(`  ${envSlot} = getelementptr i8, ptr ${closureReg}, i64 8`)
+            const envPtr = `%${this.valueCounter++}`
+            ir.push(`  ${envPtr} = load ptr, ptr ${envSlot}`)
+            // Cast env_ptr to i64 for the C runtime call
+            const envI64 = `%${this.valueCounter++}`
+            ir.push(`  ${envI64} = ptrtoint ptr ${envPtr} to i64`)
+            const reg = `%${this.valueCounter++}`
+            const rtName = method === "filter" ? "array_filter" : "array_map"
+            ir.push(`  ${reg} = call ptr @${rtName}(ptr ${arrReg}, ptr ${fnPtr}, i64 ${envI64})`)
+            return reg
+          }
+        }
+      }
+
+      // Handle map method calls (e.g., m.has(key))
+      if (this.isMapType(memberExpr.object)) {
+        const mapReg = this.generateExpression(ir, memberExpr.object)
+        const method = memberExpr.property
+        const callArgs = expr.args || expr.arguments || []
+
+        switch (method) {
+          case "has": {
+            const keyArg = callArgs[0]
+            let keyPtr: string
+            let keyLen: string
+
+            if (keyArg.type === "StringLiteral") {
+              const { escaped, byteLength } = this.escapeStringForLLVM(keyArg.value)
+              keyPtr = `@key_str_${this.stringCounter++}`
+              const strDef = `${keyPtr} = private unnamed_addr constant [${byteLength + 1} x i8] c"${escaped}\\00"`
+              this.stringConstants.push(strDef)
+              keyLen = String(byteLength)
+            } else if (keyArg.type === "IntegerLiteral" || keyArg.type === "NumberLiteral") {
+              const keyVal = this.generateExpression(ir, keyArg)
+              keyPtr = `%${this.valueCounter++}`
+              ir.push(`  ${keyPtr} = alloca i64`)
+              ir.push(`  store i64 ${keyVal}, ptr ${keyPtr}`)
+              keyLen = "8"
+            } else {
+              keyPtr = this.generateExpression(ir, keyArg)
+              const lenReg = `%${this.valueCounter++}`
+              ir.push(`  ${lenReg} = call i64 @string_length(ptr ${keyPtr})`)
+              keyLen = lenReg
+            }
+
+            const reg = `%${this.valueCounter++}`
+            ir.push(`  ${reg} = call i64 @map_has(ptr ${mapReg}, ptr ${keyPtr}, i64 ${keyLen})`)
             return reg
           }
         }
@@ -2906,6 +2977,10 @@ class LLVMIRGenerator {
     if (!argType && this.isStringType(arg)) {
       argType = "StringType"
     }
+    // Check if it's a call to a string-producing function (e.g., str(), i64_to_string())
+    if (!argType && this.isStringProducingExpression(arg)) {
+      argType = "StringType"
+    }
     argType = argType || "IntegerType"
 
     // Force ptr type for direct print_string/println_string calls
@@ -3489,7 +3564,7 @@ class LLVMIRGenerator {
     const structFields = this.structDefs.get(structName)
 
     if (!structFields || structFields.length === 0) {
-      // Fallback: allocate based on literal fields, all i64
+      // Fallback: allocate based on literal fields, detect types where possible
       const numFields = expr.fields?.length || 0
       const structReg = `%${this.valueCounter++}`
       ir.push(`  ${structReg} = call ptr @gc_alloc(i64 ${numFields * 8})`)
@@ -3499,7 +3574,13 @@ class LLVMIRGenerator {
         if (valueReg) {
           const fieldPtr = `%${this.valueCounter++}`
           ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${structReg}, i64 ${i * 8}`)
-          ir.push(`  store i64 ${valueReg}, ptr ${fieldPtr}`)
+          // Detect float values to use correct store type
+          const isFloat = field.value?.type === "FloatLiteral" || this.isFloatOperand(field.value)
+          if (isFloat) {
+            ir.push(`  store double ${valueReg}, ptr ${fieldPtr}`)
+          } else {
+            ir.push(`  store i64 ${valueReg}, ptr ${fieldPtr}`)
+          }
         }
       }
       return structReg
@@ -3923,6 +4004,19 @@ class LLVMIRGenerator {
       const varType = this.variableTypes.get(expr.name)
       if (varType?.type === "StringType") return true
     }
+    // Binary + on strings (string concatenation)
+    if (expr.type === "BinaryExpression" && expr.operator === "+" &&
+        (this.isStringType(expr.left) || this.isStringType(expr.right))) {
+      return true
+    }
+    // Slice expression on strings
+    if (expr.type === "SliceExpression" && this.isStringType(expr.object)) {
+      return true
+    }
+    // Check analyzer result type
+    if (expr.resultType?.type === "StringType") {
+      return true
+    }
     return false
   }
 
@@ -3960,6 +4054,22 @@ class LLVMIRGenerator {
       if (stringMethods.includes(method) && method !== "split") {
         return this.isStringType(expr.callee.object)
       }
+    }
+
+    // Check if it's a call to a string-producing function (e.g., str(), i64_to_string())
+    if (expr.type === "CallExpression" && this.isStringProducingExpression(expr)) {
+      return true
+    }
+
+    // Check if it's a binary + expression with string operands (string concatenation)
+    if (expr.type === "BinaryExpression" && expr.operator === "+" &&
+        (this.isStringType(expr.left) || this.isStringType(expr.right))) {
+      return true
+    }
+
+    // Check analyzer result type
+    if (expr.resultType?.type === "StringType") {
+      return true
     }
 
     return false
@@ -4484,16 +4594,25 @@ class LLVMIRGenerator {
     const indexReg = `%${indexVariable}`
     const valueReg = `%${valueVariable}`
 
+    // Determine element type from array type info
+    const elemType = this.getArrayElementType(iterable)
+    const isFloatElem = elemType?.type === "FloatType"
+    const allocaType = isFloatElem ? "double" : "i64"
+
     // Allocate index variable and value variable (only if not already declared)
     if (!this.variableTypes.has(indexVariable)) {
       ir.push(`  ${indexReg} = alloca i64`)
     }
     ir.push(`  store i64 0, ptr ${indexReg}`)
     if (!this.variableTypes.has(valueVariable)) {
-      ir.push(`  ${valueReg} = alloca i64`)
+      ir.push(`  ${valueReg} = alloca ${allocaType}`)
     }
     this.variableTypes.set(indexVariable, { type: "IntegerType", kind: "i64" })
-    this.variableTypes.set(valueVariable, { type: "IntegerType", kind: "i64" })
+    if (isFloatElem) {
+      this.variableTypes.set(valueVariable, new FloatType("f64"))
+    } else {
+      this.variableTypes.set(valueVariable, { type: "IntegerType", kind: "i64" })
+    }
 
     // Get array length
     const lengthReg = `%${this.valueCounter++}`
@@ -4515,7 +4634,14 @@ class LLVMIRGenerator {
     ir.push(`${bodyLabel}:`)
     const elemValue = `%${this.valueCounter++}`
     ir.push(`  ${elemValue} = call i64 @array_get(ptr ${arrayPtr}, i64 ${currentIndex})`)
-    ir.push(`  store i64 ${elemValue}, ptr ${valueReg}`)
+    if (isFloatElem) {
+      // Bitcast i64 to double for f64 array elements
+      const floatVal = `%${this.valueCounter++}`
+      ir.push(`  ${floatVal} = bitcast i64 ${elemValue} to double`)
+      ir.push(`  store double ${floatVal}, ptr ${valueReg}`)
+    } else {
+      ir.push(`  store i64 ${elemValue}, ptr ${valueReg}`)
+    }
     this.generateStatement(ir, body)
     if (!this.blockTerminated) {
       ir.push(`  br label %${incLabel}`)

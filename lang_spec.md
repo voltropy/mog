@@ -123,7 +123,7 @@ indices := tensor<i32>([1000]);          // integer indices
 image := tensor<u8>([3, 224, 224]);      // byte image data
 ```
 
-Widening conversions are implicit (i32 -> int, f32 -> float). Narrowing requires explicit `as` cast.
+Narrowing requires explicit `as` cast.
 
 ### Composite Types
 

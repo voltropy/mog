@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { generateLLVMIR } from "./llvm_codegen"
-import { i64, array } from "./types"
+import { i64, array, FunctionType } from "./types"
 
 /**
  * Tests for Phase 7: Array Methods
@@ -180,6 +180,137 @@ describe("Array Methods - LLVM IR Generation", () => {
     })
   })
 
+  describe(".filter(closure)", () => {
+    test("generates call to array_filter with closure fn and env", () => {
+      const closureType = new FunctionType([i64], i64)
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "arr",
+            varType: array(i64, 1),
+            value: {
+              type: "ArrayLiteral",
+              elements: [
+                { type: "NumberLiteral", value: "1", literalType: i64 },
+                { type: "NumberLiteral", value: "2", literalType: i64 },
+                { type: "NumberLiteral", value: "3", literalType: i64 },
+              ],
+            },
+          },
+          {
+            type: "VariableDeclaration",
+            name: "pred",
+            varType: closureType,
+            value: {
+              type: "Lambda",
+              params: [{ name: "x", paramType: i64 }],
+              returnType: i64,
+              body: {
+                type: "Block",
+                statements: [
+                  {
+                    type: "ReturnStatement",
+                    value: { type: "NumberLiteral", value: "1", literalType: i64 },
+                  },
+                ],
+              },
+              capturedVars: [],
+              capturedVarTypes: {},
+            },
+          },
+          {
+            type: "VariableDeclaration",
+            name: "result",
+            varType: array(i64, 1),
+            value: {
+              type: "CallExpression",
+              callee: {
+                type: "MemberExpression",
+                object: { type: "Identifier", name: "arr" },
+                property: "filter",
+              },
+              args: [{ type: "Identifier", name: "pred" }],
+              arguments: [{ type: "Identifier", name: "pred" }],
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("@array_filter")
+      expect(ir).toContain("call ptr @array_filter(ptr")
+    })
+  })
+
+  describe(".map(closure)", () => {
+    test("generates call to array_map with closure fn and env", () => {
+      const closureType = new FunctionType([i64], i64)
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "arr",
+            varType: array(i64, 1),
+            value: {
+              type: "ArrayLiteral",
+              elements: [
+                { type: "NumberLiteral", value: "1", literalType: i64 },
+                { type: "NumberLiteral", value: "2", literalType: i64 },
+                { type: "NumberLiteral", value: "3", literalType: i64 },
+              ],
+            },
+          },
+          {
+            type: "VariableDeclaration",
+            name: "transform",
+            varType: closureType,
+            value: {
+              type: "Lambda",
+              params: [{ name: "x", paramType: i64 }],
+              returnType: i64,
+              body: {
+                type: "Block",
+                statements: [
+                  {
+                    type: "ReturnStatement",
+                    value: {
+                      type: "BinaryExpression",
+                      operator: "*",
+                      left: { type: "Identifier", name: "x" },
+                      right: { type: "NumberLiteral", value: "2", literalType: i64 },
+                    },
+                  },
+                ],
+              },
+              capturedVars: [],
+              capturedVarTypes: {},
+            },
+          },
+          {
+            type: "VariableDeclaration",
+            name: "result",
+            varType: array(i64, 1),
+            value: {
+              type: "CallExpression",
+              callee: {
+                type: "MemberExpression",
+                object: { type: "Identifier", name: "arr" },
+                property: "map",
+              },
+              args: [{ type: "Identifier", name: "transform" }],
+              arguments: [{ type: "Identifier", name: "transform" }],
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("@array_map")
+      expect(ir).toContain("call ptr @array_map(ptr")
+    })
+  })
+
   describe("LLVM IR declarations", () => {
     test("declares all array method runtime functions", () => {
       const ast = { type: "Program", statements: [] }
@@ -189,6 +320,8 @@ describe("Array Methods - LLVM IR Generation", () => {
       expect(ir).toContain("declare i64 @array_contains(ptr %array, i64 %value)")
       expect(ir).toContain("declare void @array_sort(ptr %array)")
       expect(ir).toContain("declare void @array_reverse(ptr %array)")
+      expect(ir).toContain("declare ptr @array_filter(ptr %array, ptr %fn, i64 %env)")
+      expect(ir).toContain("declare ptr @array_map(ptr %array, ptr %fn, i64 %env)")
     })
   })
 
