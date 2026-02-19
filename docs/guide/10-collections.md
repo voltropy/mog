@@ -243,7 +243,7 @@ Return a new array containing only elements that pass a test:
 fn main() -> int {
   numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-  evens := numbers.filter(fn(n: int) -> bool { n % 2 == 0 });
+  evens := numbers.filter(fn(n: int) -> bool { (n % 2) == 0 });
   println(evens);  // [2, 4, 6, 8, 10]
 
   big := numbers.filter(fn(n: int) -> bool { n > 5 });
@@ -330,7 +330,7 @@ fn main() -> int {
 
   // Get the squares of even numbers
   result := numbers
-    .filter(fn(n: int) -> bool { n % 2 == 0 })
+    .filter(fn(n: int) -> bool { (n % 2) == 0 })
     .map(fn(n: int) -> int { n * n });
   println(result);  // [4, 16, 36, 64, 100]
   return 0;
@@ -670,13 +670,13 @@ struct Particle {
 fn step(particles: soa Particle, count: int, dt: float) {
   // Apply gravity — only touches vy array
   for i in 0..count {
-    particles[i].vy = particles[i].vy - 9.8 * dt;
+    particles[i].vy = particles[i].vy - (9.8 * dt);
   }
 
   // Update positions — touches x, y, vx, vy arrays
   for i in 0..count {
-    particles[i].x = particles[i].x + particles[i].vx * dt;
-    particles[i].y = particles[i].y + particles[i].vy * dt;
+    particles[i].x = particles[i].x + (particles[i].vx * dt);
+    particles[i].y = particles[i].y + (particles[i].vy * dt);
   }
 }
 
@@ -746,7 +746,7 @@ fn main() -> int {
 
   for i in 0..100 {
     data[i].id = i;
-    data[i].value = i * 7 % 50;
+    data[i].value = (i * 7) % 50;
     data[i].category = i % 3;
   }
 

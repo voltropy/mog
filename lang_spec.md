@@ -19,7 +19,7 @@ Mog is a small, statically-typed, embeddable language for LLM agent scripting an
 
 1. **Small surface area.** The entire language should fit in an LLM's context window. Every feature must justify its existence. When in doubt, leave it out.
 
-2. **Predictable semantics.** No implicit coercion surprises, no operator precedence puzzles, no hidden control flow. Code reads top-to-bottom, left-to-right.
+2. **Predictable semantics.** No implicit coercion surprises, no operator precedence (all binary operators are flat — parentheses required when mixing), no hidden control flow. Code reads top-to-bottom, left-to-right.
 
 3. **Familiar syntax.** Curly braces, `fn`, `->`, `:=`. Blend of Rust/Go/TypeScript that LLMs already generate fluently. No novel syntax without strong justification.
 
@@ -381,10 +381,63 @@ for key, value in config {
 
 ```mog
 for i in 0..100 {
-  if i % 2 == 0 { continue; }
+  if (i % 2) == 0 { continue; }
   if i > 50 { break; }
   print(i);
 }
+```
+
+## Operators
+
+Mog has **no operator precedence**. Every expression reads exactly as it evaluates. This eliminates an entire class of bugs where programmers misremember precedence tables or readers misparse intent.
+
+### Flat Operator Rules
+
+All binary operators sit at the same level. There is no precedence hierarchy. Instead, two simple rules govern how operators may be combined:
+
+1. **Associative operators** — `+`, `*`, `and`/`&&`, `or`/`||`, `&`, `|` — can chain with themselves:
+
+```mog
+a + b + c          // OK: + is associative
+x && y && z        // OK: && is associative
+a * b * c * d      // OK: * is associative
+```
+
+2. **Non-associative operators** — `-`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `<<`, `>>`, `^` — cannot chain:
+
+```mog
+a - b - c          // PARSE ERROR: - is non-associative
+a == b == c        // PARSE ERROR: == is non-associative
+(a - b) - c        // OK: parentheses make it explicit
+```
+
+3. **Different operators cannot mix** without parentheses:
+
+```mog
+a + b * c          // PARSE ERROR: mixed operators
+a + (b * c)        // OK: parentheses disambiguate
+(a + b) * c        // OK: parentheses disambiguate
+
+x % n == 0         // PARSE ERROR: mixed operators
+(x % n) == 0       // OK
+
+a > 0 && b < 10    // PARSE ERROR: mixed operators
+(a > 0) && (b < 10)  // OK
+```
+
+### Why No Precedence?
+
+Traditional precedence tables create silent bugs. In C, `a & b == c` means `a & (b == c)` — almost never what the programmer intended. In Mog, this is a parse error. You write what you mean, and the compiler rejects anything ambiguous.
+
+This fits Mog's design philosophy: code should be obvious to read. Parentheses are cheap. Debugging precedence mistakes is not.
+
+### Unary Operators
+
+Unary operators (`-`, `!`) bind tighter than any binary operator and are unaffected by the flat rules:
+
+```mog
+x := -a + b;       // OK: unary - applies to a, then + chains
+flag := !done;      // OK: unary ! applies to done
 ```
 
 ## Error Handling
@@ -576,7 +629,7 @@ fn fibonacci(n: int) -> int {
   if n <= 1 { return n; }
   a := 0;
   b := 1;
-  for i in 2..n+1 {
+  for i in 2..(n+1) {
     temp := a + b;
     a = b;
     b = temp;
@@ -668,7 +721,7 @@ async fn train(config: TrainConfig) -> Result<tensor<f32>> {
     weights = await ml.sub(weights, await ml.mul_scalar(grads.weights, config.lr)?)?;
     bias = await ml.sub(bias, await ml.mul_scalar(grads.bias, config.lr)?)?;
 
-    if epoch % 10 == 0 {
+    if (epoch % 10) == 0 {
       log.info("epoch {epoch}: loss = {loss}");
     }
   }

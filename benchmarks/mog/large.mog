@@ -15,7 +15,7 @@ fn sqrt_approx(val: i64) -> i64 {
   if (val <= 0) { return 0; }
   guess := val / 2;
   for i in 0..30 {
-    guess = (guess + val / guess) / 2;
+    guess = (guess + (val / guess)) / 2;
   }
   return guess;
 }
@@ -66,7 +66,7 @@ fn vec2_scale(v: Vec2, s: i64) -> Vec2 {
 }
 
 fn vec2_magnitude_sq(v: Vec2) -> i64 {
-  return v.x * v.x + v.y * v.y;
+  return (v.x * v.x) + (v.y * v.y);
 }
 
 fn vec2_distance_sq(a: Vec2, b: Vec2) -> i64 {
@@ -75,13 +75,13 @@ fn vec2_distance_sq(a: Vec2, b: Vec2) -> i64 {
 }
 
 fn vec2_dot(a: Vec2, b: Vec2) -> i64 {
-  return a.x * b.x + a.y * b.y;
+  return (a.x * b.x) + (a.y * b.y);
 }
 
 fn vec2_normalize(v: Vec2) -> Vec2 {
   mag_sq := vec2_magnitude_sq(v);
   if (mag_sq == 0) { return Vec2 { x: 0, y: 0 }; }
-  return Vec2 { x: v.x * 100 / mag_sq, y: v.y * 100 / mag_sq };
+  return Vec2 { x: (v.x * 100) / mag_sq, y: (v.y * 100) / mag_sq };
 }
 
 fn vec2_to_string(v: Vec2) -> string {
@@ -129,7 +129,7 @@ fn filter_positive(nums: i64[]) -> i64[] {
 fn filter_even(nums: i64[]) -> i64[] {
   result: i64[] = [0]; result.pop();
   for v in nums {
-    if (v % 2 == 0) {
+    if ((v % 2) == 0) {
       result.push(v);
     }
   }
@@ -139,7 +139,7 @@ fn filter_even(nums: i64[]) -> i64[] {
 fn filter_odd(nums: i64[]) -> i64[] {
   result: i64[] = [0]; result.pop();
   for v in nums {
-    if (v % 2 != 0) {
+    if ((v % 2) != 0) {
       result.push(v);
     }
   }
@@ -205,7 +205,7 @@ fn bubble_sort(nums: i64[]) -> i64[] {
   sorted := copy_array(nums);
   n := sorted.len as i64;
   for i in 0..n {
-    for j in 0..n - i - 1 {
+    for j in 0..(n - i) - 1 {
       if (sorted[j] > sorted[j + 1]) {
         tmp := sorted[j];
         sorted[j] = sorted[j + 1];
@@ -223,7 +223,7 @@ fn insertion_sort(nums: i64[]) -> i64[] {
   while (i < n) {
     key := sorted[i];
     j := i - 1;
-    while (j >= 0 && sorted[j] > key) {
+    while ((j >= 0) && (sorted[j] > key)) {
       sorted[j + 1] = sorted[j];
       j = j - 1;
     }
@@ -285,7 +285,7 @@ fn compute_stats(nums: i64[]) -> Stats {
   var_sum := 0;
   for v in nums {
     diff := v - mean;
-    var_sum = var_sum + diff * diff;
+    var_sum = var_sum + (diff * diff);
   }
   variance := var_sum / n;
   // stddev as integer approx (variance itself, no sqrt)
@@ -298,7 +298,7 @@ fn compute_stats(nums: i64[]) -> Stats {
   }
   sn := sorted.len as i64;
   for i in 0..sn {
-    for j in 0..sn - i - 1 {
+    for j in 0..(sn - i) - 1 {
       if (sorted[j] > sorted[j + 1]) {
         tmp := sorted[j];
         sorted[j] = sorted[j + 1];
@@ -307,10 +307,10 @@ fn compute_stats(nums: i64[]) -> Stats {
     }
   }
   median := 0;
-  if (sn % 2 == 1) {
+  if ((sn % 2) == 1) {
     median = sorted[sn / 2];
   } else {
-    median = (sorted[sn / 2 - 1] + sorted[sn / 2]) / 2;
+    median = (sorted[(sn / 2) - 1] + sorted[sn / 2]) / 2;
   }
 
   return Stats {
@@ -349,7 +349,7 @@ struct DataPoint {
 
 fn lcg_next(seed: i64) -> i64 {
   // Linear congruential generator
-  return (seed * 1103515245 + 12345) % 2147483648;
+  return ((seed * 1103515245) + 12345) % 2147483648;
 }
 
 fn generate_data(count: i64, seed: i64) -> i64[] {
@@ -416,7 +416,7 @@ fn weighted_average(values: i64[], weights: i64[]) -> i64 {
   wtotal := 0;
   n := min_i64(values.len as i64, weights.len );
   for i in 0..n {
-    wsum = wsum + values[i] * weights[i];
+    wsum = wsum + (values[i] * weights[i]);
     wtotal = wtotal + weights[i];
   }
   if (wtotal == 0) { return 0; }
@@ -467,17 +467,17 @@ fn matrix_create(rows: i64, cols: i64) -> i64[] {
 fn matrix_identity(n: i64) -> i64[] {
   m := matrix_create(n, n);
   for i in 0..n {
-    m[i * n + i] = 1;
+    m[(i * n) + i] = 1;
   }
   return m;
 }
 
 fn matrix_get(m: i64[], cols: i64, r: i64, c: i64) -> i64 {
-  return m[r * cols + c];
+  return m[(r * cols) + c];
 }
 
 fn matrix_set(m: i64[], cols: i64, r: i64, c: i64, val: i64) {
-  m[r * cols + c] = val;
+  m[(r * cols) + c] = val;
 }
 
 fn matrix_multiply(a: i64[], b: i64[], n: i64) -> i64[] {
@@ -486,7 +486,7 @@ fn matrix_multiply(a: i64[], b: i64[], n: i64) -> i64[] {
     for j in 0..n {
       sum := 0;
       for k in 0..n {
-        sum = sum + matrix_get(a, n, i, k) * matrix_get(b, n, k, j);
+        sum = sum + (matrix_get(a, n, i, k) * matrix_get(b, n, k, j));
       }
       matrix_set(result, n, i, j, sum);
     }
@@ -624,17 +624,17 @@ fn gcd(a: i64, b: i64) -> i64 {
 }
 
 fn lcm(a: i64, b: i64) -> i64 {
-  if (a == 0 || b == 0) { return 0; }
+  if ((a == 0) || (b == 0)) { return 0; }
   return abs_i64(a * b) / gcd(a, b);
 }
 
 fn is_prime(n: i64) -> bool {
   if (n < 2) { return false; }
   if (n == 2) { return true; }
-  if (n % 2 == 0) { return false; }
+  if ((n % 2) == 0) { return false; }
   i := 3;
-  while (i * i <= n) {
-    if (n % i == 0) { return false; }
+  while ((i * i) <= n) {
+    if ((n % i) == 0) { return false; }
     i = i + 2;
   }
   return true;
@@ -653,7 +653,7 @@ fn count_primes(limit: i64) -> i64 {
 fn sum_divisors(n: i64) -> i64 {
   sum := 0;
   for i in 1..n {
-    if (n % i == 0) {
+    if ((n % i) == 0) {
       sum = sum + i;
     }
   }
@@ -668,10 +668,10 @@ fn collatz_steps(n: i64) -> i64 {
   steps := 0;
   val := n;
   while (val != 1) {
-    if (val % 2 == 0) {
+    if ((val % 2) == 0) {
       val = val / 2;
     } else {
-      val = val * 3 + 1;
+      val = (val * 3) + 1;
     }
     steps = steps + 1;
   }
@@ -680,7 +680,7 @@ fn collatz_steps(n: i64) -> i64 {
 
 fn combinations(n: i64, k: i64) -> i64 {
   if (k > n) { return 0; }
-  if (k == 0 || k == n) { return 1; }
+  if ((k == 0) || (k == n)) { return 1; }
   return factorial(n) / (factorial(k) * factorial(n - k));
 }
 
@@ -689,7 +689,7 @@ fn digital_root(n: i64) -> i64 {
   while (val >= 10) {
     sum := 0;
     while (val > 0) {
-      sum = sum + val % 10;
+      sum = sum + (val % 10);
       val = val / 10;
     }
     val = sum;
@@ -1037,7 +1037,7 @@ fn test_closures() {
   }
   println("");
 
-  is_even := fn(x: i64) -> bool { x % 2 == 0 };
+  is_even := fn(x: i64) -> bool { (x % 2) == 0 };
   evens := filter_with_fn(nums, is_even);
   print_string("  filter even: ");
   for v in evens {
@@ -1089,7 +1089,7 @@ fn test_complex_control_flow() {
   count := 0;
   for i in 0..10 {
     for j in 0..10 {
-      if (i * j > 30) {
+      if ((i * j) > 30) {
         break;
       }
       count = count + 1;
@@ -1101,7 +1101,7 @@ fn test_complex_control_flow() {
   a := 1;
   b := 1;
   steps := 0;
-  while (a < 100 && b < 100) {
+  while ((a < 100) && (b < 100)) {
     tmp := a + b;
     a = b;
     b = tmp;
@@ -1112,13 +1112,13 @@ fn test_complex_control_flow() {
 
   // Conditional chains
   for x in 0..20 {
-    if (x % 15 == 0) {
+    if ((x % 15) == 0) {
       println(f"  {x}: fizzbuzz");
     } else {
-      if (x % 3 == 0) {
+      if ((x % 3) == 0) {
         println(f"  {x}: fizz");
       } else {
-        if (x % 5 == 0) {
+        if ((x % 5) == 0) {
           println(f"  {x}: buzz");
         }
       }

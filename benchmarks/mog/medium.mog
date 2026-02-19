@@ -12,7 +12,7 @@ fn new_point(x: i64, y: i64) -> Point {
 fn distance_sq(a: Point, b: Point) -> i64 {
   dx := a.x - b.x;
   dy := a.y - b.y;
-  return dx * dx + dy * dy;
+  return (dx * dx) + (dy * dy);
 }
 
 fn build_squares(n: i64) -> i64[] {
@@ -26,7 +26,7 @@ fn build_squares(n: i64) -> i64[] {
 fn filter_even(nums: i64[]) -> i64[] {
   result := [0; 0];
   for v in nums {
-    if (v % 2 == 0) {
+    if ((v % 2) == 0) {
       result.push(v);
     }
   }
@@ -48,7 +48,7 @@ fn bubble_sort(nums: i64[]) -> i64[] {
     sorted[i] = nums[i];
   }
   for i in 0..n {
-    for j in 0..n - i - 1 {
+    for j in 0..(n - i) - 1 {
       if (sorted[j] > sorted[j + 1]) {
         tmp := sorted[j];
         sorted[j] = sorted[j + 1];

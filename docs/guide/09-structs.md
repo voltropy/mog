@@ -96,7 +96,7 @@ Fields work anywhere an expression of that type is expected:
 ```mog
 fn main() {
   p := Point { x: 3, y: 4 };
-  distance_squared := p.x * p.x + p.y * p.y;
+  distance_squared := (p.x * p.x) + (p.y * p.y);
   print(distance_squared);  // 25
 }
 ```
@@ -197,7 +197,7 @@ fn vec2_add(a: Vec2, b: Vec2) -> Vec2 {
 }
 
 fn vec2_dot(a: Vec2, b: Vec2) -> int {
-  return a.x * b.x + a.y * b.y;
+  return (a.x * b.x) + (a.y * b.y);
 }
 
 fn vec2_to_string(v: Vec2) -> string {
@@ -333,7 +333,7 @@ fn average_grade(s: StudentRecord) -> float {
   for g in s.grades {
     sum = sum + g;
   }
-  return sum as float / s.grades.len as float;
+  return (sum as float) / (s.grades.len as float);
 }
 
 fn main() {

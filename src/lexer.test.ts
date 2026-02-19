@@ -206,15 +206,17 @@ describe("Lexer", () => {
     })
 
     test("tokenizes multiple operators in sequence", () => {
-      const tokens = tokenize("a := b + c * d")
+      const tokens = tokenize("a := b + (c * d)")
       const nonWs = tokens.filter((t) => t.type !== "WHITESPACE")
       expect(nonWs[0].value).toBe("a")
       expect(nonWs[1].type).toBe("ASSIGN")
       expect(nonWs[2].value).toBe("b")
       expect(nonWs[3].type).toBe("PLUS")
-      expect(nonWs[4].value).toBe("c")
-      expect(nonWs[5].type).toBe("TIMES")
-      expect(nonWs[6].value).toBe("d")
+      expect(nonWs[4].type).toBe("LPAREN")
+      expect(nonWs[5].value).toBe("c")
+      expect(nonWs[6].type).toBe("TIMES")
+      expect(nonWs[7].value).toBe("d")
+      expect(nonWs[8].type).toBe("RPAREN")
     })
   })
 
@@ -714,28 +716,30 @@ test("tokenizes mixed whitespace", () => {
     })
 
     test("tokenizes a complex expression", () => {
-      const tokens = tokenize("result := (a + b) * (c - d) / 2")
+      const tokens = tokenize("result := ((a + b) * (c - d)) / 2")
       const nonWs = tokens.filter((t) => t.type !== "WHITESPACE")
       expect(nonWs[0].value).toBe("result")
       expect(nonWs[1].type).toBe("ASSIGN")
       expect(nonWs[2].type).toBe("LPAREN")
-      expect(nonWs[3].value).toBe("a")
-      expect(nonWs[4].type).toBe("PLUS")
-      expect(nonWs[5].value).toBe("b")
-      expect(nonWs[6].type).toBe("RPAREN")
-      expect(nonWs[7].type).toBe("TIMES")
-      expect(nonWs[8].type).toBe("LPAREN")
-      expect(nonWs[9].value).toBe("c")
-      expect(nonWs[10].type).toBe("MINUS")
-      expect(nonWs[11].value).toBe("d")
-      expect(nonWs[12].type).toBe("RPAREN")
-      expect(nonWs[13].type).toBe("DIVIDE")
-      expect(nonWs[14].type).toBe("NUMBER")
-      expect(nonWs[14].value).toBe("2")
+      expect(nonWs[3].type).toBe("LPAREN")
+      expect(nonWs[4].value).toBe("a")
+      expect(nonWs[5].type).toBe("PLUS")
+      expect(nonWs[6].value).toBe("b")
+      expect(nonWs[7].type).toBe("RPAREN")
+      expect(nonWs[8].type).toBe("TIMES")
+      expect(nonWs[9].type).toBe("LPAREN")
+      expect(nonWs[10].value).toBe("c")
+      expect(nonWs[11].type).toBe("MINUS")
+      expect(nonWs[12].value).toBe("d")
+      expect(nonWs[13].type).toBe("RPAREN")
+      expect(nonWs[14].type).toBe("RPAREN")
+      expect(nonWs[15].type).toBe("DIVIDE")
+      expect(nonWs[16].type).toBe("NUMBER")
+      expect(nonWs[16].value).toBe("2")
     })
 
     test("tokenizes complex expression", () => {
-      const tokens = tokenize("result[i] := x + y * (a - b)")
+      const tokens = tokenize("result[i] := x + (y * (a - b))")
       const nonWhitespace = tokens.filter((t) => t.type !== "WHITESPACE")
       expect(nonWhitespace.map((t) => t.value)).toEqual([
         "result",
@@ -745,12 +749,14 @@ test("tokenizes mixed whitespace", () => {
         ":=",
         "x",
         "+",
+        "(",
         "y",
         "*",
         "(",
         "a",
         "-",
         "b",
+        ")",
         ")",
       ])
     })

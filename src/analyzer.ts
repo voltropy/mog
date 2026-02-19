@@ -589,6 +589,8 @@ class SemanticAnalyzer {
   private inAsyncFunction: boolean = false
   // Per-function parameter info for named arg validation at call sites
   private functionParamInfo: Map<string, { name: string; paramType: any; defaultValue?: any }[]> = new Map()
+  // Context type for empty array literal inference from type annotations
+  private _expectedArrayElementType: Type | null = null
 
   constructor() {
     this.symbolTable = new SymbolTable()
@@ -921,13 +923,21 @@ class SemanticAnalyzer {
 
   private visitVariableDeclaration(node: VariableDeclarationNode): void {
     let declaredType = node.varType
-    const valueType = node.value ? this.visitExpression(node.value) : null
 
     // Resolve CustomType to actual type from symbol table (for struct/SoA types)
     if (declaredType?.type === "CustomType") {
       const resolved = this.symbolTable.lookup((declaredType as any).name)
       if (resolved?.declaredType) {
         declaredType = resolved.declaredType
+      }
+    }
+
+    // Resolve CustomType inside ArrayType element types (e.g. [SearchResult] -> [StructType])
+    if (declaredType instanceof ArrayType && (declaredType as ArrayType).elementType?.type === "CustomType") {
+      const elemCustom = (declaredType as ArrayType).elementType as any
+      const resolved = this.symbolTable.lookup(elemCustom.name)
+      if (resolved?.declaredType) {
+        declaredType = new ArrayType(resolved.declaredType, (declaredType as ArrayType).dimensions)
       }
     }
 
@@ -938,6 +948,30 @@ class SemanticAnalyzer {
         declaredType = new SOAType(resolved.declaredType, (declaredType as any).capacity)
       }
     }
+
+    // Resolve AOSType annotation from parser (plain object with elementType string, not resolved type)
+    // e.g. [SearchResult] → { type: "AOSType", elementType: "SearchResult", capacity: null }
+    // Convert to ArrayType with resolved struct element type for proper type checking
+    if (declaredType && (declaredType as any).type === "AOSType" && typeof (declaredType as any).elementType === "string") {
+      const resolved = this.symbolTable.lookup((declaredType as any).elementType)
+      if (resolved?.declaredType instanceof StructType) {
+        const capacity = (declaredType as any).capacity
+        const dimensions = capacity != null ? [capacity] : []
+        declaredType = new ArrayType(resolved.declaredType, dimensions)
+      }
+    }
+
+    // Set expected element type for empty array literal inference from type annotation
+    // Skip if the declared array has a zero dimension (zero-sized arrays are invalid)
+    if (declaredType instanceof ArrayType) {
+      const arrType = declaredType as ArrayType
+      const hasZeroDim = arrType.dimensions.some((d: number) => d === 0)
+      if (!hasZeroDim) {
+        this._expectedArrayElementType = arrType.elementType
+      }
+    }
+    const valueType = node.value ? this.visitExpression(node.value) : null
+    this._expectedArrayElementType = null
 
     if (valueType) {
       if (declaredType) {
@@ -1294,6 +1328,25 @@ class SemanticAnalyzer {
         returnType = resolved.declaredType
       }
     }
+    // Resolve CustomType inside ArrayType return types (e.g. [SearchResult] -> [StructType])
+    if (returnType instanceof ArrayType && (returnType as ArrayType).elementType?.type === "CustomType") {
+      const elemCustom = (returnType as ArrayType).elementType as any
+      const resolved = this.symbolTable.lookup(elemCustom.name)
+      if (resolved?.declaredType) {
+        returnType = new ArrayType(resolved.declaredType, (returnType as ArrayType).dimensions)
+      }
+    }
+    // Resolve AOSType annotation from parser (plain object with elementType string, not resolved type)
+    // e.g. [S] → { type: "AOSType", elementType: "S", capacity: null }
+    // Convert to ArrayType with resolved struct element type for proper type checking
+    if (returnType && (returnType as any).type === "AOSType" && typeof (returnType as any).elementType === "string") {
+      const resolved = this.symbolTable.lookup((returnType as any).elementType)
+      if (resolved?.declaredType instanceof StructType) {
+        const capacity = (returnType as any).capacity
+        const dimensions = capacity != null ? [capacity] : []
+        returnType = new ArrayType(resolved.declaredType, dimensions)
+      }
+    }
 
     // Build FunctionType for the function
     const paramTypes = node.params.map((p: any) => p.paramType)
@@ -1328,7 +1381,6 @@ class SemanticAnalyzer {
       if ((param as any).defaultValue) {
         seenDefault = true
         const defaultType = this.visitExpression((param as any).defaultValue)
-        // Type check: default value should be compatible with param type
         if (defaultType && paramType && !compatibleTypes(defaultType, paramType) && !canCoerceWithWidening(defaultType, paramType)) {
           this.emitError(
             `Default value type ${defaultType.toString()} is not compatible with parameter type ${paramType.toString()}`,
@@ -1360,6 +1412,48 @@ class SemanticAnalyzer {
       const resolved = this.symbolTable.lookup((returnType as any).name)
       if (resolved?.declaredType) {
         returnType = resolved.declaredType
+      }
+    }
+    // Resolve CustomType inside ArrayType return types (e.g. [SearchResult] -> [StructType])
+    if (returnType instanceof ArrayType && (returnType as ArrayType).elementType?.type === "CustomType") {
+      const elemCustom = (returnType as ArrayType).elementType as any
+      const resolved = this.symbolTable.lookup(elemCustom.name)
+      if (resolved?.declaredType) {
+        returnType = new ArrayType(resolved.declaredType, (returnType as ArrayType).dimensions)
+      }
+    }
+    // Resolve AOSType annotation from parser (plain object with elementType string, not resolved type)
+    // e.g. [S] → { type: "AOSType", elementType: "S", capacity: null }
+    // Convert to ArrayType with resolved struct element type for proper type checking
+    if (returnType && (returnType as any).type === "AOSType" && typeof (returnType as any).elementType === "string") {
+      const resolved = this.symbolTable.lookup((returnType as any).elementType)
+      if (resolved?.declaredType instanceof StructType) {
+        const capacity = (returnType as any).capacity
+        const dimensions = capacity != null ? [capacity] : []
+        returnType = new ArrayType(resolved.declaredType, dimensions)
+      }
+    }
+    // Also resolve AOSType inside Result<[S]> and Optional<[S]> wrappers
+    if (returnType instanceof ResultType) {
+      const inner = (returnType as any).innerType
+      if (inner && inner.type === "AOSType" && typeof inner.elementType === "string") {
+        const resolved = this.symbolTable.lookup(inner.elementType)
+        if (resolved?.declaredType instanceof StructType) {
+          const capacity = inner.capacity
+          const dimensions = capacity != null ? [capacity] : []
+          ;(returnType as any).innerType = new ArrayType(resolved.declaredType, dimensions)
+        }
+      }
+    }
+    if (returnType instanceof OptionalType) {
+      const inner = (returnType as any).innerType
+      if (inner && inner.type === "AOSType" && typeof inner.elementType === "string") {
+        const resolved = this.symbolTable.lookup(inner.elementType)
+        if (resolved?.declaredType instanceof StructType) {
+          const capacity = inner.capacity
+          const dimensions = capacity != null ? [capacity] : []
+          ;(returnType as any).innerType = new ArrayType(resolved.declaredType, dimensions)
+        }
       }
     }
 
@@ -1662,6 +1756,20 @@ class SemanticAnalyzer {
       case "BooleanLiteral":
         result = boolType
         break
+      case "Block": {
+        // Block used as expression (e.g., in match arm bodies)
+        const blockNode = node as any
+        let blockResult: Type | null = null
+        for (const stmt of blockNode.statements || []) {
+          if (stmt.type === "ExpressionStatement") {
+            blockResult = this.visitExpression(stmt.expression)
+          } else {
+            this.visitStatement(stmt)
+          }
+        }
+        result = blockResult
+        break
+      }
       default:
         const unknown = node as { type: string; position: { start: Position; end: Position } }
         this.emitError(`Unknown expression type: ${unknown.type}`, unknown.position)
@@ -1722,6 +1830,11 @@ class SemanticAnalyzer {
 
   private visitArrayLiteral(node: ArrayLiteralNode): Type | null {
     if (node.elements.length === 0) {
+      // When an expected element type is set (from a type-annotated declaration),
+      // return an empty array of that type instead of erroring.
+      if (this._expectedArrayElementType) {
+        return new ArrayType(this._expectedArrayElementType, [0])
+      }
       this.emitError(`Cannot infer type for empty array literal`, node.position)
       return null
     }
@@ -2897,7 +3010,8 @@ class SemanticAnalyzer {
       // If this arm has a VariantPattern with a binding, declare it in a new scope
       if (arm.pattern && arm.pattern.type === "VariantPattern" && arm.pattern.binding) {
         this.symbolTable.pushScope()
-        this.symbolTable.declare(arm.pattern.binding, "variable", getBindingType(arm.pattern.name))
+        const bindingType = getBindingType(arm.pattern.name)
+        this.symbolTable.declare(arm.pattern.binding, "variable", bindingType)
         const armType = this.visitExpression(arm.body)
         if (!resultType && armType) {
           resultType = armType

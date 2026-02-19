@@ -324,7 +324,7 @@ describe("Array filter and map integration", () => {
     const source = `{
   fn main() -> i64 {
     arr: [i64] = [1, 2, 3, 4, 5, 6];
-    evens: [i64] = arr.filter(fn(x: i64) -> i64 { return x % 2 == 0; });
+    evens: [i64] = arr.filter(fn(x: i64) -> i64 { return (x % 2) == 0; });
     return evens.len();
   }
 }`
@@ -374,7 +374,7 @@ describe("Array filter and map integration", () => {
     const source = `{
   fn main() -> i64 {
     arr: [i64] = [1, 2, 3, 4, 5, 6];
-    result: [i64] = arr.filter(fn(x: i64) -> i64 { return x % 2 == 0; });
+    result: [i64] = arr.filter(fn(x: i64) -> i64 { return (x % 2) == 0; });
     doubled: [i64] = result.map(fn(x: i64) -> i64 { return x * 2; });
     return doubled.len();
   }

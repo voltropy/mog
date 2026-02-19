@@ -16,7 +16,7 @@ fn multiply(x: float, y: float) -> float {
 }
 
 fn is_even(n: int) -> bool {
-  return n % 2 == 0;
+  return (n % 2) == 0;
 }
 ```
 
@@ -360,7 +360,7 @@ Examples:
 fn distance(x1: float, y1: float, x2: float, y2: float) -> float {
   dx := x2 - x1;
   dy := y2 - y1;
-  return sqrt(dx * dx + dy * dy);
+  return sqrt((dx * dx) + (dy * dy));
 }
 
 fn main() -> int {
@@ -372,7 +372,7 @@ fn main() -> int {
 ```mog
 // Convert degrees to radians and compute trig values
 fn deg_to_rad(degrees: float) -> float {
-  return degrees * 3.14159265 / 180.0;
+  return (degrees * 3.14159265) / 180.0;
 }
 
 fn main() -> int {
@@ -481,7 +481,7 @@ match result {
 // Using ? to propagate errors
 fn read_port(input: string) -> Result<int> {
   port := int_from_string(input)?;
-  if port < 1 || port > 65535 {
+  if (port < 1) || (port > 65535) {
     return err("port out of range");
   }
   return ok(port);

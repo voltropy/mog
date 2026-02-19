@@ -778,11 +778,12 @@ class LLVMIRGenerator {
          let isPointerLike = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType" 
           || statement.varType?.type === "StringType" || statement.varType?.type === "MapType"
           || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
-          || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
+          || statement.varType?.type === "SOAType" || statement.varType?.type === "AOSType" || statement.varType?.type === "FunctionType"
           || statement.varType?.type === "TensorType"
         // Infer pointer type from value expression when varType is not explicit
         if (!isPointerLike && statement.value) {
           isPointerLike = this.isStringProducingExpression(statement.value)
+
         }
         // Infer tensor type from TensorConstruction value
         if (!isPointerLike && (statement.value as any)?.type === "TensorConstruction") {
@@ -820,6 +821,15 @@ class LLVMIRGenerator {
         // Infer array type from ArrayLiteral or ArrayFill value
         if (!isPointerLike && (statement.value?.type === "ArrayLiteral" || statement.value?.type === "ArrayFill")) {
           isPointerLike = true
+        }
+        // Infer pointer type from AwaitExpression whose resultType is pointer/string
+        if (!isPointerLike && statement.value?.type === "AwaitExpression") {
+          const awaitResultType = (statement.value as any).resultType
+          if (awaitResultType?.type === "PointerType" || awaitResultType?.type === "StringType" ||
+              awaitResultType?.type === "ArrayType" || awaitResultType?.type === "AOSType" ||
+              awaitResultType?.type === "StructType" || awaitResultType?.type === "MapType") {
+            isPointerLike = true
+          }
         }
         const allocaType = isPointerLike ? "ptr" : llvmType
         ir.push(`  ${reg} = alloca ${allocaType}`)
@@ -877,7 +887,7 @@ class LLVMIRGenerator {
            let isPointerLike2 = statement.varType?.type === "ArrayType" || statement.varType?.type === "PointerType"
             || statement.varType?.type === "StringType" || statement.varType?.type === "MapType"
             || statement.varType?.type === "StructType" || statement.varType?.type === "CustomType"
-            || statement.varType?.type === "SOAType" || statement.varType?.type === "FunctionType"
+            || statement.varType?.type === "SOAType" || statement.varType?.type === "AOSType" || statement.varType?.type === "FunctionType"
             || statement.varType?.type === "TensorType"
           if (!isPointerLike2 && isPointerLike) {
             isPointerLike2 = true
@@ -1054,7 +1064,7 @@ class LLVMIRGenerator {
         const isPointerLike = varType?.type === "ArrayType" || varType?.type === "PointerType" || 
                               varType?.type === "StringType" || varType?.type === "MapType" ||
                               varType?.type === "StructType" || varType?.type === "CustomType" || 
-                              varType?.type === "SOAType" || varType?.type === "FunctionType" ||
+                              varType?.type === "SOAType" || varType?.type === "AOSType" || varType?.type === "FunctionType" ||
                               varType?.type === "TensorType"
 
         // Determine LLVM type for loading
@@ -2208,10 +2218,17 @@ class LLVMIRGenerator {
             const valueReg = this.generateExpression(ir, callArgs[0])
             // Check if the value is a float register — bitcast to i64 for array storage
             const isFloatValue = this.isFloatProducingExpression(callArgs[0])
+            // Check if value is a pointer type (struct, array, string, etc.) — ptrtoint to i64
+            const isPtrValue = this.isPtrProducingExpression(callArgs[0])
             if (isFloatValue) {
               // Value is a double register, bitcast to i64 for storage
               const castReg = `%${this.valueCounter++}`
               ir.push(`  ${castReg} = bitcast double ${valueReg} to i64`)
+              ir.push(`  call void @array_push(ptr ${arrReg}, i64 ${castReg})`)
+            } else if (isPtrValue) {
+              // Value is a pointer (struct, array, etc.), ptrtoint to i64 for storage
+              const castReg = `%${this.valueCounter++}`
+              ir.push(`  ${castReg} = ptrtoint ptr ${valueReg} to i64`)
               ir.push(`  call void @array_push(ptr ${arrReg}, i64 ${castReg})`)
             } else {
               // Value is already i64 (either integer or float bit pattern)
@@ -3247,9 +3264,7 @@ class LLVMIRGenerator {
           if (fieldIndex >= 0) {
             const fieldDef = structFields[fieldIndex]
             const isFloat = fieldDef.fieldType?.type === "FloatType"
-            const isPtr = fieldDef.fieldType?.type === "PointerType" || fieldDef.fieldType?.kind === "ptr"
-              || (typeof fieldDef.fieldType === "string" && fieldDef.fieldType === "ptr")
-            const isArray = fieldDef.fieldType?.type === "ArrayType"
+            const fieldLLVMType = fieldDef.fieldType ? this.toLLVMType(fieldDef.fieldType) : "i64"
             // Load struct pointer
             // For function parameters, the param is stored in %name_local (see generateFunctionDeclaration)
             const isParam = this.currentFunction && this.currentFunction.params.find((p) => p.name === target.object.name)
@@ -3262,7 +3277,7 @@ class LLVMIRGenerator {
             // Store with correct type
             if (isFloat) {
               ir.push(`  store double ${valueReg}, ptr ${fieldPtr}`)
-            } else if (isPtr || isArray) {
+            } else if (fieldLLVMType === "ptr") {
               ir.push(`  store ptr ${valueReg}, ptr ${fieldPtr}`)
             } else {
               ir.push(`  store i64 ${valueReg}, ptr ${fieldPtr}`)
@@ -3302,7 +3317,7 @@ class LLVMIRGenerator {
         const isArrayReturningCall = value?.type === "CallExpression" && value.callee?.type === "Identifier"
           && (() => {
             const retType = this.functionTypes.get(value.callee.name)
-            return retType?.type === "ArrayType"
+            return retType?.type === "ArrayType" || retType?.type === "AOSType"
           })()
         // Check if the value is a function call that returns ptr (e.g., make_adder(5) returning a closure)
         // Exclude string-returning, struct-returning, and array-returning functions
@@ -3314,7 +3329,16 @@ class LLVMIRGenerator {
         const isFloatExpr = this.isFloatProducingExpression(value)
         const isMapExpr = value?.type === "MapLiteral"
         const isArrayExpr = value?.type === "ArrayLiteral" || value?.type === "ArrayFill"
-        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor || isTensorExpr || isMapExpr || isStructLiteral || isStructReturningCall || isArrayReturningCall || isArrayExpr) ? "ptr" : isFloatExpr ? "double" : "i64"
+        // AwaitExpression returning ptr (string, struct, array from capability calls)
+        const isAwaitPtr = value?.type === "AwaitExpression" && (
+          value.resultType?.type === "PointerType" || value.resultType?.type === "StringType" ||
+          value.resultType?.type === "ArrayType" || value.resultType?.type === "StructType" ||
+          value.resultType?.type === "AOSType" || value.resultType?.type === "MapType")
+        // Check resultType annotation for ptr-producing expressions (e.g., .filter(), .map() returning arrays)
+        const isResultTypePtr = !isArrayReturningCall && !isStructReturningCall && value?.resultType && (
+          value.resultType.type === "ArrayType" || value.resultType.type === "AOSType" ||
+          value.resultType.type === "StructType" || value.resultType.type === "MapType")
+        const allocaType = (isFuncPtr || isStringExpr || isSoAConstructor || isTensorExpr || isMapExpr || isStructLiteral || isStructReturningCall || isArrayReturningCall || isArrayExpr || isAwaitPtr || isResultTypePtr) ? "ptr" : isFloatExpr ? "double" : "i64"
         ir.push(`  %${name} = alloca ${allocaType}`)
         if (isTensorExpr) {
           // Register as TensorType for later method/operator dispatch
@@ -3411,6 +3435,21 @@ class LLVMIRGenerator {
           // Track as array type from function return type
           const retType = this.functionTypes.get(value.callee.name)
           this.variableTypes.set(name, retType)
+        } else if (isAwaitPtr) {
+          // Track based on the await result type
+          const awaitResType = value.resultType
+          if (awaitResType?.type === "StringType" || awaitResType?.type === "PointerType") {
+            this.variableTypes.set(name, { type: "StringType" } as any)
+          } else if (awaitResType?.type === "ArrayType" || awaitResType?.type === "AOSType") {
+            this.variableTypes.set(name, awaitResType)
+          } else if (awaitResType?.type === "StructType") {
+            this.variableTypes.set(name, awaitResType)
+          } else {
+            this.variableTypes.set(name, { type: "PointerType" } as any)
+          }
+        } else if (isResultTypePtr) {
+          // Track from analyzer's resultType annotation (e.g., .filter() returning ArrayType)
+          this.variableTypes.set(name, value.resultType)
         } else if (isArrayExpr) {
           // Track as array type from ArrayLiteral or ArrayFill
           this.variableTypes.set(name, new ArrayType(new IntegerType("i64"), []))
@@ -3623,10 +3662,13 @@ class LLVMIRGenerator {
         if (valueReg) {
           const fieldPtr = `%${this.valueCounter++}`
           ir.push(`  ${fieldPtr} = getelementptr i8, ptr ${structReg}, i64 ${i * 8}`)
-          // Detect float values to use correct store type
+          // Detect float and pointer values to use correct store type
           const isFloat = field.value?.type === "FloatLiteral" || this.isFloatOperand(field.value)
+          const isString = field.value?.type === "StringLiteral" || this.isStringProducingExpression(field.value)
           if (isFloat) {
             ir.push(`  store double ${valueReg}, ptr ${fieldPtr}`)
+          } else if (isString) {
+            ir.push(`  store ptr ${valueReg}, ptr ${fieldPtr}`)
           } else {
             ir.push(`  store i64 ${valueReg}, ptr ${fieldPtr}`)
           }
@@ -3653,12 +3695,10 @@ class LLVMIRGenerator {
 
       // Determine store type based on field type
       const isFloat = fieldDef.fieldType?.type === "FloatType"
-      const isPtr = fieldDef.fieldType?.type === "PointerType" || fieldDef.fieldType?.kind === "ptr"
-        || (typeof fieldDef.fieldType === "string" && fieldDef.fieldType === "ptr")
-      const isArray = fieldDef.fieldType?.type === "ArrayType"
+      const fieldLLVMType = fieldDef.fieldType ? this.toLLVMType(fieldDef.fieldType) : "i64"
       if (isFloat) {
         ir.push(`  store double ${valueReg}, ptr ${fieldPtr}`)
-      } else if (isPtr || isArray) {
+      } else if (fieldLLVMType === "ptr") {
         ir.push(`  store ptr ${valueReg}, ptr ${fieldPtr}`)
       } else {
         ir.push(`  store i64 ${valueReg}, ptr ${fieldPtr}`)
@@ -3813,9 +3853,7 @@ class LLVMIRGenerator {
         if (fieldIndex >= 0) {
           const fieldDef = structFields[fieldIndex]
           const isFloat = fieldDef.fieldType?.type === "FloatType"
-          const isPtr = fieldDef.fieldType?.type === "PointerType" || fieldDef.fieldType?.kind === "ptr"
-            || (typeof fieldDef.fieldType === "string" && fieldDef.fieldType === "ptr")
-          const isArray = fieldDef.fieldType?.type === "ArrayType"
+          const fieldLLVMType = fieldDef.fieldType ? this.toLLVMType(fieldDef.fieldType) : "i64"
           // Load the struct pointer
           // For function parameters, the param is stored in %name_local (see generateFunctionDeclaration)
           // For local variables, the alloca is %name
@@ -3830,7 +3868,7 @@ class LLVMIRGenerator {
           const reg = `%${this.valueCounter++}`
           if (isFloat) {
             ir.push(`  ${reg} = load double, ptr ${fieldPtr}`)
-          } else if (isPtr || isArray) {
+          } else if (fieldLLVMType === "ptr") {
             ir.push(`  ${reg} = load ptr, ptr ${fieldPtr}`)
           } else {
             ir.push(`  ${reg} = load i64, ptr ${fieldPtr}`)
@@ -4156,7 +4194,7 @@ class LLVMIRGenerator {
     // If it's an identifier, look up the variable type
     if (expr.type === "Identifier" && expr.name) {
       const varType = this.variableTypes.get(expr.name)
-      if (varType?.type === "ArrayType") {
+      if (varType?.type === "ArrayType" || varType?.type === "AOSType") {
         // Exclude string types ([u8])
         const arrType = varType as ArrayType
         if (arrType.elementType?.type === "UnsignedType" &&
@@ -4168,6 +4206,38 @@ class LLVMIRGenerator {
       }
     }
 
+    return false
+  }
+
+  private isPtrProducingExpression(expr: any): boolean {
+    if (!expr) return false
+    // Identifier — check variableTypes
+    if (expr.type === "Identifier" && expr.name) {
+      const varType = this.variableTypes.get(expr.name)
+      if (varType) {
+        const t = varType.type
+        if (t === "ArrayType" || t === "AOSType" || t === "StructType" || 
+            t === "CustomType" || t === "PointerType" || t === "StringType" ||
+            t === "MapType" || t === "SOAType" || t === "FunctionType" || t === "TensorType") {
+          return true
+        }
+      }
+    }
+    // StructLiteral always produces a ptr (gc_alloc)
+    if (expr.type === "StructLiteral") return true
+    // CallExpression returning ptr
+    if (expr.type === "CallExpression" && expr.callee?.type === "Identifier") {
+      const func = this.functions.get(expr.callee.name)
+      if (func && func.returnType === "ptr") return true
+    }
+    // resultType annotation from analyzer
+    if (expr.resultType) {
+      const rt = expr.resultType.type
+      if (rt === "StructType" || rt === "ArrayType" || rt === "AOSType" || rt === "CustomType" ||
+          rt === "PointerType" || rt === "StringType" || rt === "MapType") {
+        return true
+      }
+    }
     return false
   }
 
@@ -4672,7 +4742,8 @@ class LLVMIRGenerator {
     // Determine element type from array type info
     const elemType = this.getArrayElementType(iterable)
     const isFloatElem = elemType?.type === "FloatType"
-    const allocaType = isFloatElem ? "double" : "i64"
+    const isStructElem = elemType?.type === "StructType"
+    const allocaType = isFloatElem ? "double" : (isStructElem ? "ptr" : "i64")
 
     // Allocate index variable and value variable (only if not already declared)
     if (!this.variableTypes.has(indexVariable)) {
@@ -4685,6 +4756,8 @@ class LLVMIRGenerator {
     this.variableTypes.set(indexVariable, { type: "IntegerType", kind: "i64" })
     if (isFloatElem) {
       this.variableTypes.set(valueVariable, new FloatType("f64"))
+    } else if (isStructElem) {
+      this.variableTypes.set(valueVariable, elemType)
     } else {
       this.variableTypes.set(valueVariable, { type: "IntegerType", kind: "i64" })
     }
@@ -4714,6 +4787,11 @@ class LLVMIRGenerator {
       const floatVal = `%${this.valueCounter++}`
       ir.push(`  ${floatVal} = bitcast i64 ${elemValue} to double`)
       ir.push(`  store double ${floatVal}, ptr ${valueReg}`)
+    } else if (isStructElem) {
+      // Convert i64 (stored pointer) back to ptr for struct elements
+      const ptrVal = `%${this.valueCounter++}`
+      ir.push(`  ${ptrVal} = inttoptr i64 ${elemValue} to ptr`)
+      ir.push(`  store ptr ${ptrVal}, ptr ${valueReg}`)
     } else {
       ir.push(`  store i64 ${elemValue}, ptr ${valueReg}`)
     }
@@ -4885,6 +4963,9 @@ class LLVMIRGenerator {
           lastValue = this.generateExpression(ir, stmt.expression)
         } else {
           this.generateStatement(ir, stmt)
+          // Reset to default after non-expression statements (e.g., for loops, if blocks)
+          // so the block value reflects only the last expression, not an earlier one
+          lastValue = "0"
         }
       }
       return lastValue
@@ -4971,8 +5052,9 @@ class LLVMIRGenerator {
       const isFloat = capturedType?.type === "FloatType"
       const isPtr = capturedType?.type === "ArrayType" || capturedType?.type === "PointerType" ||
                     capturedType?.type === "StructType" || capturedType?.type === "CustomType" ||
-                    capturedType?.type === "SOAType" || capturedType?.type === "FunctionType" ||
-                    capturedType?.type === "MapType"
+                    capturedType?.type === "SOAType" || capturedType?.type === "AOSType" || capturedType?.type === "FunctionType" ||
+                    capturedType?.type === "MapType" || capturedType?.type === "StringType" ||
+                    capturedType?.type === "TensorType"
       const llvmType = isFloat ? "double" : (isPtr ? "ptr" : "i64")
 
       const gepReg = `%__env_gep_${i}`
@@ -5042,8 +5124,9 @@ class LLVMIRGenerator {
         const isFloat = capturedType?.type === "FloatType"
         const isPtr = capturedType?.type === "ArrayType" || capturedType?.type === "PointerType" ||
                       capturedType?.type === "StructType" || capturedType?.type === "CustomType" ||
-                      capturedType?.type === "SOAType" || capturedType?.type === "FunctionType" ||
-                      capturedType?.type === "MapType"
+                      capturedType?.type === "SOAType" || capturedType?.type === "AOSType" || capturedType?.type === "FunctionType" ||
+                      capturedType?.type === "MapType" || capturedType?.type === "StringType" ||
+                      capturedType?.type === "TensorType"
         const llvmType = isFloat ? "double" : (isPtr ? "ptr" : "i64")
 
         // Determine the correct alloca name: parameters use %name_local, variables use %name
@@ -5168,8 +5251,8 @@ class LLVMIRGenerator {
 
       if (arm.pattern.type === "WildcardPattern") {
         // Wildcard always matches - generate arm body and jump to end
-        const armValue = this.generateExpression(ir, arm.body)
-        ir.push(`  store ${matchResultType} ${armValue}, ptr ${resultReg}`)
+        const armValue = this.generateBlockExpression(ir, arm.body)
+        ir.push(`  store ${matchResultType} ${armValue || "0"}, ptr ${resultReg}`)
         ir.push(`  br label %${endLabel}`)
         ir.push("")
         break
@@ -5212,10 +5295,28 @@ class LLVMIRGenerator {
             const unwrapFn = variantName === "ok" ? "@mog_result_unwrap" : "@mog_optional_unwrap"
             const unwrapped = `%${this.valueCounter++}`
             ir.push(`  ${unwrapped} = call i64 ${unwrapFn}(ptr ${subjectPtr})`)
+            // Determine the inner type from the subject's resultType (Result<T> or Optional<T>)
+            const subjectResultType = expr.subject?.resultType
+            const innerType = subjectResultType?.innerType
+            const isInnerPtr = innerType && (innerType.type === "ArrayType" || innerType.type === "AOSType" ||
+              innerType.type === "StructType" || innerType.type === "StringType" || innerType.type === "PointerType" ||
+              innerType.type === "MapType")
             const bindingReg = `%${arm.pattern.binding}`
-            ir.push(`  ${bindingReg} = alloca i64`)
-            ir.push(`  store i64 ${unwrapped}, ptr ${bindingReg}`)
-            this.variableTypes.set(arm.pattern.binding, new IntegerType("i64"))
+            if (isInnerPtr) {
+              ir.push(`  ${bindingReg} = alloca ptr`)
+              const asPtr = `%${this.valueCounter++}`
+              ir.push(`  ${asPtr} = inttoptr i64 ${unwrapped} to ptr`)
+              ir.push(`  store ptr ${asPtr}, ptr ${bindingReg}`)
+            } else {
+              ir.push(`  ${bindingReg} = alloca i64`)
+              ir.push(`  store i64 ${unwrapped}, ptr ${bindingReg}`)
+            }
+            // Set the variable type to the inner type for proper method dispatch
+            if (innerType) {
+              this.variableTypes.set(arm.pattern.binding, innerType)
+            } else {
+              this.variableTypes.set(arm.pattern.binding, new IntegerType("i64"))
+            }
           }
         } else if (variantName === "err") {
           // Check tag == 1 for err (is_ok == 0)
@@ -5252,8 +5353,8 @@ class LLVMIRGenerator {
           ir.push(`${matchBodyLabel}:`)
         }
 
-        const armValue = this.generateExpression(ir, arm.body)
-        ir.push(`  store ${matchResultType} ${armValue}, ptr ${resultReg}`)
+        const armValue = this.generateBlockExpression(ir, arm.body)
+        ir.push(`  store ${matchResultType} ${armValue || "0"}, ptr ${resultReg}`)
         ir.push(`  br label %${endLabel}`)
         ir.push("")
 
@@ -5265,8 +5366,8 @@ class LLVMIRGenerator {
 
       // Arm body
       ir.push(`${matchBodyLabel}:`)
-      const armValue = this.generateExpression(ir, arm.body)
-      ir.push(`  store ${matchResultType} ${armValue}, ptr ${resultReg}`)
+      const armValue = this.generateBlockExpression(ir, arm.body)
+      ir.push(`  store ${matchResultType} ${armValue || "0"}, ptr ${resultReg}`)
       ir.push(`  br label %${endLabel}`)
       ir.push("")
 
@@ -6203,7 +6304,13 @@ private getIntBits(type: LLVMType): number {
   // ============================================================================
 
   private generateOkExpression(ir: string[], expr: any): string {
-    const value = this.generateExpression(ir, expr.value)
+    let value = this.generateExpression(ir, expr.value)
+    // If the inner value is a pointer type, convert to i64 first
+    if (this.isPtrProducingExpression(expr.value)) {
+      const asInt = `%${this.valueCounter++}`
+      ir.push(`  ${asInt} = ptrtoint ptr ${value} to i64`)
+      value = asInt
+    }
     const resultPtr = `%${this.valueCounter++}`
     ir.push(`  ${resultPtr} = call ptr @mog_result_ok(i64 ${value})`)
     const resultInt = `%${this.valueCounter++}`

@@ -8,8 +8,8 @@ The classic interview problem: print numbers 1 to 100, but replace multiples of 
 
 ```mog
 fn fizzbuzz(n: int) -> string {
-  divisible_by_3 := n % 3 == 0;
-  divisible_by_5 := n % 5 == 0;
+  divisible_by_3 := (n % 3) == 0;
+  divisible_by_5 := (n % 5) == 0;
 
   if divisible_by_3 && divisible_by_5 {
     return "FizzBuzz";
@@ -64,7 +64,7 @@ fn fib_iter(n: int) -> int {
   }
   a := 0;
   b := 1;
-  for i in 2..n + 1 {
+  for i in 2..(n + 1) {
     temp := a + b;
     a = b;
     b = temp;
@@ -88,7 +88,7 @@ Output:
 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181
 ```
 
-The iterative version runs in linear time. The range `2..n + 1` is half-open, so it runs from 2 through `n` inclusive — exactly `n - 1` iterations, which is all you need.
+The iterative version runs in linear time. The range `2..(n + 1)` is half-open, so it runs from 2 through `n` inclusive — exactly `n - 1` iterations, which is all you need.
 
 ## 3. Word Frequency Counter
 
@@ -316,7 +316,7 @@ fn main() -> int {
 
   // Find engineers with 3+ years, sorted by salary descending
   senior_engineers := staff
-    .filter(fn(e: Employee) -> bool { e.department == "engineering" && e.years >= 3 })
+    .filter(fn(e: Employee) -> bool { (e.department == "engineering") && (e.years >= 3) })
     .sort(fn(a: Employee, b: Employee) -> int { b.salary - a.salary });
 
   println("Senior Engineers (3+ years, by salary):");
@@ -374,7 +374,7 @@ fn matrix_multiply(a: [[int]], b: [[int]]) -> Result<[[int]]> {
     for j in 0..cols_b {
       sum := 0;
       for k in 0..cols_a {
-        sum = sum + a[i][k] * b[k][j];
+        sum = sum + (a[i][k] * b[k][j]);
       }
       result[i][j] = sum;
     }

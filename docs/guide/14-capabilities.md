@@ -69,7 +69,7 @@ fn fibonacci(n: int) -> int {
   if n <= 1 { return n; }
   a := 0;
   b := 1;
-  for i in 2..n+1 {
+  for i in 2..(n + 1) {
     temp := a + b;
     a = b;
     b = temp;
@@ -266,7 +266,7 @@ fn do_work() -> int {
   // pure computation — no capabilities needed
   total := 0;
   for i in 1..101 {
-    total = total + i * i;
+    total = total + (i * i);
   }
   return total;
 }

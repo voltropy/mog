@@ -129,7 +129,6 @@ If you need any of these features, Mog is probably not the right language for yo
 The rest of this guide walks through the language feature by feature, with runnable examples at every step. Chapter 2 starts with the simplest possible program and builds up from there. By the end, you will be able to write Mog scripts that use the full language: variables, functions, closures, structs, arrays, maps, error handling, async operations, tensors, and host capabilities.
 
 Let's write some code.
-
 # Chapter 2: Your First Mog Program
 
 This chapter walks through the basics of writing and running Mog code. By the end, you will understand how a Mog program is structured, how to print output, how to write comments, and how to define and call functions.
@@ -188,7 +187,7 @@ struct Point {
 fn distance(a: Point, b: Point) -> float {
   dx := a.x - b.x;
   dy := a.y - b.y;
-  return sqrt(dx * dx + dy * dy);
+  return sqrt((dx * dx) + (dy * dy));
 }
 
 // Top-level: entry point
@@ -478,7 +477,7 @@ Here is one more example — a program that computes the sum of the first N squa
 fn sum_of_squares(n: int) -> int {
   total := 0;
   for i in 1..n + 1 {
-    total = total + i * i;
+    total = total + (i * i);
   }
   return total;
 }
@@ -505,7 +504,6 @@ This example shows `for-in` loops over both ranges (`1..n + 1`) and arrays (`[5,
 ## What's Next
 
 You now know how to write, compile, and run a Mog program. You have seen the basic program structure, comments, print functions, and how to define and call functions with typed parameters. Chapter 3 covers variables and bindings in depth — how `:=` and `=` work, type annotations, and scoping rules.
-
 # Chapter 3: Variables and Bindings
 
 Mog keeps variable declaration simple: there are no `var`, `let`, or `const` keywords. You create bindings with `:=` and reassign them with `=`. That's it.
@@ -820,7 +818,6 @@ fn main() {
 | `x := "hi";` | Shadow — create a new binding with the same name |
 
 The rule is simple: `:=` introduces, `=` updates. When in doubt, use `:=` for new things and `=` for changing existing things.
-
 # Chapter 4: Types and Operators
 
 Mog is statically typed with no implicit coercion. Every value has a known type at compile time, and the compiler will reject any operation that mixes types without an explicit conversion.
@@ -936,7 +933,7 @@ Booleans are returned by comparison and logical operators:
 fn main() -> int {
   x := 42;
   is_positive := x > 0;       // true
-  is_even := x % 2 == 0;      // true
+  is_even := (x % 2) == 0;     // true
   both := is_positive && is_even;  // true
   println(both);
   return 0;
@@ -1189,7 +1186,7 @@ fn main() -> int {
 ```mog
 fn check(items: [int], index: int) -> bool {
   // Safe: if index is out of bounds, the second condition is never evaluated
-  return index < items.len && items[index] > 0;
+  return (index < items.len) && (items[index] > 0);
 }
 ```
 
@@ -1197,11 +1194,11 @@ Combining conditions:
 
 ```mog
 fn is_valid_age(age: int) -> bool {
-  return age >= 0 && age <= 150;
+  return (age >= 0) && (age <= 150);
 }
 
 fn needs_review(score: int, flagged: bool) -> bool {
-  return score < 50 || flagged;
+  return (score < 50) || flagged;
 }
 ```
 
@@ -1270,33 +1267,61 @@ message := "User " + name + " scored " + str(score) + " points";
 message := f"User {name} scored {score} points";
 ```
 
-## Operator Precedence
+## Flat Operators (No Precedence)
 
-Operators are evaluated in this order, from highest to lowest precedence:
+Mog has **no operator precedence**. All binary operators are flat — the compiler does not
+silently reorder operations based on a precedence table. Instead, Mog enforces explicit
+grouping through two simple rules:
 
-| Precedence | Operators | Description |
-|---|---|---|
-| 1 (highest) | `!` | Unary NOT |
-| 2 | `*`, `/`, `%` | Multiplication, division, modulo |
-| 3 | `+`, `-` | Addition, subtraction |
-| 4 | `<<`, `>>` | Bit shifts |
-| 5 | `&` | Bitwise AND |
-| 6 | `^` | Bitwise XOR |
-| 7 | `\|` | Bitwise OR |
-| 8 | `==`, `!=`, `<`, `>`, `<=`, `>=` | Comparison |
-| 9 | `&&` | Logical AND |
-| 10 (lowest) | `\|\|` | Logical OR |
-
-When in doubt, use parentheses:
+**1. Associative operators can chain with themselves.**
+The operators `+`, `*`, `and`/`&&`, `or`/`||`, `&`, and `|` are associative, so
+repeating the same one is unambiguous:
 
 ```mog
-// These are equivalent
-result := a + b * c;
-result := a + (b * c);
+total := a + b + c;           // OK — same operator throughout
+mask := READ | WRITE | EXEC;  // OK
+all_ok := x && y && z;        // OK
+```
 
-// But be explicit when mixing categories
-result := (a & mask) == 0;         // compare after masking
-result := (x > 0) && (y > 0);     // logical after comparison
+**2. Everything else requires parentheses.**
+
+- **Different operators cannot mix.** Use parentheses to show intent:
+
+```mog
+result := a + (b * c);              // OK — parens make grouping explicit
+result := a + b * c;                // COMPILE ERROR — mixed + and *
+
+check := (x > 0) && (y > 0);       // OK
+check := x > 0 && y > 0;           // COMPILE ERROR — mixed > and &&
+
+is_even := (n % 2) == 0;           // OK
+is_even := n % 2 == 0;             // COMPILE ERROR — mixed % and ==
+```
+
+- **Non-associative operators cannot chain**, even with themselves:
+
+```mog
+diff := (a - b) - c;               // OK — parenthesized
+diff := a - b - c;                  // COMPILE ERROR — - is non-associative
+
+ratio := (a / b) / c;              // OK
+ratio := a / b / c;                // COMPILE ERROR — / is non-associative
+```
+
+Non-associative operators: `-`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `<<`, `>>`, `^`.
+
+### Why no precedence?
+
+Precedence tables are a common source of bugs — especially when mixing arithmetic,
+comparison, and logical operators. Mog makes every grouping decision visible in the
+source code. The cost is a few extra parentheses; the benefit is that the code always
+means exactly what it says.
+
+```mog
+// Clear and correct
+fahrenheit := ((celsius * 9) / 5) + 32;
+in_range := (x >= low) && (x <= high);
+masked := (flags & MASK) != 0;
 ```
 
 ## Common Patterns
@@ -1345,7 +1370,7 @@ fn average(numbers: [int]) -> float {
   for n in numbers {
     sum = sum + n;
   }
-  return sum as float / numbers.len as float;
+  return (sum as float) / (numbers.len as float);
 }
 
 fn main() -> int {
@@ -1385,7 +1410,7 @@ fn main() -> int {
 
 ```mog
 fn format_percentage(value: int, total: int) -> string {
-  pct := value as float / total as float * 100.0;
+  pct := (value as float / total as float) * 100.0;
   return str(round(pct)) + "%";
 }
 
@@ -1405,8 +1430,7 @@ Mog's type system is small and strict:
 - **No implicit coercion.** Use `as` for numeric casts, `str()` for string conversion, `int_from_string()` and `parse_float()` for parsing.
 - **Operators require matching types.** Both sides of `+`, `*`, `==`, etc. must be the same type.
 - **Booleans are booleans.** No truthy/falsy — use explicit comparisons.
-- **When in doubt, add parentheses.** Mog follows conventional precedence, but clarity beats cleverness.
-
+- **Operators are flat — no precedence.** Different operators cannot mix without parentheses, and non-associative operators cannot chain. This eliminates an entire class of bugs.
 # Chapter 5: Control Flow
 
 Mog's control flow is familiar if you've used any C-family language: `if`/`else`, `while`, `for`, `break`, `continue`, and `match`. No surprises — but a few details matter, like braces being required, `if` working as an expression, and `match` handling Result and Optional patterns.
@@ -1483,13 +1507,13 @@ Nested `if` blocks inside other `if` blocks:
 ```mog
 fn describe_number(n: int) -> string {
   if n > 0 {
-    if n % 2 == 0 {
+    if (n % 2) == 0 {
       return "positive even";
     } else {
       return "positive odd";
     }
   } else if n < 0 {
-    if n % 2 == 0 {
+    if (n % 2) == 0 {
       return "negative even";
     } else {
       return "negative odd";
@@ -1564,7 +1588,7 @@ Combining conditions with logical operators:
 
 ```mog
 fn can_vote(age: int, is_citizen: bool) -> bool {
-  return age >= 18 && is_citizen;
+  return (age >= 18) && is_citizen;
 }
 
 fn main() -> int {
@@ -1581,9 +1605,9 @@ fn main() -> int {
   score := 85;
   if score >= 90 {
     println("A");
-  } else if score >= 80 && score < 90 {
+  } else if (score >= 80) && (score < 90) {
     println("B");
-  } else if score >= 70 && score < 80 {
+  } else if (score >= 70) && (score < 80) {
     println("C");
   } else {
     println("below C");
@@ -1657,10 +1681,10 @@ fn collatz_steps(n: int) -> int {
   steps := 0;
   val := n;
   while val != 1 {
-    if val % 2 == 0 {
+    if (val % 2) == 0 {
       val = val / 2;
     } else {
-      val = val * 3 + 1;
+      val = (val * 3) + 1;
     }
     steps = steps + 1;
   }
@@ -1680,8 +1704,8 @@ Integer square root by repeated approximation:
 fn isqrt(n: int) -> int {
   if n <= 1 { return n; }
   guess := n / 2;
-  while guess * guess > n {
-    guess = (guess + n / guess) / 2;
+  while (guess * guess) > n {
+    guess = (guess + (n / guess)) / 2;
   }
   return guess;
 }
@@ -2019,7 +2043,7 @@ fn main() -> int {
   temps_celsius := {"London": 15, "Tokyo": 28, "New York": 22, "Sydney": 19};
 
   for city, celsius in temps_celsius {
-    fahrenheit := celsius * 9 / 5 + 32;
+    fahrenheit := ((celsius * 9) / 5) + 32;
     println(f"{city}: {celsius}C = {fahrenheit}F");
   }
   return 0;
@@ -2058,7 +2082,7 @@ fn main() -> int {
 fn main() -> int {
   // Find the first multiple of 7 greater than 50
   for i in 1..100 {
-    if i * 7 > 50 {
+    if (i * 7) > 50 {
       println(f"found: {i} (7 * {i} = {i * 7})");
       break;
     }
@@ -2074,7 +2098,7 @@ fn main() -> int {
 fn main() -> int {
   // Print only odd numbers from 0 to 19
   for i in 0..20 {
-    if i % 2 == 0 {
+    if (i % 2) == 0 {
       continue;
     }
     print_string(f"{i} ");
@@ -2092,7 +2116,7 @@ fn main() -> int {
   total := 0;
   stopped_at := 0;
   for i in 1..101 {
-    if i % 3 == 0 {
+    if (i % 3) == 0 {
       continue;
     }
     total = total + i;
@@ -2120,7 +2144,7 @@ fn main() -> int {
   for i in 1..20 {
     if done { break; }
     for j in 1..20 {
-      if i * j == 42 {
+      if (i * j) == 42 {
         found_i = i;
         found_j = j;
         done = true;
@@ -2454,7 +2478,7 @@ fn main() -> int {
 fn sum_of_squares(n: int) -> int {
   total := 0;
   for i := 1 to n {
-    total = total + i * i;
+    total = total + (i * i);
   }
   return total;
 }
@@ -2497,7 +2521,7 @@ fn bubble_sort(arr: [int]) -> [int] {
   sorted := arr;
   n := sorted.len;
   for i in 0..n {
-    for j in 0..n - i - 1 {
+    for j in 0..((n - i) - 1) {
       if sorted[j] > sorted[j + 1] {
         temp := sorted[j];
         sorted[j] = sorted[j + 1];
@@ -2524,11 +2548,11 @@ fn main() -> int {
 ```mog
 fn main() -> int {
   for i := 1 to 30 {
-    if i % 15 == 0 {
+    if (i % 15) == 0 {
       println("FizzBuzz");
-    } else if i % 3 == 0 {
+    } else if (i % 3) == 0 {
       println("Fizz");
-    } else if i % 5 == 0 {
+    } else if (i % 5) == 0 {
       println("Buzz");
     } else {
       println(i);
@@ -2566,11 +2590,11 @@ fn main() -> int {
 fn is_prime(n: int) -> bool {
   if n < 2 { return false; }
   if n < 4 { return true; }
-  if n % 2 == 0 { return false; }
+  if (n % 2) == 0 { return false; }
 
   i := 3;
-  while i * i <= n {
-    if n % i == 0 {
+  while (i * i) <= n {
+    if (n % i) == 0 {
       return false;
     }
     i = i + 2;
@@ -2628,7 +2652,6 @@ fn main() -> int {
 | Continue | `continue;` | Skips to next iteration |
 | Match | `match val { pat => expr, }` | Comma-separated arms, `_` wildcard |
 | Match expression | `x := match val { ... };` | Returns value from matched arm |
-
 # Chapter 6: Functions
 
 Functions are the primary building blocks of any Mog program. They group reusable logic behind a name, accept typed parameters, and can return values. This chapter covers everything from basic declarations to recursion and the built-in functions that ship with every Mog program.
@@ -2647,7 +2670,7 @@ fn multiply(x: float, y: float) -> float {
 }
 
 fn is_even(n: int) -> bool {
-  return n % 2 == 0;
+  return (n % 2) == 0;
 }
 ```
 
@@ -2991,7 +3014,7 @@ Examples:
 fn distance(x1: float, y1: float, x2: float, y2: float) -> float {
   dx := x2 - x1;
   dy := y2 - y1;
-  return sqrt(dx * dx + dy * dy);
+  return sqrt((dx * dx) + (dy * dy));
 }
 
 fn main() -> int {
@@ -3003,7 +3026,7 @@ fn main() -> int {
 ```mog
 // Convert degrees to radians and compute trig values
 fn deg_to_rad(degrees: float) -> float {
-  return degrees * 3.14159265 / 180.0;
+  return (degrees * 3.14159265) / 180.0;
 }
 
 fn main() -> int {
@@ -3112,7 +3135,7 @@ match result {
 // Using ? to propagate errors
 fn read_port(input: string) -> Result<int> {
   port := int_from_string(input)?;
-  if port < 1 || port > 65535 {
+  if (port < 1) || (port > 65535) {
     return err("port out of range");
   }
   return ok(port);
@@ -3174,40 +3197,30 @@ fn main() -> int {
 | Named call | `f(x: 42, y: 10)` | Named args can be in any order |
 | Mixed call | `f(42, y: 10)` | Positional before named |
 | Recursion | `fn f(n: int) { f(n-1); }` | No guaranteed tail-call optimization |
-
 # Chapter 7: Closures and Higher-Order Functions
 
-In the previous chapter, functions were always named and declared at the top level.
-Mog also supports **closures** — anonymous functions that can be created inline,
-stored in variables, passed as arguments, and returned from other functions. When
-combined with higher-order functions (functions that accept or return other
-functions), closures unlock powerful and concise patterns for working with data.
+In the previous chapter, functions were always named and declared at the top level. Mog also supports **closures** — anonymous functions that can be created inline, stored in variables, passed as arguments, and returned from other functions. When combined with higher-order functions (functions that accept or return other functions), closures unlock powerful and concise patterns for working with data.
 
 ## Closure Syntax
 
-A closure is an anonymous function written with the `fn` keyword but without a
-name. It's typically assigned to a variable or passed directly as an argument.
+A closure is an anonymous function written with the `fn` keyword but without a name. It is typically assigned to a variable or passed directly as an argument.
 
 ```mog
-// Assign a closure to a variable
 add := fn(a: int, b: int) -> int { return a + b; };
 
 print(add(3, 4));  // 7
 ```
 
-The syntax mirrors named functions: parameters with types, an optional return type,
-and a body in curly braces. The trailing semicolon is required because the closure
-assignment is a statement.
+The syntax mirrors named functions: parameters with types, an optional return type, and a body in curly braces. The trailing semicolon is required because the closure assignment is a statement.
 
 ```mog
-// A few more closures
 square := fn(n: int) -> int { return n * n; };
 is_positive := fn(x: float) -> bool { return x > 0.0; };
-shout := fn(s: string) -> string { return s + "!!!"; };
+greet := fn(name: string) -> string { return "hello, {name}!"; };
 
 print(square(5));         // 25
 print(is_positive(-3.0)); // false
-print(shout("hello"));   // hello!!!
+print(greet("Alice"));    // hello, Alice!
 ```
 
 Closures that take no parameters and return nothing work too:
@@ -3217,11 +3230,9 @@ say_hi := fn() { print("hi"); };
 say_hi();  // hi
 ```
 
-## Capturing Variables from Outer Scope
+## Capturing Variables
 
-Closures can reference variables from their enclosing scope. This is what
-distinguishes a closure from a plain function pointer — it "closes over" the
-environment where it was created.
+Closures can reference variables from their enclosing scope. This is what distinguishes a closure from a plain function pointer — it "closes over" the environment where it was created.
 
 ```mog
 multiplier := 3;
@@ -3231,47 +3242,33 @@ print(triple(10));  // 30
 print(triple(7));   // 21
 ```
 
-```mog
-prefix := "ERROR";
-format_error := fn(msg: string) -> string {
-  return "[{prefix}] {msg}";
-};
-
-print(format_error("disk full"));       // [ERROR] disk full
-print(format_error("connection lost")); // [ERROR] connection lost
-```
-
 Closures can capture multiple variables:
 
 ```mog
 base_url := "https://api.example.com";
 api_key := "sk-12345";
 
-make_request := fn(endpoint: string) -> string {
+make_url := fn(endpoint: string) -> string {
   return "{base_url}/{endpoint}?key={api_key}";
 };
 
-print(make_request("users"));   // https://api.example.com/users?key=sk-12345
-print(make_request("posts"));   // https://api.example.com/posts?key=sk-12345
+print(make_url("users"));  // https://api.example.com/users?key=sk-12345
 ```
 
-## Value Capture Semantics
+### Value Capture Semantics
 
-Mog captures variables **by value** — the closure gets a snapshot of each
-captured variable at the moment the closure is created. Later changes to the
-original variable do not affect the closure's copy.
+Mog captures variables **by value** — the closure gets a snapshot of each captured variable at the moment the closure is created. Later changes to the original do not affect the closure's copy.
 
 ```mog
 count := 10;
 get_count := fn() -> int { return count; };
 
-count = 20;  // modify the original
-print(get_count());  // 10 — the closure captured the value 10
-print(count);        // 20 — the original variable is 20
+count = 20;
+print(get_count());  // 10 — captured the value 10
+print(count);        // 20 — the original is 20
 ```
 
-This matters in loops. Each iteration creates a new closure, and each one
-captures the value of the loop variable at that point in time:
+This matters in loops. Each iteration creates a new closure that captures the loop variable's current value:
 
 ```mog
 makers: [fn() -> int] = [];
@@ -3279,35 +3276,56 @@ for i in 0..5 {
   makers.push(fn() -> int { return i; });
 }
 
-// Each closure captured a different value of i
 print(makers[0]());  // 0
-print(makers[1]());  // 1
-print(makers[2]());  // 2
 print(makers[3]());  // 3
-print(makers[4]());  // 4
 ```
 
-Another example to reinforce this — mutations after closure creation have no
-effect:
+> Internally, closures are implemented as a fat pointer: `{fn_ptr, env_ptr}`. The runtime copies only the variables the closure actually references. This is an implementation detail you rarely need to think about.
+
+## Type Aliases for Function Types
+
+Function type signatures can get verbose. Use `type` to create aliases:
 
 ```mog
-name := "Alice";
-greeter := fn() -> string { return "Hello, {name}"; };
-
-name = "Bob";
-print(greeter());  // Hello, Alice — captured at creation time
+type Predicate = fn(int) -> bool;
+type Transform = fn(int) -> int;
+type Callback = fn(string);
 ```
 
-Internally, closures are implemented as a **fat pointer**: `{fn_ptr, env_ptr}`.
-The `fn_ptr` points to the compiled function code, and the `env_ptr` points to
-a heap-allocated copy of the captured variables. This is an implementation detail
-you rarely need to think about, but it explains why capture-by-value is efficient —
-the runtime copies only the variables the closure actually references.
+These aliases simplify function signatures:
+
+```mog
+type Transform = fn(int) -> int;
+
+fn apply_twice(f: Transform, value: int) -> int {
+  return f(f(value));
+}
+
+double := fn(n: int) -> int { return n * 2; };
+print(apply_twice(double, 3));  // 12
+```
+
+Without the alias, the signature would be `fn apply_twice(f: fn(int) -> int, value: int) -> int` — correct but harder to read at a glance.
+
+```mog
+type Predicate = fn(int) -> bool;
+type Formatter = fn(int) -> string;
+
+fn find_first(items: [int], pred: Predicate) -> ?int {
+  for item in items {
+    if pred(item) { return some(item); }
+  }
+  return none;
+}
+
+fn format_all(items: [int], fmt: Formatter) -> [string] {
+  return items.map(fmt);
+}
+```
 
 ## Passing Closures to Functions
 
-Closures are first-class values in Mog. You can pass them as arguments to other
-functions using the function type syntax `fn(ParamTypes) -> ReturnType`.
+Closures are first-class values. You can pass them as arguments using the function type syntax `fn(ParamTypes) -> ReturnType`.
 
 ```mog
 fn apply(f: fn(int) -> int, x: int) -> int {
@@ -3321,17 +3339,13 @@ print(apply(double, 5));   // 10
 print(apply(negate, 5));   // -5
 ```
 
-You can also pass closures inline without naming them:
+You can pass closures inline without naming them:
 
 ```mog
-fn apply(f: fn(int) -> int, x: int) -> int {
-  return f(x);
-}
-
 print(apply(fn(n: int) -> int { return n * n; }, 4));  // 16
 ```
 
-A function that applies an operation to every element of an array:
+A function that transforms every element of an array:
 
 ```mog
 fn transform(arr: [int], f: fn(int) -> int) -> [int] {
@@ -3347,39 +3361,14 @@ numbers := [1, 2, 3, 4, 5];
 doubled := transform(numbers, fn(n: int) -> int { return n * 2; });
 print(doubled);  // [2, 4, 6, 8, 10]
 
-squared := transform(numbers, fn(n: int) -> int { return n * n; });
-print(squared);  // [1, 4, 9, 16, 25]
-
 offset := 100;
 shifted := transform(numbers, fn(n: int) -> int { return n + offset; });
 print(shifted);  // [101, 102, 103, 104, 105]
 ```
 
-Multiple function parameters work naturally:
-
-```mog
-fn combine(
-  a: int,
-  b: int,
-  merge: fn(int, int) -> int,
-  format: fn(int) -> string,
-) -> string {
-  return format(merge(a, b));
-}
-
-result := combine(
-  3, 7,
-  fn(x: int, y: int) -> int { return x + y; },
-  fn(n: int) -> string { return "result = {str(n)}"; },
-);
-print(result);  // result = 10
-```
-
 ## Returning Closures from Functions
 
-Functions can create and return closures. The returned closure retains access to
-any variables it captured from the enclosing function's scope — even after that
-function has returned.
+Functions can create and return closures. The returned closure retains access to any variables it captured — even after the enclosing function has returned.
 
 ```mog
 fn make_adder(n: int) -> fn(int) -> int {
@@ -3399,68 +3388,23 @@ fn make_multiplier(factor: float) -> fn(float) -> float {
 }
 
 to_km := make_multiplier(1.60934);
-to_celsius := make_multiplier(0.55556);  // rough (F-32)*5/9
-
-print(to_km(10.0));       // 16.0934
-print(to_celsius(50.0));  // 27.778
+print(to_km(10.0));  // 16.0934
 ```
 
-**Building a counter factory:**
-
-```mog
-fn make_counter(start: int) -> {next: fn() -> int, peek: fn() -> int} {
-  current := start;
-  return {
-    next: fn() -> int {
-      val := current;
-      current = current + 1;
-      return val;
-    },
-    peek: fn() -> int {
-      return current;
-    },
-  };
-}
-
-c := make_counter(0);
-print(c.next());  // 0
-print(c.next());  // 1
-print(c.next());  // 2
-print(c.peek());  // 3
-```
-
-**Building a prefix logger:**
-
-```mog
-fn make_logger(prefix: string) -> fn(string) {
-  return fn(msg: string) {
-    print("[{prefix}] {msg}");
-  };
-}
-
-info := make_logger("INFO");
-warn := make_logger("WARN");
-err := make_logger("ERROR");
-
-info("Server started");   // [INFO] Server started
-warn("Disk 90% full");    // [WARN] Disk 90% full
-err("Connection failed");  // [ERROR] Connection failed
-```
+This factory pattern is useful for creating families of related functions from a single template. You will see it again in Chapter 9 when we build constructor functions for structs.
 
 ## Closures with Array Methods
 
-Mog arrays have built-in methods — `filter`, `map`, and `sort` — that accept
-closures. These methods return new arrays; they do not modify the original.
+Mog arrays have built-in methods — `filter`, `map`, and `sort` — that accept closures. These methods return new arrays; they do not modify the original. See Chapter 10 for the full set of collection operations.
 
 ### filter
 
-`filter` takes a predicate closure and returns a new array containing only the
-elements for which the predicate returns `true`.
+`filter` takes a predicate closure and returns a new array containing only the elements for which the predicate returns `true`.
 
 ```mog
 numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-evens := numbers.filter(fn(n: int) -> bool { return n % 2 == 0; });
+evens := numbers.filter(fn(n: int) -> bool { return (n % 2) == 0; });
 print(evens);  // [2, 4, 6, 8, 10]
 
 big := numbers.filter(fn(n: int) -> bool { return n > 7; });
@@ -3479,8 +3423,7 @@ print(passing);  // [72, 88, 91, 79, 95]
 
 ### map
 
-`map` takes a transform closure and returns a new array with each element
-replaced by the result of the closure.
+`map` takes a transform closure and returns a new array with each element replaced by the closure's result.
 
 ```mog
 numbers := [1, 2, 3, 4, 5];
@@ -3494,14 +3437,13 @@ print(labels);  // ["item-1", "item-2", "item-3", "item-4", "item-5"]
 
 ```mog
 names := ["alice", "bob", "carol"];
-lengths := names.map(fn(name: string) -> int { return len(name); });
+lengths := names.map(fn(name: string) -> int { return name.len; });
 print(lengths);  // [5, 3, 5]
 ```
 
 ### sort
 
-`sort` takes a comparator closure that returns `true` when the first argument
-should come before the second. It returns a new sorted array.
+`sort` takes a comparator closure that returns `true` when the first argument should come before the second. It returns a new sorted array.
 
 ```mog
 numbers := [5, 2, 8, 1, 9, 3];
@@ -3525,7 +3467,6 @@ players := [
   Player{name: "Alice", score: 250},
   Player{name: "Bob", score: 180},
   Player{name: "Carol", score: 320},
-  Player{name: "Dave", score: 290},
 ];
 
 by_score := players.sort(fn(a: Player, b: Player) -> bool {
@@ -3536,241 +3477,40 @@ for p in by_score {
   print("{p.name}: {str(p.score)}");
 }
 // Carol: 320
-// Dave: 290
 // Alice: 250
 // Bob: 180
 ```
 
-### Chaining array methods
+### Chaining Methods
 
-Filter, map, and sort can be chained together for expressive data pipelines:
-
-```mog
-struct Transaction {
-  description: string,
-  amount: float,
-}
-
-transactions := [
-  Transaction{description: "Groceries", amount: -52.30},
-  Transaction{description: "Salary", amount: 3200.00},
-  Transaction{description: "Gas", amount: -45.00},
-  Transaction{description: "Freelance", amount: 800.00},
-  Transaction{description: "Rent", amount: -1200.00},
-];
-
-// Get descriptions of expenses over $50, sorted by amount
-big_expenses := transactions
-  .filter(fn(t: Transaction) -> bool { return t.amount < -50.0; })
-  .sort(fn(a: Transaction, b: Transaction) -> bool { return a.amount < b.amount; })
-  .map(fn(t: Transaction) -> string { return "{t.description}: {str(t.amount)}"; });
-
-for line in big_expenses {
-  print(line);
-}
-// Rent: -1200.0
-// Groceries: -52.3
-```
-
-## Practical Patterns
-
-### Callbacks
-
-Pass closures to functions that should call them when something happens:
+Filter, map, and sort can be chained for expressive data pipelines:
 
 ```mog
-fn retry(
-  attempts: int,
-  action: fn() -> Result<string>,
-  on_failure: fn(string, int),
-) -> Result<string> {
-  for i in 0..attempts {
-    result := action();
-    match result {
-      ok(value) => { return ok(value); },
-      err(msg) => { on_failure(msg, i + 1); },
-    }
-  }
-  return err("all {str(attempts)} attempts failed");
-}
+numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-result := retry(
-  3,
-  fn() -> Result<string> {
-    // simulate a flaky operation
-    return err("timeout");
-  },
-  fn(msg: string, attempt: int) {
-    print("Attempt {str(attempt)} failed: {msg}");
-  },
-);
-// Attempt 1 failed: timeout
-// Attempt 2 failed: timeout
-// Attempt 3 failed: timeout
+result := numbers
+  .filter(fn(n: int) -> bool { return (n % 2) == 0; })
+  .map(fn(n: int) -> int { return n * n; })
+  .sort(fn(a: int, b: int) -> bool { return a > b; });
+
+print(result);  // [100, 64, 36, 16, 4]
 ```
 
-### Strategy Pattern
+> Method chaining reads top-to-bottom: filter the evens, square them, sort descending. Each step returns a new array, so the original `numbers` is untouched.
 
-Select behavior at runtime by choosing different closures:
+## Summary
 
-```mog
-fn format_list(items: [string], formatter: fn([string]) -> string) -> string {
-  return formatter(items);
-}
+| Concept | Syntax |
+|---|---|
+| Create a closure | `fn(params) -> Type { body }` |
+| Type alias | `type Name = fn(ParamTypes) -> ReturnType;` |
+| Pass to function | `fn do_it(f: fn(int) -> int) { ... }` |
+| Return from function | `fn make() -> fn(int) -> int { ... }` |
+| Filter an array | `arr.filter(fn(x: T) -> bool { ... })` |
+| Map an array | `arr.map(fn(x: T) -> U { ... })` |
+| Sort an array | `arr.sort(fn(a: T, b: T) -> bool { ... })` |
 
-bullet_list := fn(items: [string]) -> string {
-  result := "";
-  for item in items {
-    result = result + "  - " + item + "\n";
-  }
-  return result;
-};
-
-numbered_list := fn(items: [string]) -> string {
-  result := "";
-  for i in 0..items.len {
-    result = result + "  " + str(i + 1) + ". " + items[i] + "\n";
-  }
-  return result;
-};
-
-comma_list := fn(items: [string]) -> string {
-  return items.join(", ");
-};
-
-fruits := ["apple", "banana", "cherry"];
-
-print(format_list(fruits, bullet_list));
-//   - apple
-//   - banana
-//   - cherry
-
-print(format_list(fruits, numbered_list));
-//   1. apple
-//   2. banana
-//   3. cherry
-
-print(format_list(fruits, comma_list));
-// apple, banana, cherry
-```
-
-### Accumulators
-
-Use closures to build up a result across repeated calls:
-
-```mog
-fn make_accumulator(initial: float) -> {add: fn(float), total: fn() -> float} {
-  sum := initial;
-  return {
-    add: fn(amount: float) {
-      sum = sum + amount;
-    },
-    total: fn() -> float {
-      return sum;
-    },
-  };
-}
-
-acc := make_accumulator(0.0);
-acc.add(10.5);
-acc.add(20.0);
-acc.add(3.75);
-print(acc.total());  // 34.25
-```
-
-```mog
-fn make_running_average() -> {update: fn(float), average: fn() -> float} {
-  sum := 0.0;
-  count := 0;
-  return {
-    update: fn(value: float) {
-      sum = sum + value;
-      count = count + 1;
-    },
-    average: fn() -> float {
-      if count == 0 {
-        return 0.0;
-      }
-      return sum / count;
-    },
-  };
-}
-
-avg := make_running_average();
-avg.update(100.0);
-avg.update(80.0);
-avg.update(90.0);
-print(avg.average());  // 90.0
-avg.update(70.0);
-print(avg.average());  // 85.0
-```
-
-### Composing Functions
-
-Build new functions by combining existing ones:
-
-```mog
-fn compose(f: fn(int) -> int, g: fn(int) -> int) -> fn(int) -> int {
-  return fn(x: int) -> int { return f(g(x)); };
-}
-
-double := fn(n: int) -> int { return n * 2; };
-add_one := fn(n: int) -> int { return n + 1; };
-
-double_then_add := compose(add_one, double);
-add_then_double := compose(double, add_one);
-
-print(double_then_add(5));  // 11 — (5*2) + 1
-print(add_then_double(5));  // 12 — (5+1) * 2
-```
-
-```mog
-fn pipeline(value: int, steps: [fn(int) -> int]) -> int {
-  result := value;
-  for step in steps {
-    result = step(result);
-  }
-  return result;
-}
-
-output := pipeline(3, [
-  fn(n: int) -> int { return n * 2; },     // 6
-  fn(n: int) -> int { return n + 10; },    // 16
-  fn(n: int) -> int { return n * n; },     // 256
-]);
-print(output);  // 256
-```
-
-### Memoization
-
-Wrap a function to cache its results:
-
-```mog
-fn memoize(f: fn(int) -> int) -> fn(int) -> int {
-  cache: map[int]int = {};
-  return fn(x: int) -> int {
-    if cache.has(x) {
-      return cache[x];
-    }
-    result := f(x);
-    cache[x] = result;
-    return result;
-  };
-}
-
-// Expensive computation
-slow_square := fn(n: int) -> int {
-  print("Computing {str(n)} squared...");
-  return n * n;
-};
-
-fast_square := memoize(slow_square);
-print(fast_square(5));  // Computing 5 squared... 25
-print(fast_square(5));  // 25 — cached, no "Computing" message
-print(fast_square(3));  // Computing 3 squared... 9
-print(fast_square(3));  // 9 — cached
-```
-
+Closures capture by value, are first-class values, and combine naturally with array methods for concise data processing. In the next chapter, we will look at Mog's string type in detail.
 # Chapter 8: Strings
 
 Strings are one of the most frequently used types in any language. Mog strings are immutable, UTF-8 encoded, and garbage-collected — you create them, pass them around, and the runtime handles the rest. This chapter covers everything from basic literals and escape sequences to interpolation, methods, and parsing.
@@ -4446,7 +4186,6 @@ fn main() -> int {
 | Equality | `a == b`, `a != b` | `bool` |
 
 Strings are straightforward in Mog — double-quoted, immutable, UTF-8, and garbage-collected. For error handling with `int_from_string` and `float_from_string`, see Chapter 11 on Result types.
-
 # Chapter 9: Structs
 
 Structs are Mog's way of grouping related data under a single name. They are simple named product types with typed fields — no methods, no inheritance, no interfaces. You define the shape, construct instances, and pass them around. Functions that operate on structs live outside the struct as standalone functions.
@@ -4545,7 +4284,7 @@ Fields work anywhere an expression of that type is expected:
 ```mog
 fn main() {
   p := Point { x: 3, y: 4 };
-  distance_squared := p.x * p.x + p.y * p.y;
+  distance_squared := (p.x * p.x) + (p.y * p.y);
   print(distance_squared);  // 25
 }
 ```
@@ -4646,7 +4385,7 @@ fn vec2_add(a: Vec2, b: Vec2) -> Vec2 {
 }
 
 fn vec2_dot(a: Vec2, b: Vec2) -> int {
-  return a.x * b.x + a.y * b.y;
+  return (a.x * b.x) + (a.y * b.y);
 }
 
 fn vec2_to_string(v: Vec2) -> string {
@@ -4782,7 +4521,7 @@ fn average_grade(s: StudentRecord) -> float {
   for g in s.grades {
     sum = sum + g;
   }
-  return sum as float / s.grades.len as float;
+  return (sum as float) / (s.grades.len as float);
 }
 
 fn main() {
@@ -4913,7 +4652,6 @@ fn main() {
 | Nested field access | `instance.field.subfield` |
 
 Structs are heap-allocated and passed by reference. There are no methods — use standalone functions that take the struct as a parameter. Keep structs simple: they hold data, functions provide behavior.
-
 # Chapter 10: Collections
 
 Mog provides three collection types: arrays for ordered sequences, maps for key-value lookup, and SoA (Struct of Arrays) for cache-friendly columnar storage. Together they cover the vast majority of data organization needs.
@@ -5159,7 +4897,7 @@ Return a new array containing only elements that pass a test:
 fn main() -> int {
   numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-  evens := numbers.filter(fn(n: int) -> bool { n % 2 == 0 });
+  evens := numbers.filter(fn(n: int) -> bool { (n % 2) == 0 });
   println(evens);  // [2, 4, 6, 8, 10]
 
   big := numbers.filter(fn(n: int) -> bool { n > 5 });
@@ -5246,7 +4984,7 @@ fn main() -> int {
 
   // Get the squares of even numbers
   result := numbers
-    .filter(fn(n: int) -> bool { n % 2 == 0 })
+    .filter(fn(n: int) -> bool { (n % 2) == 0 })
     .map(fn(n: int) -> int { n * n });
   println(result);  // [4, 16, 36, 64, 100]
   return 0;
@@ -5586,13 +5324,13 @@ struct Particle {
 fn step(particles: soa Particle, count: int, dt: float) {
   // Apply gravity — only touches vy array
   for i in 0..count {
-    particles[i].vy = particles[i].vy - 9.8 * dt;
+    particles[i].vy = particles[i].vy - (9.8 * dt);
   }
 
   // Update positions — touches x, y, vx, vy arrays
   for i in 0..count {
-    particles[i].x = particles[i].x + particles[i].vx * dt;
-    particles[i].y = particles[i].y + particles[i].vy * dt;
+    particles[i].x = particles[i].x + (particles[i].vx * dt);
+    particles[i].y = particles[i].y + (particles[i].vy * dt);
   }
 }
 
@@ -5662,7 +5400,7 @@ fn main() -> int {
 
   for i in 0..100 {
     data[i].id = i;
-    data[i].value = i * 7 % 50;
+    data[i].value = (i * 7) % 50;
     data[i].category = i % 3;
   }
 
@@ -5765,7 +5503,6 @@ fn main() -> int {
 **Map methods:** `.len()`, `.keys()`, `.values()`, `.has()`, `.delete()`
 
 Arrays are the default choice. Use maps when you need key-based lookup. Use SoA when you have many elements and need to iterate over individual fields efficiently — the syntax stays familiar while the memory layout optimizes for your access pattern.
-
 # Chapter 11: Error Handling
 
 Mog has no exceptions. There is no `throw`, no invisible stack unwinding, no `try`/`finally` cleanup semantics. When a function can fail, it says so in its return type, and the caller decides what to do. Errors are values — you create them, return them, match on them, and propagate them with the same tools you use for everything else.
@@ -6002,7 +5739,7 @@ fn get_user_email(users: [User], name: string) -> ?string {
 ```mog
 fn first_even(arr: [int]) -> ?int {
   for n in arr {
-    if n % 2 == 0 {
+    if (n % 2) == 0 {
       return some(n);
     }
   }
@@ -6374,7 +6111,6 @@ fn fetch_and_parse(url: string) -> Result<Config> {
 | `try { ... } catch(e) { ... }` | Handle propagated errors locally |
 
 Mog's error handling is explicit and local. You always know which functions can fail by looking at their return type, and you always know where errors are handled by following the `?` operators and `match` arms. There are no hidden control flow paths — what you read is what runs.
-
 # Chapter 12: Async Programming
 
 Mog uses `async`/`await` for asynchronous operations. Agent scripts need to wait on external operations — API calls, model inference, file I/O — and async functions let you express that waiting without blocking the entire program. The host runtime manages the event loop; Mog code never creates threads or manages concurrency primitives directly.
@@ -6769,7 +6505,6 @@ async fn main() -> int {
 | `race([f1, f2])` | Wait for the first future to complete |
 
 Async functions compose with `Result<T>` and `?` from Chapter 11 — `await` resolves the future, then `?` unwraps the result. Use `all()` when you have independent operations that can run in parallel. Use `race()` for timeouts and fallback strategies. Use `spawn` only for side effects you don't need to track. The runtime manages the event loop; your job is to describe what depends on what.
-
 # Chapter 13: Modules and Packages
 
 As Mog programs grow beyond a single file, you need a way to split code into logical units, control what's visible to the outside, and compose libraries. Mog uses a Go-style module system: packages group related code, `pub` controls visibility, and `import` brings packages into scope.
@@ -6791,7 +6526,7 @@ All `.mog` files in the same directory must declare the same package name. The p
 package geometry;
 
 pub fn circle_area(radius: float) -> float {
-  return PI * radius ** 2.0;
+  return PI * (radius ** 2.0);
 }
 ```
 
@@ -6800,7 +6535,7 @@ pub fn circle_area(radius: float) -> float {
 package geometry;
 
 pub fn sphere_volume(radius: float) -> float {
-  return (4.0 / 3.0) * PI * radius ** 3.0;
+  return (4.0 / 3.0) * PI * (radius ** 3.0);
 }
 ```
 
@@ -7229,7 +6964,6 @@ Key points:
 - **Avoid** circular imports — extract shared code into a common package
 
 Capabilities (Chapter 14) use the same dot-syntax as package access — `fs.read_file()` looks like a module call but is backed by host-provided functions rather than Mog source code. The next chapter explains how that works.
-
 # Chapter 14: Capabilities — Safe I/O
 
 Mog has no built-in I/O. No file reads, no network calls, no environment variables — nothing that touches the outside world lives in the language itself. All side effects flow through **capabilities**: named interfaces that the host application provides to the script at runtime.
@@ -7301,7 +7035,7 @@ fn fibonacci(n: int) -> int {
   if n <= 1 { return n; }
   a := 0;
   b := 1;
-  for i in 2..n+1 {
+  for i in 2..(n + 1) {
     temp := a + b;
     a = b;
     b = temp;
@@ -7498,7 +7232,7 @@ fn do_work() -> int {
   // pure computation — no capabilities needed
   total := 0;
   for i in 1..101 {
-    total = total + i * i;
+    total = total + (i * i);
   }
   return total;
 }
@@ -7615,7 +7349,6 @@ If the host only provides `fs` and `process` but not `http`, the script is rejec
 | No declaration | Pure computation, no I/O |
 
 Capabilities are the only way for Mog code to interact with the outside world. This constraint is what makes Mog safe to embed — the host is always in control. The next chapter shows how to set up that host: creating a VM, registering capabilities from C, and enforcing resource limits.
-
 # Chapter 15: Embedding Mog in a Host Application
 
 Mog is designed to be embedded. It's a scripting language that runs inside your application, not a standalone runtime. The host creates a VM, decides what the script can do, enforces resource limits, and tears everything down when it's finished.
@@ -8220,7 +7953,6 @@ The script has access to exactly the game functions the host provides. It cannot
 | `mog_arg_int(args, i)`, ... | Extract an argument |
 
 The embedding model is intentionally simple: create, configure, run, destroy. The host is always in control — it decides what capabilities exist, how long scripts can run, and when to stop them. The script operates in a sandbox defined entirely by the host.
-
 # Chapter 16: Tensors — N-Dimensional Arrays
 
 Mog provides tensors as a built-in data type — n-dimensional arrays with a fixed element dtype. They are the interchange format between Mog scripts and host-provided ML capabilities. You create tensors, read and write their elements, reshape them, and pass them to host functions. That's it.
@@ -8311,7 +8043,7 @@ These are the only built-in constructors. If you need other initialization patte
 fn eye(n: int) -> tensor<f32> {
   t := tensor<f32>.zeros([n, n]);
   for i in 0..n {
-    t[i * n + i] = 1.0;
+    t[(i * n) + i] = 1.0;
   }
   return t;
 }
@@ -8404,7 +8136,7 @@ t := tensor<f32>([3], [1.0, 2.0, 3.0]);
 
 ### Computing Flat Indices
 
-For multi-dimensional tensors, you compute the flat index from coordinates manually. For a tensor with shape `[d0, d1, d2]`, the flat index of element `[i, j, k]` is `i * d1 * d2 + j * d2 + k`:
+For multi-dimensional tensors, you compute the flat index from coordinates manually. For a tensor with shape `[d0, d1, d2]`, the flat index of element `[i, j, k]` is `(i * d1 * d2) + (j * d2) + k`:
 
 ```mog
 // 3x4 matrix
@@ -8415,11 +8147,11 @@ m := tensor<f32>([3, 4], [
 ]);
 
 // Element at row 1, column 2 → flat index = 1*4 + 2 = 6
-val := m[1 * 4 + 2];  // 7.0
+val := m[(1 * 4) + 2];  // 7.0
 
 // Helper function for 2D indexing
 fn idx2d(shape: int[], row: int, col: int) -> int {
-  return row * shape[1] + col;
+  return (row * shape[1]) + col;
 }
 
 val2 := m[idx2d(m.shape, 2, 3)];  // 12.0
@@ -8569,7 +8301,7 @@ async fn load_batch(paths: string[], batch_size: int) -> tensor<f32> {
     data := await fs.read_file(paths[i])?;
     // Assume data is a raw float file — parse into tensor elements
     for j in 0..image_size {
-      batch[i * image_size + j] = parse_float(data, j);
+      batch[(i * image_size) + j] = parse_float(data, j);
     }
   }
 
@@ -8609,7 +8341,7 @@ fn top_k(t: tensor<f32>, k: int) -> int[] {
     total := t.shape[0];
 
     for i in 0..total {
-      if !used[i] && t[i] > best_val {
+      if !used[i] && (t[i] > best_val) {
         best_val = t[i];
         best_idx = i;
       }
@@ -8642,7 +8374,7 @@ fn normalize(t: tensor<f32>) -> tensor<f32> {
   sq_sum := 0.0;
   for i in 0..total {
     diff := t[i] - mean;
-    sq_sum = sq_sum + diff * diff;
+    sq_sum = sq_sum + (diff * diff);
   }
   std := sqrt(sq_sum / float(total));
 
@@ -8705,7 +8437,6 @@ async fn main() -> int {
 | Host ML ops | `await ml.forward(t)?` | All compute goes through capabilities |
 
 Tensors are data containers. They hold the numbers. The host provides the math. This separation keeps Mog scripts portable, safe, and small — a script that prepares tensors and calls host capabilities works the same whether the host runs on a laptop CPU or a cluster of GPUs.
-
 # Chapter 17: Advanced Topics
 
 The previous chapters covered the core language — variables, functions, control flow, data structures, error handling, tensors, and embedding. This chapter collects the advanced features and design decisions that round out Mog: type aliases, scoped context blocks, memory layout optimizations, compilation backends, the interrupt system, garbage collection, and the things Mog deliberately leaves out.
@@ -9029,7 +8760,6 @@ Mog's design is subtractive. Every feature must justify its complexity, and many
 **No standalone execution.** Mog scripts run inside a host application. There is no `mog run file.mog` command that produces a self-contained process with filesystem access, network sockets, or an event loop. The host provides capabilities, and the script declares which ones it needs (see Chapter 14). This is the core security model — a Mog script can only do what its host explicitly permits.
 
 These omissions are not gaps to be filled in future versions. They are design decisions that keep Mog small, predictable, and safe for embedding. A language that tries to be everything ends up being harder to trust. Mog trades breadth for clarity.
-
 # Chapter 18: Cookbook — Practical Programs
 
 This chapter is a collection of complete, runnable Mog programs. Each one demonstrates a combination of language features in a realistic context — loops, structs, closures, error handling, async, capabilities. Read them in order or jump to whichever looks interesting.
@@ -9040,8 +8770,8 @@ The classic interview problem: print numbers 1 to 100, but replace multiples of 
 
 ```mog
 fn fizzbuzz(n: int) -> string {
-  divisible_by_3 := n % 3 == 0;
-  divisible_by_5 := n % 5 == 0;
+  divisible_by_3 := (n % 3) == 0;
+  divisible_by_5 := (n % 5) == 0;
 
   if divisible_by_3 && divisible_by_5 {
     return "FizzBuzz";
@@ -9096,7 +8826,7 @@ fn fib_iter(n: int) -> int {
   }
   a := 0;
   b := 1;
-  for i in 2..n + 1 {
+  for i in 2..(n + 1) {
     temp := a + b;
     a = b;
     b = temp;
@@ -9120,7 +8850,7 @@ Output:
 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181
 ```
 
-The iterative version runs in linear time. The range `2..n + 1` is half-open, so it runs from 2 through `n` inclusive — exactly `n - 1` iterations, which is all you need.
+The iterative version runs in linear time. The range `2..(n + 1)` is half-open, so it runs from 2 through `n` inclusive — exactly `n - 1` iterations, which is all you need.
 
 ## 3. Word Frequency Counter
 
@@ -9348,7 +9078,7 @@ fn main() -> int {
 
   // Find engineers with 3+ years, sorted by salary descending
   senior_engineers := staff
-    .filter(fn(e: Employee) -> bool { e.department == "engineering" && e.years >= 3 })
+    .filter(fn(e: Employee) -> bool { (e.department == "engineering") && (e.years >= 3) })
     .sort(fn(a: Employee, b: Employee) -> int { b.salary - a.salary });
 
   println("Senior Engineers (3+ years, by salary):");
@@ -9406,7 +9136,7 @@ fn matrix_multiply(a: [[int]], b: [[int]]) -> Result<[[int]]> {
     for j in 0..cols_b {
       sum := 0;
       for k in 0..cols_a {
-        sum = sum + a[i][k] * b[k][j];
+        sum = sum + (a[i][k] * b[k][j]);
       }
       result[i][j] = sum;
     }

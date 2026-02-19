@@ -234,7 +234,7 @@ fn get_user_email(users: [User], name: string) -> ?string {
 ```mog
 fn first_even(arr: [int]) -> ?int {
   for n in arr {
-    if n % 2 == 0 {
+    if (n % 2) == 0 {
       return some(n);
     }
   }

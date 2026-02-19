@@ -205,7 +205,7 @@ Mog arrays have built-in methods — `filter`, `map`, and `sort` — that accept
 ```mog
 numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-evens := numbers.filter(fn(n: int) -> bool { return n % 2 == 0; });
+evens := numbers.filter(fn(n: int) -> bool { return (n % 2) == 0; });
 print(evens);  // [2, 4, 6, 8, 10]
 
 big := numbers.filter(fn(n: int) -> bool { return n > 7; });
@@ -290,7 +290,7 @@ Filter, map, and sort can be chained for expressive data pipelines:
 numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 result := numbers
-  .filter(fn(n: int) -> bool { return n % 2 == 0; })
+  .filter(fn(n: int) -> bool { return (n % 2) == 0; })
   .map(fn(n: int) -> int { return n * n; })
   .sort(fn(a: int, b: int) -> bool { return a > b; });
 

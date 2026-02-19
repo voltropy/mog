@@ -88,7 +88,7 @@ These are the only built-in constructors. If you need other initialization patte
 fn eye(n: int) -> tensor<f32> {
   t := tensor<f32>.zeros([n, n]);
   for i in 0..n {
-    t[i * n + i] = 1.0;
+    t[(i * n) + i] = 1.0;
   }
   return t;
 }
@@ -181,7 +181,7 @@ t := tensor<f32>([3], [1.0, 2.0, 3.0]);
 
 ### Computing Flat Indices
 
-For multi-dimensional tensors, you compute the flat index from coordinates manually. For a tensor with shape `[d0, d1, d2]`, the flat index of element `[i, j, k]` is `i * d1 * d2 + j * d2 + k`:
+For multi-dimensional tensors, you compute the flat index from coordinates manually. For a tensor with shape `[d0, d1, d2]`, the flat index of element `[i, j, k]` is `(i * d1 * d2) + (j * d2) + k`:
 
 ```mog
 // 3x4 matrix
@@ -192,11 +192,11 @@ m := tensor<f32>([3, 4], [
 ]);
 
 // Element at row 1, column 2 → flat index = 1*4 + 2 = 6
-val := m[1 * 4 + 2];  // 7.0
+val := m[(1 * 4) + 2];  // 7.0
 
 // Helper function for 2D indexing
 fn idx2d(shape: int[], row: int, col: int) -> int {
-  return row * shape[1] + col;
+  return (row * shape[1]) + col;
 }
 
 val2 := m[idx2d(m.shape, 2, 3)];  // 12.0
@@ -346,7 +346,7 @@ async fn load_batch(paths: string[], batch_size: int) -> tensor<f32> {
     data := await fs.read_file(paths[i])?;
     // Assume data is a raw float file — parse into tensor elements
     for j in 0..image_size {
-      batch[i * image_size + j] = parse_float(data, j);
+      batch[(i * image_size) + j] = parse_float(data, j);
     }
   }
 
@@ -386,7 +386,7 @@ fn top_k(t: tensor<f32>, k: int) -> int[] {
     total := t.shape[0];
 
     for i in 0..total {
-      if !used[i] && t[i] > best_val {
+      if !used[i] && (t[i] > best_val) {
         best_val = t[i];
         best_idx = i;
       }
@@ -419,7 +419,7 @@ fn normalize(t: tensor<f32>) -> tensor<f32> {
   sq_sum := 0.0;
   for i in 0..total {
     diff := t[i] - mean;
-    sq_sum = sq_sum + diff * diff;
+    sq_sum = sq_sum + (diff * diff);
   }
   std := sqrt(sq_sum / float(total));
 

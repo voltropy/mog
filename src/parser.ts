@@ -210,6 +210,25 @@ class Parser {
     if (this.checkType("tensor")) {
       return this.parseTensorTypeAnnotation()
     }
+    // Check for array return types like [int], [SearchResult], [f32; 3]
+    if (this.checkType("LBRACKET")) {
+      this.advance()
+      let innerToken: any
+      if (this.checkType("TYPE")) {
+        innerToken = this.consume("TYPE", "Expected type inside array brackets")
+      } else {
+        innerToken = this.consume("IDENTIFIER", "Expected type inside array brackets")
+      }
+      let arrayTypeName = "[" + innerToken.value
+      // Check for fixed-size array: [Type; N]
+      if (this.matchType("SEMICOLON")) {
+        const sizeToken = this.consume("NUMBER", "Expected size after ;")
+        arrayTypeName += "; " + sizeToken.value
+      }
+      this.consume("RBRACKET", "Expected ] after array type")
+      arrayTypeName += "]"
+      return this.parseType(arrayTypeName)
+    }
     // Accept both TYPE and IDENTIFIER tokens as return types (for custom struct types)
     let returnToken: any
     if (this.checkType("TYPE")) {
@@ -1184,7 +1203,7 @@ class Parser {
   }
 
   private conditional(): ExpressionNode {
-    const expr = this.logicalOr()
+    const expr = this.binaryExpression()
 
     if (this.matchType("QUESTION")) {
       const thenExpr = this.expression()
@@ -1202,135 +1221,28 @@ class Parser {
     return expr
   }
 
-  private logicalOr(): ExpressionNode {
-    let expr = this.logicalAnd()
+  // Associative operators can chain with themselves: a + b + c
+  private static ASSOCIATIVE_OPS = new Set(["+", "*", "&&", "||", "&", "|"])
+  // All binary operator token types (mapped to check if current token is a binary op)
+  private static BINARY_OP_TYPES: Set<string> = new Set([
+    "PLUS", "MINUS", "TIMES", "DIVIDE", "MODULO",
+    "LOGICAL_AND", "LOGICAL_OR",
+    "BITWISE_AND", "BITWISE_OR", "BITWISE_XOR",
+    "LSHIFT", "RSHIFT",
+    "LESS", "LESS_EQUAL", "GREATER", "GREATER_EQUAL",
+    "NOT_EQUAL",
+    // EQUAL is special — only when value is "=="
+  ])
 
-    while (this.matchType("LOGICAL_OR")) {
-      const operator = this.previous()
-      const right = this.logicalAnd()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
+  private isBinaryOperator(): boolean {
+    if (this.isAtEnd()) return false
+    const token = this.peek()
+    if (token.type === "EQUAL" && token.value === "==") return true
+    return Parser.BINARY_OP_TYPES.has(token.type)
   }
 
-  private logicalAnd(): ExpressionNode {
-    let expr = this.bitwiseOr()
-
-    while (this.matchType("LOGICAL_AND")) {
-      const operator = this.previous()
-      const right = this.bitwiseOr()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
-  }
-
-  private bitwiseOr(): ExpressionNode {
-    let expr = this.bitwiseXor()
-
-    while (this.matchType("BITWISE_OR")) {
-      const operator = this.previous()
-      const right = this.bitwiseXor()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
-  }
-
-  private bitwiseXor(): ExpressionNode {
-    let expr = this.bitwiseAnd()
-
-    while (this.matchType("BITWISE_XOR")) {
-      const operator = this.previous()
-      const right = this.bitwiseAnd()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
-  }
-
-  private bitwiseAnd(): ExpressionNode {
-    let expr = this.shift()
-
-    while (this.matchType("BITWISE_AND")) {
-      const operator = this.previous()
-      const right = this.shift()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
-  }
-
-  private shift(): ExpressionNode {
-    let expr = this.equality()
-
-    while (this.matchType("LSHIFT") || this.matchType("RSHIFT")) {
-      const operator = this.previous()
-      const right = this.equality()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
-  }
-
-  private equality(): ExpressionNode {
-    let expr = this.comparison()
-
-    while ((this.checkType("EQUAL") && this.peek().value === "==") || this.checkType("NOT_EQUAL")) {
-      this.advance()
-      const operator = this.previous()
-      const right = this.comparison()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
-    }
-
-    return expr
-  }
-
-private comparison(): ExpressionNode {
-    let expr = this.additive()
+  private binaryExpression(): ExpressionNode {
+    let expr = this.unary()
 
     // Handle `expr is some(name)` or `expr is none` pattern matching
     if (this.matchType("is")) {
@@ -1373,78 +1285,49 @@ private comparison(): ExpressionNode {
       }
     }
 
-    while (
-      this.matchType("LESS") ||
-      this.matchType("LESS_EQUAL") ||
-      this.matchType("GREATER") ||
-      this.matchType("GREATER_EQUAL")
-    ) {
-      const operator = this.previous()
-      const right = this.additive()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
-      }
+    if (!this.isBinaryOperator()) return expr
+
+    // We have at least one binary operator
+    this.advance()
+    const firstOp = this.previous()
+    const firstOpValue = firstOp.value
+    const right = this.unary()
+    expr = {
+      type: "BinaryExpression",
+      left: expr,
+      operator: firstOpValue,
+      right,
+      position: this.combinePositions(expr, right),
     }
 
-    return expr
-  }
+    // Check for chaining
+    while (this.isBinaryOperator()) {
+      const nextOp = this.peek()
+      const nextOpValue = nextOp.value
 
-  private additive(): ExpressionNode {
-    let expr = this.multiplicative()
-
-    while (this.matchType("PLUS") || this.matchType("MINUS")) {
-      const operator = this.previous()
-      const right = this.multiplicative()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
+      if (nextOpValue !== firstOpValue) {
+        // Different operator — error
+        throw new Error(
+          `Cannot mix operators '${firstOpValue}' and '${nextOpValue}' without parentheses at line ${nextOp.position.start.line}`
+        )
       }
-    }
 
-    return expr
-  }
-
-  private multiplicative(): ExpressionNode {
-    let expr = this.unary()
-
-    while (
-      this.matchType("TIMES") ||
-      this.matchType("DIVIDE") ||
-      this.matchType("MODULO")
-    ) {
-      const operator = this.previous()
-      const right = this.unary()
-      expr = {
-        type: "BinaryExpression",
-        left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
+      // Same operator — check if associative
+      if (!Parser.ASSOCIATIVE_OPS.has(firstOpValue)) {
+        throw new Error(
+          `Operator '${firstOpValue}' is not associative; use parentheses at line ${nextOp.position.start.line}`
+        )
       }
-    }
 
-    return expr
-  }
-
-  private bitwise(): ExpressionNode {
-    let expr = this.multiplicative()
-
-    while (this.matchType("BITWISE_AND") || this.matchType("BITWISE_OR")) {
-      const operator = this.previous()
-      const right = this.multiplicative()
+      // Associative same operator — continue chaining
+      this.advance()
+      const chainRight = this.unary()
       expr = {
         type: "BinaryExpression",
         left: expr,
-        operator: operator.value,
-        right,
-        position: this.combinePositions(expr, right),
+        operator: firstOpValue,
+        right: chainRight,
+        position: this.combinePositions(expr, chainRight),
       }
     }
 
@@ -2309,14 +2192,12 @@ private comparison(): ExpressionNode {
           }
         }
         this.consume("RBRACE", "Expected } after match arm body")
-        // Convert block to an expression - use last expression
-        if (stmts.length > 0) {
-          const last = stmts[stmts.length - 1]
-          if (last.type === "ExpressionStatement") {
-            body = (last as any).expression
-          } else {
-            body = { type: "NumberLiteral", value: "0", position: last.position, literalType: null } as any
-          }
+        // Preserve the full block as a Block node so all statements are generated
+        if (stmts.length === 1 && stmts[0].type === "ExpressionStatement") {
+          // Single expression statement: unwrap for backward compatibility
+          body = (stmts[0] as any).expression
+        } else if (stmts.length > 0) {
+          body = { type: "Block", statements: stmts, position: stmts[0].position } as any
         } else {
           body = { type: "NumberLiteral", value: "0", position: subject.position, literalType: null } as any
         }

@@ -19,7 +19,7 @@ All `.mog` files in the same directory must declare the same package name. The p
 package geometry;
 
 pub fn circle_area(radius: float) -> float {
-  return PI * radius ** 2.0;
+  return PI * (radius ** 2.0);
 }
 ```
 
@@ -28,7 +28,7 @@ pub fn circle_area(radius: float) -> float {
 package geometry;
 
 pub fn sphere_volume(radius: float) -> float {
-  return (4.0 / 3.0) * PI * radius ** 3.0;
+  return (4.0 / 3.0) * PI * (radius ** 3.0);
 }
 ```
 

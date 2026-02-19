@@ -56,7 +56,7 @@ struct Point {
 fn distance(a: Point, b: Point) -> float {
   dx := a.x - b.x;
   dy := a.y - b.y;
-  return sqrt(dx * dx + dy * dy);
+  return sqrt((dx * dx) + (dy * dy));
 }
 
 // Top-level: entry point
@@ -346,7 +346,7 @@ Here is one more example — a program that computes the sum of the first N squa
 fn sum_of_squares(n: int) -> int {
   total := 0;
   for i in 1..n + 1 {
-    total = total + i * i;
+    total = total + (i * i);
   }
   return total;
 }

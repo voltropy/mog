@@ -172,15 +172,11 @@ describe("parser grouped expressions", () => {
 })
 
 describe("parser operator precedence", () => {
-  test("multiplication before addition", () => {
-    const ast = parse("{ 1 + 2 * 3; }")
-    const expr = (ast.statements[0] as any).expression
-    expect(expr.operator).toBe("+")
-    expect(expr.right.type).toBe("BinaryExpression")
-    expect(expr.right.operator).toBe("*")
+  test("mixed operators rejected: addition and multiplication", () => {
+    expect(() => parse("{ 1 + 2 * 3; }")).toThrow()
   })
 
-  test("parentheses override precedence", () => {
+  test("parenthesized mixed operators accepted", () => {
     const ast = parse("{ (1 + 2) * 3; }")
     const expr = (ast.statements[0] as any).expression
     expect(expr.operator).toBe("*")
@@ -188,11 +184,15 @@ describe("parser operator precedence", () => {
     expect(expr.left.operator).toBe("+")
   })
 
-  test("left associativity", () => {
-    const ast = parse("{ 1 - 2 - 3; }")
+  test("same operator chaining accepted", () => {
+    const ast = parse("{ 1 + 2 + 3; }")
     const expr = (ast.statements[0] as any).expression
-    expect(expr.operator).toBe("-")
+    expect(expr.operator).toBe("+")
     expect(expr.left.type).toBe("BinaryExpression")
+  })
+
+  test("non-associative chaining rejected: subtraction", () => {
+    expect(() => parse("{ 1 - 2 - 3; }")).toThrow()
   })
 })
 

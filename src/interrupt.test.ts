@@ -92,7 +92,7 @@ print(x);`
   sum: i64 = 0;
   for i := 1 to 5 {
     for j := 1 to 5 {
-      sum = sum + i * j;
+      sum = sum + (i * j);
     }
   }
   return sum;

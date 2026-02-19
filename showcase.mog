@@ -57,7 +57,7 @@ fn create_point(x: f64, y: f64) -> Point {
 }
 
 fn distance_sq(p: Point) -> f64 {
-  return p.x * p.x + p.y * p.y;
+  return (p.x * p.x) + (p.y * p.y);
 }
 
 // ============================================================

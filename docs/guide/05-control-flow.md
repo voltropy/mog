@@ -74,13 +74,13 @@ Nested `if` blocks inside other `if` blocks:
 ```mog
 fn describe_number(n: int) -> string {
   if n > 0 {
-    if n % 2 == 0 {
+    if (n % 2) == 0 {
       return "positive even";
     } else {
       return "positive odd";
     }
   } else if n < 0 {
-    if n % 2 == 0 {
+    if (n % 2) == 0 {
       return "negative even";
     } else {
       return "negative odd";
@@ -155,7 +155,7 @@ Combining conditions with logical operators:
 
 ```mog
 fn can_vote(age: int, is_citizen: bool) -> bool {
-  return age >= 18 && is_citizen;
+  return (age >= 18) && is_citizen;
 }
 
 fn main() -> int {
@@ -172,9 +172,9 @@ fn main() -> int {
   score := 85;
   if score >= 90 {
     println("A");
-  } else if score >= 80 && score < 90 {
+  } else if (score >= 80) && (score < 90) {
     println("B");
-  } else if score >= 70 && score < 80 {
+  } else if (score >= 70) && (score < 80) {
     println("C");
   } else {
     println("below C");
@@ -248,10 +248,10 @@ fn collatz_steps(n: int) -> int {
   steps := 0;
   val := n;
   while val != 1 {
-    if val % 2 == 0 {
+    if (val % 2) == 0 {
       val = val / 2;
     } else {
-      val = val * 3 + 1;
+      val = (val * 3) + 1;
     }
     steps = steps + 1;
   }
@@ -271,8 +271,8 @@ Integer square root by repeated approximation:
 fn isqrt(n: int) -> int {
   if n <= 1 { return n; }
   guess := n / 2;
-  while guess * guess > n {
-    guess = (guess + n / guess) / 2;
+  while (guess * guess) > n {
+    guess = (guess + (n / guess)) / 2;
   }
   return guess;
 }
@@ -610,7 +610,7 @@ fn main() -> int {
   temps_celsius := {"London": 15, "Tokyo": 28, "New York": 22, "Sydney": 19};
 
   for city, celsius in temps_celsius {
-    fahrenheit := celsius * 9 / 5 + 32;
+    fahrenheit := ((celsius * 9) / 5) + 32;
     println(f"{city}: {celsius}C = {fahrenheit}F");
   }
   return 0;
@@ -649,7 +649,7 @@ fn main() -> int {
 fn main() -> int {
   // Find the first multiple of 7 greater than 50
   for i in 1..100 {
-    if i * 7 > 50 {
+    if (i * 7) > 50 {
       println(f"found: {i} (7 * {i} = {i * 7})");
       break;
     }
@@ -665,7 +665,7 @@ fn main() -> int {
 fn main() -> int {
   // Print only odd numbers from 0 to 19
   for i in 0..20 {
-    if i % 2 == 0 {
+    if (i % 2) == 0 {
       continue;
     }
     print_string(f"{i} ");
@@ -683,7 +683,7 @@ fn main() -> int {
   total := 0;
   stopped_at := 0;
   for i in 1..101 {
-    if i % 3 == 0 {
+    if (i % 3) == 0 {
       continue;
     }
     total = total + i;
@@ -711,7 +711,7 @@ fn main() -> int {
   for i in 1..20 {
     if done { break; }
     for j in 1..20 {
-      if i * j == 42 {
+      if (i * j) == 42 {
         found_i = i;
         found_j = j;
         done = true;
@@ -1045,7 +1045,7 @@ fn main() -> int {
 fn sum_of_squares(n: int) -> int {
   total := 0;
   for i := 1 to n {
-    total = total + i * i;
+    total = total + (i * i);
   }
   return total;
 }
@@ -1088,7 +1088,7 @@ fn bubble_sort(arr: [int]) -> [int] {
   sorted := arr;
   n := sorted.len;
   for i in 0..n {
-    for j in 0..n - i - 1 {
+    for j in 0..((n - i) - 1) {
       if sorted[j] > sorted[j + 1] {
         temp := sorted[j];
         sorted[j] = sorted[j + 1];
@@ -1115,11 +1115,11 @@ fn main() -> int {
 ```mog
 fn main() -> int {
   for i := 1 to 30 {
-    if i % 15 == 0 {
+    if (i % 15) == 0 {
       println("FizzBuzz");
-    } else if i % 3 == 0 {
+    } else if (i % 3) == 0 {
       println("Fizz");
-    } else if i % 5 == 0 {
+    } else if (i % 5) == 0 {
       println("Buzz");
     } else {
       println(i);
@@ -1157,11 +1157,11 @@ fn main() -> int {
 fn is_prime(n: int) -> bool {
   if n < 2 { return false; }
   if n < 4 { return true; }
-  if n % 2 == 0 { return false; }
+  if (n % 2) == 0 { return false; }
 
   i := 3;
-  while i * i <= n {
-    if n % i == 0 {
+  while (i * i) <= n {
+    if (n % i) == 0 {
       return false;
     }
     i = i + 2;

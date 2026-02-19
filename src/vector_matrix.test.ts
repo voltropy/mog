@@ -363,7 +363,7 @@ describe("Vector and Matrix Operations", () => {
   a: [f64; 2] = [1.0, 2.0];
   b: [f64; 2] = [3.0, 4.0];
   c: [f64; 2] = [5.0, 6.0];
-  d: [f64; 2] = (a + b) * 2.0 - c / 2.0;
+  d: [f64; 2] = ((a + b) * 2.0) - (c / 2.0);
 }`
       const result = await compile(source)
       expect(result.errors).toEqual([])

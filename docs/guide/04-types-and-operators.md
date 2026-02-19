@@ -113,7 +113,7 @@ Booleans are returned by comparison and logical operators:
 fn main() -> int {
   x := 42;
   is_positive := x > 0;       // true
-  is_even := x % 2 == 0;      // true
+  is_even := (x % 2) == 0;     // true
   both := is_positive && is_even;  // true
   println(both);
   return 0;
@@ -366,7 +366,7 @@ fn main() -> int {
 ```mog
 fn check(items: [int], index: int) -> bool {
   // Safe: if index is out of bounds, the second condition is never evaluated
-  return index < items.len && items[index] > 0;
+  return (index < items.len) && (items[index] > 0);
 }
 ```
 
@@ -374,11 +374,11 @@ Combining conditions:
 
 ```mog
 fn is_valid_age(age: int) -> bool {
-  return age >= 0 && age <= 150;
+  return (age >= 0) && (age <= 150);
 }
 
 fn needs_review(score: int, flagged: bool) -> bool {
-  return score < 50 || flagged;
+  return (score < 50) || flagged;
 }
 ```
 
@@ -447,33 +447,61 @@ message := "User " + name + " scored " + str(score) + " points";
 message := f"User {name} scored {score} points";
 ```
 
-## Operator Precedence
+## Flat Operators (No Precedence)
 
-Operators are evaluated in this order, from highest to lowest precedence:
+Mog has **no operator precedence**. All binary operators are flat — the compiler does not
+silently reorder operations based on a precedence table. Instead, Mog enforces explicit
+grouping through two simple rules:
 
-| Precedence | Operators | Description |
-|---|---|---|
-| 1 (highest) | `!` | Unary NOT |
-| 2 | `*`, `/`, `%` | Multiplication, division, modulo |
-| 3 | `+`, `-` | Addition, subtraction |
-| 4 | `<<`, `>>` | Bit shifts |
-| 5 | `&` | Bitwise AND |
-| 6 | `^` | Bitwise XOR |
-| 7 | `\|` | Bitwise OR |
-| 8 | `==`, `!=`, `<`, `>`, `<=`, `>=` | Comparison |
-| 9 | `&&` | Logical AND |
-| 10 (lowest) | `\|\|` | Logical OR |
-
-When in doubt, use parentheses:
+**1. Associative operators can chain with themselves.**
+The operators `+`, `*`, `and`/`&&`, `or`/`||`, `&`, and `|` are associative, so
+repeating the same one is unambiguous:
 
 ```mog
-// These are equivalent
-result := a + b * c;
-result := a + (b * c);
+total := a + b + c;           // OK — same operator throughout
+mask := READ | WRITE | EXEC;  // OK
+all_ok := x && y && z;        // OK
+```
 
-// But be explicit when mixing categories
-result := (a & mask) == 0;         // compare after masking
-result := (x > 0) && (y > 0);     // logical after comparison
+**2. Everything else requires parentheses.**
+
+- **Different operators cannot mix.** Use parentheses to show intent:
+
+```mog
+result := a + (b * c);              // OK — parens make grouping explicit
+result := a + b * c;                // COMPILE ERROR — mixed + and *
+
+check := (x > 0) && (y > 0);       // OK
+check := x > 0 && y > 0;           // COMPILE ERROR — mixed > and &&
+
+is_even := (n % 2) == 0;           // OK
+is_even := n % 2 == 0;             // COMPILE ERROR — mixed % and ==
+```
+
+- **Non-associative operators cannot chain**, even with themselves:
+
+```mog
+diff := (a - b) - c;               // OK — parenthesized
+diff := a - b - c;                  // COMPILE ERROR — - is non-associative
+
+ratio := (a / b) / c;              // OK
+ratio := a / b / c;                // COMPILE ERROR — / is non-associative
+```
+
+Non-associative operators: `-`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `<<`, `>>`, `^`.
+
+### Why no precedence?
+
+Precedence tables are a common source of bugs — especially when mixing arithmetic,
+comparison, and logical operators. Mog makes every grouping decision visible in the
+source code. The cost is a few extra parentheses; the benefit is that the code always
+means exactly what it says.
+
+```mog
+// Clear and correct
+fahrenheit := ((celsius * 9) / 5) + 32;
+in_range := (x >= low) && (x <= high);
+masked := (flags & MASK) != 0;
 ```
 
 ## Common Patterns
@@ -522,7 +550,7 @@ fn average(numbers: [int]) -> float {
   for n in numbers {
     sum = sum + n;
   }
-  return sum as float / numbers.len as float;
+  return (sum as float) / (numbers.len as float);
 }
 
 fn main() -> int {
@@ -562,7 +590,7 @@ fn main() -> int {
 
 ```mog
 fn format_percentage(value: int, total: int) -> string {
-  pct := value as float / total as float * 100.0;
+  pct := (value as float / total as float) * 100.0;
   return str(round(pct)) + "%";
 }
 
@@ -582,4 +610,4 @@ Mog's type system is small and strict:
 - **No implicit coercion.** Use `as` for numeric casts, `str()` for string conversion, `int_from_string()` and `parse_float()` for parsing.
 - **Operators require matching types.** Both sides of `+`, `*`, `==`, etc. must be the same type.
 - **Booleans are booleans.** No truthy/falsy — use explicit comparisons.
-- **When in doubt, add parentheses.** Mog follows conventional precedence, but clarity beats cleverness.
+- **Operators are flat — no precedence.** Different operators cannot mix without parentheses, and non-associative operators cannot chain. This eliminates an entire class of bugs.

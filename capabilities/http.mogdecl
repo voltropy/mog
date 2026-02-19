@@ -1,0 +1,4 @@
+capability http {
+  async fn get(url: string) -> string;
+  async fn post(url: string, body: string) -> string;
+}

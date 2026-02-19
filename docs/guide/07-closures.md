@@ -283,7 +283,7 @@ elements for which the predicate returns `true`.
 ```mog
 numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-evens := numbers.filter(fn(n: int) -> bool { return n % 2 == 0; });
+evens := numbers.filter(fn(n: int) -> bool { return (n % 2) == 0; });
 print(evens);  // [2, 4, 6, 8, 10]
 
 big := numbers.filter(fn(n: int) -> bool { return n > 7; });

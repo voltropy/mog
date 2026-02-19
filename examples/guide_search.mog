@@ -1,0 +1,44 @@
+requires http, log;
+
+struct SearchResult {
+  title: string,
+  url: string,
+  score: int,
+}
+
+fn parse_results(response: string) -> [SearchResult] {
+  // In a real program, this would parse JSON from the HTTP response.
+  // For this demo, the host stubs http.get to return mock data,
+  // so we just build some results directly.
+  results: [SearchResult] = [];
+  r1 := SearchResult { title: "Intro to ML", url: "https://example.com/ml", score: 90 };
+  results.push(r1);
+  r2 := SearchResult { title: "Deep Learning", url: "https://example.com/dl", score: 85 };
+  results.push(r2);
+  r3 := SearchResult { title: "Unrelated Page", url: "https://example.com/other", score: 30 };
+  results.push(r3);
+  return results;
+}
+
+async fn search(query: string) -> Result<[SearchResult]> {
+  response := await http.get(f"/api/search?q={query}");
+  results := parse_results(response);
+  log.info(f"found {results.len()} results for '{query}'");
+  return ok(results);
+}
+
+async fn main() -> int {
+  result := await search("machine learning");
+  match result {
+    ok(results) => {
+      top := results.filter(fn(r: SearchResult) -> int { return r.score > 50; });
+      for i, r in top {
+        println(f"{r.title}: {r.url} (score: {r.score})");
+      }
+    },
+    err(e) => {
+      println(f"Search failed: {e}");
+    },
+  }
+  return 0;
+}
