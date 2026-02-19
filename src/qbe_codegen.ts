@@ -1462,6 +1462,18 @@ class QBECodeGen {
         return val
       }
 
+      // Handle tensor element assignment
+      if (objType instanceof TensorType) {
+        // Convert value to float if needed
+        let floatVal = val
+        if (!this.isFloatOperand(expr.value)) {
+          floatVal = this.nextReg()
+          ir.push(`  ${floatVal} =s sltof ${val}`)
+        }
+        ir.push(`  call $tensor_set_f32(l ${obj}, l ${idx}, s ${floatVal})`)
+        return val
+      }
+
       // Array index assignment: data = *(obj + 16), ptr = data + idx * 8
       const dataPtr = this.nextReg()
       ir.push(`  ${dataPtr} =l add ${obj}, 16`)
@@ -2899,6 +2911,13 @@ class QBECodeGen {
       // Map get: $map_get(map, key)
       const val = this.nextReg()
       ir.push(`  ${val} =l call $map_get(l ${obj}, l ${idx})`)
+      return val
+    }
+
+    // Handle tensor element access: tensor_get_f32(tensor, index) -> float
+    if (objType instanceof TensorType) {
+      const val = this.nextReg()
+      ir.push(`  ${val} =s call $tensor_get_f32(l ${obj}, l ${idx})`)
       return val
     }
 

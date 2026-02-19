@@ -3112,6 +3112,18 @@ class LLVMIRGenerator {
           
           // Store the value
           ir.push(`  store i64 ${valueReg}, ptr ${elemPtr}`)
+        } else if (objVar instanceof TensorType) {
+          // Handle tensor element assignment: t[i] = val
+          let floatVal = valueReg
+          if (!this.isFloatOperand(expr.value)) {
+            floatVal = `%${this.valueCounter++}`
+            ir.push(`  ${floatVal} = sitofp i64 ${valueReg} to float`)
+          } else {
+            // If it's a double, truncate to float
+            floatVal = `%${this.valueCounter++}`
+            ir.push(`  ${floatVal} = fptrunc double ${valueReg} to float`)
+          }
+          ir.push(`  call void @tensor_set_f32(ptr ${obj}, i64 ${index}, float ${floatVal})`)
         } else {
           // Array assignment: array[index] := value
           // Handle nested array access
@@ -3907,6 +3919,13 @@ class LLVMIRGenerator {
       const valReg = `%${this.valueCounter++}`
       ir.push(`  ${valReg} = load i64, ptr ${elemPtr}`)
       return valReg
+    }
+
+    // Handle tensor element access: t[i] -> tensor_get_f32
+    if (objVar instanceof TensorType) {
+      const result = `%${this.valueCounter++}`
+      ir.push(`  ${result} = call float @tensor_get_f32(ptr ${arrayPtr}, i64 ${index})`)
+      return result
     }
 
     // Determine element type to use appropriate getter

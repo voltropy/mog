@@ -8,6 +8,7 @@ import { tokenize } from "./lexer"
 import { parseTokens } from "./parser"
 import { SemanticAnalyzer } from "./analyzer"
 import { generateLLVMIR } from "./llvm_codegen"
+import { generateQBEIR } from "./qbe_codegen"
 
 async function compileAndRun(source: string): Promise<{ exitCode: number, stdout: string, stderr: string }> {
   const sourceDir = join(tmpdir(), `mog-fix-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
@@ -478,14 +479,93 @@ fn main() -> int {
   })
 
   test('float_from_string returns Result', () => {
-    const source = `
+    const src = `
 fn main() -> int {
-  r := float_from_string("2.71");
+  r := parse_float("3.14");
   println(r);
   return 0;
 }
 `
-    const ir = getIR(source)
+    const ir = getIR(src)
     expect(ir).toContain('@float_from_string')
+  })
+})
+
+describe('Tensor element access', () => {
+  function getQBEIR(source: string): string {
+    const tokens = tokenize(source)
+    const filtered = tokens.filter(t => t.type !== "WHITESPACE" && t.type !== "COMMENT")
+    const ast = parseTokens(filtered)
+    const analyzer = new SemanticAnalyzer()
+    analyzer.analyze(ast)
+    return generateQBEIR(ast)
+  }
+
+  test('tensor element read generates tensor_get_f32 in LLVM IR', () => {
+    const source = `
+fn main() -> int {
+  t := tensor<f32>([3], [1.0, 2.0, 3.0]);
+  val := t[0];
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@tensor_get_f32')
+  })
+
+  test('tensor element write generates tensor_set_f32 in LLVM IR', () => {
+    const source = `
+fn main() -> int {
+  t := tensor<f32>([3], [1.0, 2.0, 3.0]);
+  t[1] = 42.0;
+  return 0;
+}
+`
+    const ir = getIR(source)
+    expect(ir).toContain('@tensor_set_f32')
+  })
+
+  test('tensor element read generates inline access in QBE IR', () => {
+    const source = `
+fn main() -> int {
+  t := tensor<f32>([3], [1.0, 2.0, 3.0]);
+  val := t[0];
+  return 0;
+}
+`
+    const ir = getQBEIR(source)
+    expect(ir).toContain('$tensor_create')
+    expect(ir).toContain('loadl')
+    expect(ir).toContain('mul 0, 8')
+  })
+
+  test('tensor element write generates inline store in QBE IR', () => {
+    const source = `
+fn main() -> int {
+  t := tensor<f32>([3], [1.0, 2.0, 3.0]);
+  t[1] = 42.0;
+  return 0;
+}
+`
+    const ir = getQBEIR(source)
+    expect(ir).toContain('$tensor_create')
+    expect(ir).toContain('storel 42.0')
+    expect(ir).toContain('mul 1, 8')
+  })
+
+  test('analyzer accepts tensor indexing without errors', () => {
+    const source = `
+fn main() -> int {
+  t := tensor<f32>([3], [1.0, 2.0, 3.0]);
+  val := t[0];
+  return 0;
+}
+`
+    const tokens = tokenize(source)
+    const filtered = tokens.filter(t => t.type !== "WHITESPACE" && t.type !== "COMMENT")
+    const ast = parseTokens(filtered)
+    const analyzer = new SemanticAnalyzer()
+    const errors = analyzer.analyze(ast)
+    expect(errors.length).toBe(0)
   })
 })

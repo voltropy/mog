@@ -1,6 +1,6 @@
 # Mog
 
-A small, statically-typed, embeddable language for ML workflows and LLM agent scripting. Compiles to native code via LLVM. Think of it as a statically-typed Lua with native tensor support and async I/O.
+A small, statically-typed, embeddable language for ML workflows and LLM agent scripting. Compiles to native code via LLVM. Think of it as a statically-typed Lua with tensors, async I/O, and a capability model where the host provides all I/O and ML operations.
 
 ## Why Mog
 
@@ -8,7 +8,7 @@ Most ML work today lives in Python scripts that are difficult to sandbox, expens
 
 Mog is not a standalone systems language. It is always embedded inside a host application. The host decides what the script can do: read a file, call an API, run inference on a model. The script declares what it needs (`requires http, model`) and the host either grants those capabilities or refuses to run it. There is no way for a Mog script to escape its sandbox, access the filesystem behind the host's back, or crash the process. This makes it suitable for running agent-generated code in production, where the alternative is either no code execution at all or an elaborate container-based sandbox around a general-purpose language.
 
-The language compiles to native code through LLVM, so tight numerical loops run at C speed rather than interpreter speed. Tensor operations are first-class — not a library bolted on top, but part of the type system, with hardware-relevant dtypes like `f16` and `bf16`, shape checking, and autograd. The goal is that an ML training loop written in Mog reads as naturally as one written in PyTorch, but compiles to a sandboxed native binary that a host application can load and run with controlled resource limits.
+The language compiles to native code through LLVM, so tight numerical loops run at C speed rather than interpreter speed. Tensors are a built-in data structure — n-dimensional arrays with hardware-relevant dtypes like `f16` and `bf16`, element read/write, and shape manipulation. All ML operations (matmul, activations, loss functions, autograd) are provided by the host through the same capability system as I/O. The language gives you the data structure; the host gives you the compute. This means the host can route tensor operations to whatever backend makes sense — CPU, GPU, or a remote accelerator — without the language needing to know.
 
 ## Use Cases
 
@@ -26,7 +26,7 @@ Mog is explicitly **not** for systems programming, standalone applications, or r
 3. **Familiar syntax** — curly braces, `fn`, `->`, `:=`. A blend of Rust, Go, and TypeScript that LLMs already generate fluently. No novel syntax without strong justification.
 4. **Safe by default** — garbage collected, bounds-checked, no null, no raw pointers. The language cannot crash the host or escape its sandbox.
 5. **Host provides I/O** — the language has no built-in file, network, or system access. All side effects go through capabilities explicitly granted by the embedding host.
-6. **ML as first-class concern** — tensor types with hardware-relevant dtypes (f16, bf16, f32, f64), shape checking, and operations that map to accelerator hardware.
+6. **Tensors as data, ML as capability** — the language provides n-dimensional arrays with hardware-relevant dtypes (f16, bf16, f32, f64) and element read/write. All ML operations (matmul, activations, autograd) are provided by the host via capabilities, not built into the language.
 
 ## Installation
 
@@ -201,43 +201,31 @@ if result is some(idx) {
 
 ### Tensors
 
-N-dimensional arrays with fixed element dtype. The core ML primitive:
+N-dimensional arrays with fixed element dtype. The language provides tensors as a data structure with creation, shape manipulation, and element read/write. All ML operations (matmul, activations, loss functions, autograd) are provided by the host through the `ml` capability.
 
 ```mog
 // Creation
 t := tensor([1.0, 2.0, 3.0]);
 m := tensor<f16>([[1, 2], [3, 4]]);
 z := tensor.zeros([3, 224, 224]);
+o := tensor.ones([10]);
+r := tensor.randn([64, 784]);
 
-// Elementwise ops
-c := a + b;
-d := a * b;
-e := a ** 2;
+// Shape and metadata
+s := t.shape;       // [3]
+n := m.ndim;        // 2
+flat := m.reshape([4]);
+mt := m.transpose();
 
-// Reductions
-total := t.sum();
-avg := t.mean(dim: 0);
+// Element read/write
+val := t[0];        // read element
+t[1] = 5.0;         // write element
 
-// Linear algebra
-result := matmul(weights, input);
-d := dot(a, b);
-
-// ML operations
-out := relu(linear_out);
-loss := cross_entropy(logits, labels);
-attn := scaled_dot_product_attention(q, k, v);
-
-// Autograd
-w := tensor([1.0, 2.0]).requires_grad();
-loss.backward();
-gradient := w.grad;
-
-with no_grad() {
-  w = w - lr * w.grad;
-}
-
-// Dtype conversion
-half := t.to(f16);
+// ML operations come from the host
+requires ml;
+result := ml.matmul(weights, input);
+out := ml.relu(linear_out);
+loss := ml.cross_entropy(logits, labels);
 ```
 
 ### Error Handling
@@ -284,7 +272,7 @@ fn main() {
 }
 ```
 
-Standard capabilities: `fs`, `http`, `model`, `log`, `env`, `db`. The compiler rejects undeclared capability usage. The host rejects scripts needing capabilities it doesn't provide.
+Standard capabilities: `fs`, `http`, `model`, `ml`, `log`, `env`, `db`. The compiler rejects undeclared capability usage. The host rejects scripts needing capabilities it doesn't provide. The `ml` capability provides all tensor/ML operations (matmul, activations, loss functions, autograd) — the language itself only provides tensors as a data structure.
 
 ### Module System
 
@@ -377,22 +365,24 @@ async fn main() {
 ### ML Training Loop
 
 ```mog
-requires model, log;
+requires ml, log;
 
 fn main() {
   x := tensor.randn([64, 784]);
-  w := tensor.randn([784, 10]).requires_grad();
+  w := tensor.randn([784, 10]);
   target := tensor.zeros([64, 10]);
   lr := 0.01;
 
-  for epoch in 0..100 {
-    logits := matmul(x, w);
-    loss := cross_entropy(logits, target);
-    loss.backward();
+  w = ml.requires_grad(w);
 
-    with no_grad() {
-      w = w - lr * w.grad;
-    }
+  for epoch in 0..100 {
+    logits := ml.matmul(x, w);
+    loss := ml.cross_entropy(logits, target);
+    ml.backward(loss);
+
+    w = ml.no_grad(fn() {
+      return w - lr * ml.grad(w);
+    });
 
     if epoch % 10 == 0 {
       log.info("epoch {epoch}: loss = {loss}");
@@ -429,11 +419,11 @@ fn process(input: Input) -> Output {
 - No macros
 - No generics (beyond tensor dtype parameterization)
 - No exceptions with stack unwinding
-- No operator overloading (beyond tensor ops)
+- No operator overloading
 
 ## Implementation Status
 
-The core language is fully implemented and tested. The main gaps are in the tensor/ML operations layer and a handful of convenience features.
+The core language is fully implemented and tested. ML operations are not language features — they are provided by the host through capabilities.
 
 ### Fully Implemented
 
@@ -450,34 +440,19 @@ The core language is fully implemented and tested. The main gaps are in the tens
 | **Math builtins** | `sqrt`, `sin`, `cos`, `tan`, `exp`, `log`, `floor`, `ceil`, `abs`, `pow`, `asin`, `acos`, `atan2`, `log2`, `round`, `min`, `max`, `PI`, `E` |
 | **Host capabilities** | `requires`/`optional` declarations, `.mogdecl` files, C API for registration, `fs` (read/write/append/exists/remove/size), `process` (sleep/getenv/cwd/exit/timestamp), `env` (custom host functions, including async) |
 | **Module system** | `package`, `import`, `pub`, `mog.mod`, name mangling, circular import detection |
-| **Tensors** | Creation from literals, `.zeros()`, `.ones()`, `.randn()`, `+`, `-`, `*`, `matmul`, `.sum()`, `.mean()`, `.reshape()`, `.transpose()`, `.shape`, `.ndim`, `relu`, `sigmoid`, `tanh`, `softmax` |
-| **Scoped contexts** | `with no_grad() { ... }` for disabling gradient tracking |
+| **Tensors** | N-dimensional arrays with dtype, creation (literal, `.zeros()`, `.ones()`, `.randn()`), `.shape`, `.ndim`, `.reshape()`, `.transpose()`, element read/write. ML operations (matmul, activations, autograd) provided by host capabilities. |
 | **Match exhaustiveness** | Warnings for non-exhaustive `match` on `Result<T>` and `?T` types |
 | **Backends** | LLVM IR backend (full optimization), QBE lightweight backend (~2x faster compile than LLVM -O1), f64 codegen with proper `str()`/`println` dispatch |
 | **Runtime** | Mark-and-sweep GC, `select()`-based async event loop with fd watchers and timers |
 | **Safety** | Cooperative interrupt polling at loop back-edges, `mog_request_interrupt()` host API, `mog_arm_timeout(ms)` for CPU time limits, automatic timeout via `MogLimits.max_cpu_ms` |
 | **Operators** | Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison, logical (`and`, `or`, `not`), bitwise (`&`, `\|`, `^`, `~`, `<<`, `>>`), `?` propagation, `..` range, `as` cast |
 
-### Partially Implemented
-
-| Feature | Done | Missing |
-|---|---|---|
-| **Tensor creation** | `tensor()` from literal, `.zeros()`, `.ones()`, `.randn()` | `.full()`, `.rand()`, `.arange()`, `.eye()` |
-| **Tensor shape ops** | `.reshape()`, `.transpose()`, `.shape`, `.ndim` | `.squeeze()`, `.unsqueeze()`, `.expand()`, `.contiguous()`, `.flatten()`, `.view()` |
-| **Tensor reduction** | `.sum()`, `.mean()` | `.max()`, `.min()`, `.argmax()`, `.argmin()`, `.prod()`, `.any()`, `.all()`, dim-based variants |
-| **Tensor elementwise** | `+`, `-`, `*` | `/`, `**`, comparison (bool tensor), `abs`, `neg`, `exp`, `log`, `sqrt`, `clamp`, trig on tensors |
-| **Tensor linear algebra** | `matmul()`, `dot()` | `norm()`, `cross()` |
-
 ### Not Yet Implemented
 
 | Feature | Description |
 |---|---|
-| **ML operations** | `gelu`, `silu`, `layer_norm`, `batch_norm`, `group_norm`, `conv1d`, `conv2d`, `max_pool2d`, `avg_pool2d`, `cross_entropy`, `mse_loss`, `binary_cross_entropy`, `scaled_dot_product_attention`, `dropout`, `embedding` |
-| **Autograd** | `.requires_grad()`, `.backward()`, `.grad`, gradient tracking and backpropagation |
-| **Tensor dtype conversion** | `t.to(f16)`, `t.to(f32)`, `t.to(i32)` |
-| **Tensor advanced indexing** | `matrix[0, :]`, `volume[:, 0:10, :]` multi-dim slice syntax |
 | **Generics** | Out of scope per spec — Mog uses concrete types and type aliases instead |
-| **`http`, `model`, `log`, `db` capabilities** | Reference host implementations (the capability system itself works — hosts can register any capability) |
+| **`http`, `model`, `ml`, `log`, `db` reference implementations** | Reference host capability implementations. The capability system itself works — hosts can register any capability via the C API. These are convenience implementations for common use cases. |
 
 ## Future Work
 
@@ -490,14 +465,6 @@ The QBE backend currently bottlenecks on the system assembler (`as`). For large 
 2. **Modify QBE to emit machine code directly** (~2-3 weeks). Replace QBE's text emitters with binary encoders in `arm64/emit.c`, emitting Mach-O `.o` files directly. Eliminates the text→parse→encode round-trip entirely. Cleanest long-term solution but requires deeper QBE modifications.
 
 3. **Skip assembly, JIT to memory** (~2 weeks). For development/REPL use cases, encode ARM64 directly into an executable memory page and jump to it. No assembler or linker needed. Limited to same-machine execution.
-
-### Autograd
-
-The tensor system has basic operations but no gradient tracking. Implementing `.requires_grad()`, `.backward()`, and `.grad` requires a tape-based or define-by-run automatic differentiation engine in the C runtime, plus compiler support for gradient-aware tensor operations.
-
-### Remaining ML Operations
-
-~15 ML operations from the spec remain unimplemented: `gelu`, `silu`, `layer_norm`, `batch_norm`, `group_norm`, `conv1d`, `conv2d`, `max_pool2d`, `avg_pool2d`, `cross_entropy`, `mse_loss`, `binary_cross_entropy`, `scaled_dot_product_attention`, `dropout`, `embedding`. These are straightforward C implementations in `runtime.c` plus codegen dispatch — mechanical but voluminous.
 
 ## Testing
 

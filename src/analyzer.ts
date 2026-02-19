@@ -2615,6 +2615,12 @@ class SemanticAnalyzer {
       return soaType.structType
     }
 
+    // Handle tensor indexing: t[i] returns element type
+    if (isTensorType(objectType)) {
+      const tensorType = objectType as TensorType
+      return new FloatType(tensorType.dtype || "f32")
+    }
+
     if (isArrayType(objectType)) {
       const arrayType = objectType as ArrayType
       // Check if this is a string type [u8]

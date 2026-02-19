@@ -2,12 +2,12 @@
 
 ## Overview
 
-Mog is a small, statically-typed, embeddable language for ML workflows and LLM agent scripting. It compiles to native code via LLVM. Think of it as a statically-typed Lua with native tensor support and async I/O.
+Mog is a small, statically-typed, embeddable language for LLM agent scripting and plugin development. It compiles to native code via LLVM and QBE. Think of it as a statically-typed Lua with async I/O and a capability-based security model.
 
 **Target use cases:**
 - LLM agent tool-use scripts
-- ML training and inference workflows
 - Plugin/extension scripting for host applications
+- ML workflow orchestration (host provides ML operations)
 - Short automation scripts
 
 **Non-goals:**
@@ -27,7 +27,7 @@ Mog is a small, statically-typed, embeddable language for ML workflows and LLM a
 
 5. **Host provides I/O.** The language has no built-in file, network, or system access. All side effects go through capabilities explicitly granted by the embedding host.
 
-6. **ML as a first-class concern.** Tensor types with hardware-relevant dtypes (f16, bf16, f32, f64), shape checking, and operations that map to accelerator hardware.
+6. **ML via host capabilities.** The language provides n-dimensional arrays (tensors) as a data structure with element-level access. All ML operations — matmul, activations, autograd, training loops — are provided by the host through the capability system, allowing hosts to use their preferred ML framework (PyTorch, ONNX, custom engines).
 
 ## Syntax
 
@@ -211,7 +211,7 @@ x := datums[0].id;         // lowers to columnar array read
 
 #### Tensors
 
-N-dimensional arrays with a fixed element dtype. The core ML primitive:
+N-dimensional arrays with a fixed element dtype. Used as the interchange format between Mog scripts and host-provided ML capabilities:
 
 ```mog
 // Create from literal
@@ -223,49 +223,21 @@ t := tensor<f16>([1.0, 2.0, 3.0]);               // tensor<f16>, shape [3]
 // Create with shape
 zeros := tensor<f32>.zeros([3, 224, 224]);        // shape [3, 224, 224]
 ones := tensor<f32>.ones([768]);                   // shape [768]
-rand := tensor<f32>.randn([128, 64]);             // random normal
 
-// Shape and dtype
+// Properties
 print(t.shape);     // [3]
 print(t.dtype);     // f16
+print(t.ndim);      // 1
 
-// Indexing
-val := t[0];                                       // scalar
-row := matrix[0, :];                               // slice row
-block := volume[:, 0:10, :];                       // slice block
+// Element access (read and write individual elements)
+t[0] = 42.0;
+val := t[0];
 
 // Reshape (view, no copy)
 reshaped := t.reshape([1, 3]);
-
-// Elementwise operations
-c := a + b;          // add
-c := a * b;          // multiply
-c := a / b;          // divide
-c := a ** 2.0;       // power
-
-// Reduction
-sum := t.sum();
-mean := t.mean();
-max_val := t.max();
-
-// Linear algebra
-product := matmul(a, b);                           // matrix multiply
-d := dot(v1, v2);                                  // dot product
-n := norm(v);                                      // L2 norm
-
-// ML operations
-y := relu(x);
-y := softmax(x, dim: -1);
-y := layer_norm(x, normalized_shape: [768]);
-y := conv2d(input, weight, bias, stride: 1, padding: 0);
-loss := cross_entropy(logits, targets);
-
-// Autograd
-loss.backward();
-grad := weights.grad;
 ```
 
-See [Tensor Operations](#tensor-operations) for the complete list.
+Tensors are the bridge between Mog scripts and host ML capabilities. A host might provide `model.forward(input_tensor)` that accepts and returns tensors, or `ml.matmul(a, b)` for linear algebra. The language itself does not define any tensor arithmetic — all operations come from host capabilities.
 
 ### Optional Type
 
@@ -529,6 +501,13 @@ api_key := env.get("API_KEY")?;
 
 // Database (if granted by host)
 rows := await db.query("SELECT * FROM users WHERE age > ?", [18])?;
+
+// ML operations (if granted by host)
+// The host decides what ML backend to use (PyTorch, ONNX, custom, etc.)
+result := await ml.matmul(a, b)?;
+activated := await ml.relu(x)?;
+loss := await ml.cross_entropy(logits, targets)?;
+loss_val := await ml.backward(loss)?;
 ```
 
 ### Capability Declaration
@@ -544,143 +523,6 @@ optional log, env;
 ```
 
 If a script tries to use an undeclared capability, the compiler rejects it. If it declares a capability the host doesn't provide, the host rejects the script before running it.
-
-## Tensor Operations
-
-### Creation
-
-```mog
-tensor<dtype>.zeros(shape)          // all zeros
-tensor<dtype>.ones(shape)           // all ones
-tensor<dtype>.full(shape, value)    // filled with value
-tensor<dtype>.randn(shape)          // random normal
-tensor<dtype>.rand(shape)           // random uniform [0, 1)
-tensor<dtype>.arange(start, end, step)  // range
-tensor<dtype>.eye(n)                // identity matrix
-tensor([1.0, 2.0, 3.0])            // from literal (infers dtype)
-tensor<f16>([1.0, 2.0, 3.0])       // from literal with explicit dtype
-```
-
-### Shape Operations
-
-```mog
-t.shape                   // [int] - dimensions
-t.dtype                   // dtype enum
-t.reshape(new_shape)      // view with new shape
-t.transpose()             // transpose last two dims
-t.transpose(dim0, dim1)   // transpose specific dims
-t.squeeze(dim)            // remove size-1 dimension
-t.unsqueeze(dim)          // add size-1 dimension
-t.expand(shape)           // broadcast to shape
-t.contiguous()            // ensure contiguous memory
-t.flatten()               // flatten to 1D
-t.view(shape)             // alias for reshape
-```
-
-### Elementwise Operations
-
-```mog
-a + b       a - b       a * b       a / b       // arithmetic
-a ** b                                           // power
-a == b      a != b      a < b       a > b       // comparison (returns bool tensor)
-a & b       a | b       ~a                       // bitwise (integer tensors)
-abs(a)      neg(a)      sign(a)                  // unary
-exp(a)      log(a)      log2(a)     log10(a)     // exponential
-sqrt(a)     rsqrt(a)                              // roots
-sin(a)      cos(a)      tan(a)                   // trigonometric
-floor(a)    ceil(a)     round(a)                 // rounding
-clamp(a, min, max)                               // clamping
-```
-
-### Reduction Operations
-
-```mog
-t.sum()               t.sum(dim)             // sum
-t.mean()              t.mean(dim)            // mean
-t.max()               t.max(dim)             // max
-t.min()               t.min(dim)             // min
-t.argmax(dim)         t.argmin(dim)          // arg max/min
-t.prod()              t.prod(dim)            // product
-t.any()               t.all()                // logical
-```
-
-### Linear Algebra
-
-```mog
-matmul(a, b)                    // matrix multiplication
-dot(a, b)                       // dot product
-norm(a)                         // L2 norm
-norm(a, p)                      // Lp norm
-cross(a, b)                     // cross product
-```
-
-### ML Operations
-
-```mog
-// Activations
-relu(x)
-gelu(x)
-silu(x)                         // SiLU / swish
-sigmoid(x)
-tanh(x)
-softmax(x, dim: -1)
-
-// Normalization
-layer_norm(x, normalized_shape, weight, bias)
-batch_norm(x, running_mean, running_var, weight, bias)
-group_norm(x, num_groups, weight, bias)
-
-// Convolution
-conv1d(input, weight, bias, stride, padding)
-conv2d(input, weight, bias, stride, padding)
-
-// Pooling
-max_pool2d(input, kernel_size, stride, padding)
-avg_pool2d(input, kernel_size, stride, padding)
-
-// Loss
-cross_entropy(logits, targets)
-mse_loss(prediction, target)
-binary_cross_entropy(prediction, target)
-
-// Attention
-scaled_dot_product_attention(query, key, value, mask)
-
-// Dropout (training only)
-dropout(x, p: 0.1, training: true)
-
-// Embedding
-embedding(indices, weight)
-```
-
-### Autograd
-
-```mog
-// Enable gradient tracking
-x := tensor<f32>.randn([10, 10]).requires_grad();
-y := matmul(x, x) + x;
-loss := y.sum();
-
-// Backpropagation
-loss.backward();
-
-// Access gradients
-grad := x.grad;
-
-// Gradient context
-with no_grad() {
-  // Operations here don't track gradients
-  inference_result := model_forward(input);
-}
-```
-
-### Dtype Conversion
-
-```mog
-t_f16 := t.to(f16);              // convert to half precision
-t_f32 := t.to(f32);              // convert to single precision
-t_int := t.to(i32);              // convert to integer
-```
 
 ## String Operations
 
@@ -798,7 +640,7 @@ async fn main() -> Result<()> {
 ### ML Training Loop
 
 ```mog
-requires model, log;
+requires ml, log;
 
 struct TrainConfig {
   epochs: int,
@@ -806,35 +648,28 @@ struct TrainConfig {
   batch_size: int,
 }
 
-fn create_linear(in_features: int, out_features: int) -> tensor<f32> {
-  return tensor<f32>.randn([in_features, out_features]) * 0.01;
-}
-
 async fn train(config: TrainConfig) -> Result<tensor<f32>> {
-  weights := create_linear(784, 10).requires_grad();
-  bias := tensor<f32>.zeros([10]).requires_grad();
+  // Host provides model creation and ML operations
+  weights := await ml.randn([784, 10], dtype: "f32")?;
+  bias := await ml.zeros([10], dtype: "f32")?;
 
   for epoch in 0..config.epochs {
-    // Get batch from host
-    batch := await model.next_batch(config.batch_size)?;
-    images := batch.images;     // tensor<f32> [batch, 784]
-    labels := batch.labels;     // tensor<i32> [batch]
+    batch := await ml.next_batch(config.batch_size)?;
 
-    // Forward pass
-    logits := matmul(images, weights) + bias;
-    loss := cross_entropy(logits, labels);
+    // Forward pass (host computes on its ML backend)
+    logits := await ml.matmul(batch.images, weights)?;
+    logits = await ml.add(logits, bias)?;
+    loss := await ml.cross_entropy(logits, batch.labels)?;
 
     // Backward pass
-    loss.backward();
+    grads := await ml.backward(loss)?;
 
     // SGD update
-    with no_grad() {
-      weights = weights - config.lr * weights.grad;
-      bias = bias - config.lr * bias.grad;
-    }
+    weights = await ml.sub(weights, await ml.mul_scalar(grads.weights, config.lr)?)?;
+    bias = await ml.sub(bias, await ml.mul_scalar(grads.bias, config.lr)?)?;
 
     if epoch % 10 == 0 {
-      log.info("epoch {epoch}: loss = {loss.item()}");
+      log.info("epoch {epoch}: loss = {loss}");
     }
   }
 
@@ -911,7 +746,7 @@ fn process(input: PluginInput) -> PluginOutput {
 The host application:
 1. Compiles Mog source to a module
 2. Validates capability requirements against granted capabilities
-3. Provides capability objects (fs, http, model, etc.) at initialization
+3. Provides capability objects (fs, http, model, ml, etc.) at initialization
 4. Calls exported functions (like `main` or `process`)
 5. Manages the event loop for async operations
 6. Controls resource limits (memory, CPU time, tensor sizes)
@@ -920,12 +755,13 @@ The host application:
 Host Application
 ├── Mog Runtime
 │   ├── GC (mark-and-sweep)
-│   ├── Tensor Engine (dispatches to host ML backend)
+│   ├── Tensor Storage (nd-array allocation and element access)
 │   └── Async Executor (host-managed event loop)
 ├── Capability Providers
 │   ├── fs: FileSystemCapability
 │   ├── http: HttpCapability
 │   ├── model: ModelCapability
+│   ├── ml: MLCapability
 │   └── log: LogCapability
 └── Resource Limits
     ├── max_memory: 512MB
@@ -1017,9 +853,9 @@ To keep the surface area small, the following are explicitly **out of scope**:
 - **Threads and locks.** Use async/await. The host manages concurrency.
 - **Inheritance and OOP.** Use structs and functions.
 - **Macros.** Keep the language simple and readable.
-- **Generics** (beyond tensors). Tensor dtype parameterization is the one generic-like feature. Everything else uses concrete types.
+- **Generics** (beyond tensor dtype). Tensor dtype parameterization (`tensor<f32>`) is the one generic-like feature. Everything else uses concrete types.
 - **Exceptions with stack unwinding.** Use Result types.
-- **Operator overloading** (beyond tensor ops). Tensors get arithmetic operators. User types don't.
+- **Operator overloading.** All types use the built-in operators. User-defined operator overloading is not supported.
 
 ## Changes from Previous Spec
 
@@ -1031,10 +867,13 @@ To keep the surface area small, the following are explicitly **out of scope**:
 - Ternary conditional syntax (`condition ? (a) : (b)`) — use `if` expression
 - Custom loop patterns with `continue`/`break` in conditional blocks — use `while` and `for`
 - i128/i256/u128/u256/f8/f128/f256 types (no hardware support)
+- Built-in tensor arithmetic operators (+, -, *, /) on tensors
+- Built-in autograd (backward, grad, requires_grad)
+- Built-in ML operations (relu, conv2d, cross_entropy, etc.)
 
 ### Added
 - `string` as first-class type (not `[u8]`)
-- `tensor<dtype>` with shape checking and autograd
+- `tensor<dtype>` with shape checking
 - `?T` optional type with `none`
 - `Result<T>` error handling with `?` propagation
 - `async`/`await` with structured concurrency
@@ -1043,7 +882,7 @@ To keep the surface area small, the following are explicitly **out of scope**:
 - `for..in` loops with ranges and iterables
 - Named function arguments with defaults
 - `match` expressions for Result types
-- `with` blocks (for `no_grad()` and similar scoped contexts)
+- `with` blocks (for scoped contexts)
 - `datums := soa Struct[N]` columnar containers with AoS syntax and SoA storage
 
 ### Changed
@@ -1052,3 +891,4 @@ To keep the surface area small, the following are explicitly **out of scope**:
 - `:=` for initial binding, `=` for reassignment (was `:=` for both)
 - Semicolons are required (were optional in some contexts)
 - `print()` is a builtin, not a syscall wrapper
+- Tensor operations (matmul, activations, autograd, etc.) moved from language builtins to host capabilities
