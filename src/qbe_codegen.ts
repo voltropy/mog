@@ -1134,7 +1134,19 @@ class QBECodeGen {
           return r
         }
         if (method === "sort") {
-          ir.push(`  call $array_sort(l ${objReg})`)
+          if (argRegs.length > 0) {
+            // Sort with comparator closure
+            const closureReg = argRegs[0]
+            const fnPtr = this.nextReg()
+            ir.push(`  ${fnPtr} =l loadl ${closureReg}`)
+            const envOff = this.nextReg()
+            ir.push(`  ${envOff} =l add ${closureReg}, 8`)
+            const envPtr = this.nextReg()
+            ir.push(`  ${envPtr} =l loadl ${envOff}`)
+            ir.push(`  call $array_sort_with_comparator(l ${objReg}, l ${fnPtr}, l ${envPtr})`)
+          } else {
+            ir.push(`  call $array_sort(l ${objReg})`)
+          }
           return "0"
         }
         if (method === "reverse") {

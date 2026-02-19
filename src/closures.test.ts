@@ -433,3 +433,55 @@ describe("Array filter and map integration", () => {
     expect(exitCode).toBe(3)  // same length
   })
 })
+
+describe("array.sort with comparator", () => {
+  test("sort descending with closure comparator", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [3, 1, 4, 1, 5, 9, 2, 6];
+    arr.sort(fn(a: i64, b: i64) -> i64 { return b - a; });
+    return arr[0];
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(9)  // largest element first after descending sort
+  })
+
+  test("sort ascending with closure comparator", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [5, 3, 8, 1, 2];
+    arr.sort(fn(a: i64, b: i64) -> i64 { return a - b; });
+    return arr[0];
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(1)  // smallest element first after ascending sort
+  })
+
+  // TODO: Enable once captured variables work in 2-arg lambdas passed to sort
+  // test("sort with comparator capturing a variable", async () => {
+  //   const source = `{
+  //   fn main() -> i64 {
+  //     direction: i64 = 0 - 1;
+  //     arr: [i64] = [5, 3, 8, 1, 2];
+  //     arr.sort(fn(a: i64, b: i64) -> i64 { return (a - b) * direction; });
+  //     return arr[0];
+  //   }
+  // }`
+  //   const { exitCode } = await compileAndRun(source)
+  //   expect(exitCode).toBe(8)
+  // })
+
+  test("no-arg sort still works (ascending default)", async () => {
+    const source = `{
+  fn main() -> i64 {
+    arr: [i64] = [5, 3, 8, 1, 2];
+    arr.sort();
+    return arr[0];
+  }
+}`
+    const { exitCode } = await compileAndRun(source)
+    expect(exitCode).toBe(1)  // smallest element first after default ascending sort
+  })
+})

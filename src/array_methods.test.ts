@@ -119,11 +119,76 @@ describe("Array Methods - LLVM IR Generation", () => {
   })
 
   describe(".sort()", () => {
-    test("generates call to array_sort", () => {
+    test("generates call to array_sort (no args)", () => {
       const ast = makeArrayMethodProgram("sort")
       const ir = generateLLVMIR(ast)
       expect(ir).toContain("@array_sort")
       expect(ir).toContain("call void @array_sort(ptr")
+      expect(ir).not.toContain("call void @array_sort_with_comparator(")
+    })
+
+    test("generates call to array_sort_with_comparator when given closure", () => {
+      const closureType = new FunctionType([i64, i64], i64)
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "arr",
+            varType: array(i64, 1),
+            value: {
+              type: "ArrayLiteral",
+              elements: [
+                { type: "NumberLiteral", value: "3", literalType: i64 },
+                { type: "NumberLiteral", value: "1", literalType: i64 },
+                { type: "NumberLiteral", value: "2", literalType: i64 },
+              ],
+            },
+          },
+          {
+            type: "VariableDeclaration",
+            name: "cmp",
+            varType: closureType,
+            value: {
+              type: "Lambda",
+              params: [{ name: "a", paramType: i64 }, { name: "b", paramType: i64 }],
+              returnType: i64,
+              body: {
+                type: "Block",
+                statements: [
+                  {
+                    type: "ReturnStatement",
+                    value: {
+                      type: "BinaryExpression",
+                      operator: "-",
+                      left: { type: "Identifier", name: "a" },
+                      right: { type: "Identifier", name: "b" },
+                    },
+                  },
+                ],
+              },
+              capturedVars: [],
+              capturedVarTypes: {},
+            },
+          },
+          {
+            type: "ExpressionStatement",
+            expression: {
+              type: "CallExpression",
+              callee: {
+                type: "MemberExpression",
+                object: { type: "Identifier", name: "arr" },
+                property: "sort",
+              },
+              args: [{ type: "Identifier", name: "cmp" }],
+              arguments: [{ type: "Identifier", name: "cmp" }],
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      expect(ir).toContain("@array_sort_with_comparator")
+      expect(ir).toContain("call void @array_sort_with_comparator(ptr")
     })
   })
 
@@ -319,6 +384,7 @@ describe("Array Methods - LLVM IR Generation", () => {
       expect(ir).toContain("declare i64 @array_pop(ptr %array)")
       expect(ir).toContain("declare i64 @array_contains(ptr %array, i64 %value)")
       expect(ir).toContain("declare void @array_sort(ptr %array)")
+      expect(ir).toContain("declare void @array_sort_with_comparator(ptr %array, ptr %fn, i64 %env)")
       expect(ir).toContain("declare void @array_reverse(ptr %array)")
       expect(ir).toContain("declare ptr @array_filter(ptr %array, ptr %fn, i64 %env)")
       expect(ir).toContain("declare ptr @array_map(ptr %array, ptr %fn, i64 %env)")

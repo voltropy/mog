@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { generateLLVMIR, LLVMIRGenerator } from "./llvm_codegen"
-import { i64, f64, voidType, array, map, StructType, SOAType } from "./types"
+import { i64, f64, voidType, array, map, StructType, SOAType, TypeAliasType } from "./types"
 
 describe("LLVM IR Generator", () => {
   describe("Program Structure", () => {
@@ -1279,6 +1279,78 @@ describe("Optimization Features", () => {
       expect(ir).toContain("@array_get_f64")
       // Should store the result as double
       expect(ir).toContain("store double")
+    })
+  })
+
+  describe("TypeAliasType resolution", () => {
+    test("type alias to i64 resolves correctly in variable declaration", () => {
+      const aliasType = new TypeAliasType("MyInt", i64)
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "x",
+            varType: aliasType,
+            value: {
+              type: "NumberLiteral",
+              value: "99",
+              literalType: i64,
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      // The alias should resolve to the underlying i64 type
+      expect(ir).toContain("%x = alloca i64")
+      expect(ir).toContain("store i64 99, ptr %x")
+    })
+
+    test("type alias to f64 resolves correctly", () => {
+      const aliasType = new TypeAliasType("Real", f64)
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "y",
+            varType: aliasType,
+            value: {
+              type: "NumberLiteral",
+              value: "3.14",
+              literalType: f64,
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      // The alias should resolve to the underlying double type
+      expect(ir).toContain("%y = alloca double")
+      expect(ir).toContain("store double")
+    })
+
+    test("nested type alias resolves recursively", () => {
+      const innerAlias = new TypeAliasType("Inner", i64)
+      const outerAlias = new TypeAliasType("Outer", innerAlias)
+      const ast = {
+        type: "Program",
+        statements: [
+          {
+            type: "VariableDeclaration",
+            name: "z",
+            varType: outerAlias,
+            value: {
+              type: "NumberLiteral",
+              value: "7",
+              literalType: i64,
+            },
+          },
+        ],
+      }
+      const ir = generateLLVMIR(ast)
+      // Nested aliases should fully resolve to the base type
+      expect(ir).toContain("%z = alloca i64")
+      expect(ir).toContain("store i64 7, ptr %z")
     })
   })
 })

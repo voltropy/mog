@@ -273,6 +273,75 @@ describe("named arguments", () => {
 })
 
 // ============================================================
+// Named argument validation at call sites
+// ============================================================
+describe("named argument validation", () => {
+  test("accepts valid named arguments", () => {
+    const { errors } = analyze(`{
+  fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+  }
+  add(a: 1, b: 2);
+}`)
+    expect(errors.length).toBe(0)
+  })
+
+  test("accepts mixed positional and named arguments", () => {
+    const { errors } = analyze(`{
+  fn config(x: i64, y: i64, z: i64) -> i64 {
+    return x + y + z;
+  }
+  config(1, y: 2, z: 3);
+}`)
+    expect(errors.length).toBe(0)
+  })
+
+  test("errors on unknown named argument", () => {
+    const { errors } = analyze(`{
+  fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+  }
+  add(a: 1, c: 2);
+}`)
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    const unknownArgError = errors.find((e: any) => e.message.includes("Unknown named argument 'c'"))
+    expect(unknownArgError).toBeTruthy()
+  })
+
+  test("errors on missing required argument", () => {
+    const { errors } = analyze(`{
+  fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+  }
+  add(a: 1);
+}`)
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    const missingArgError = errors.find((e: any) => e.message.includes("Missing required argument 'b'"))
+    expect(missingArgError).toBeTruthy()
+  })
+
+  test("does not error when default fills missing named arg", () => {
+    const { errors } = analyze(`{
+  fn greet(x: i64, y: i64 = 10) -> i64 {
+    return x + y;
+  }
+  greet(x: 5);
+}`)
+    expect(errors.length).toBe(0)
+  })
+
+  test("positional args cover required params without naming them", () => {
+    const { errors } = analyze(`{
+  fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+  }
+  add(1, 2);
+}`)
+    expect(errors.length).toBe(0)
+  })
+})
+
+// ============================================================
 // Function type annotations
 // ============================================================
 describe("function type annotations", () => {

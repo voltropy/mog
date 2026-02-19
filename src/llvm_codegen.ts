@@ -1,5 +1,5 @@
 import type { ProgramNode, StatementNode, ExpressionNode } from "./analyzer.js"
-import { isArrayType, isMapType, isFloatType, isTensorType, IntegerType, UnsignedType, FloatType, ArrayType, MapType, StructType, SOAType, ResultType, OptionalType, FunctionType, TensorType } from "./types.js"
+import { isArrayType, isMapType, isFloatType, isTensorType, IntegerType, UnsignedType, FloatType, ArrayType, MapType, StructType, SOAType, ResultType, OptionalType, FunctionType, TensorType, TypeAliasType } from "./types.js"
 
 type LLVMType = "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "half" | "float" | "double" | "fp128" | "void" | "ptr"
 
@@ -520,6 +520,7 @@ class LLVMIRGenerator {
     ir.push("declare i64 @array_pop(ptr %array)")
     ir.push("declare i64 @array_contains(ptr %array, i64 %value)")
     ir.push("declare void @array_sort(ptr %array)")
+    ir.push("declare void @array_sort_with_comparator(ptr %array, ptr %fn, i64 %env)")
     ir.push("declare void @array_reverse(ptr %array)")
     ir.push("declare ptr @array_join(ptr %array, ptr %separator)")
     ir.push("declare ptr @array_filter(ptr %array, ptr %fn, i64 %env)")
@@ -2230,7 +2231,21 @@ class LLVMIRGenerator {
             return reg
           }
           case "sort": {
-            ir.push(`  call void @array_sort(ptr ${arrReg})`)
+            if (callArgs.length > 0) {
+              // Sort with comparator closure
+              const closureReg = this.generateExpression(ir, callArgs[0])
+              const fnPtr = `%${this.valueCounter++}`
+              ir.push(`  ${fnPtr} = load ptr, ptr ${closureReg}`)
+              const envSlot = `%${this.valueCounter++}`
+              ir.push(`  ${envSlot} = getelementptr i8, ptr ${closureReg}, i64 8`)
+              const envPtr = `%${this.valueCounter++}`
+              ir.push(`  ${envPtr} = load ptr, ptr ${envSlot}`)
+              const envI64 = `%${this.valueCounter++}`
+              ir.push(`  ${envI64} = ptrtoint ptr ${envPtr} to i64`)
+              ir.push(`  call void @array_sort_with_comparator(ptr ${arrReg}, ptr ${fnPtr}, i64 ${envI64})`)
+            } else {
+              ir.push(`  call void @array_sort(ptr ${arrReg})`)
+            }
             return "0" // void return
           }
           case "reverse": {
@@ -5795,6 +5810,8 @@ class LLVMIRGenerator {
         return "ptr"
       case "VoidType":
         return "void"
+      case "TypeAliasType":
+        return this.toLLVMType(type.aliasedType)
  default:
         return "i64"
     }

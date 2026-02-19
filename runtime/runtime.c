@@ -901,6 +901,29 @@ void array_sort(void* array_ptr) {
   qsort(arr->data, arr->dimensions[0], arr->element_size, array_sort_cmp);
 }
 
+/* Sort with user-provided comparator closure (env-first convention) */
+typedef struct {
+    int64_t (*fn)(int64_t, int64_t, int64_t);  /* fn(env, a, b) */
+    int64_t env;
+} SortComparatorCtx;
+
+static int sort_comparator_wrapper(void* ctx_ptr, const void* a, const void* b) {
+    SortComparatorCtx* ctx = (SortComparatorCtx*)ctx_ptr;
+    int64_t va = *(const int64_t*)a;
+    int64_t vb = *(const int64_t*)b;
+    int64_t result = ctx->fn(ctx->env, va, vb);
+    return (int)result;
+}
+
+void array_sort_with_comparator(void* array_ptr, void* cmp_fn, int64_t env) {
+    Array* arr = (Array*)array_ptr;
+    if (!arr || arr->dimension_count == 0 || arr->dimensions[0] <= 1) return;
+    SortComparatorCtx ctx;
+    ctx.fn = (int64_t (*)(int64_t, int64_t, int64_t))cmp_fn;
+    ctx.env = env;
+    qsort_r(arr->data, (size_t)arr->dimensions[0], arr->element_size, &ctx, sort_comparator_wrapper);
+}
+
 void array_reverse(void* array_ptr) {
   Array* arr = (Array*)array_ptr;
   if (!arr || arr->dimension_count == 0 || arr->dimensions[0] <= 1) return;

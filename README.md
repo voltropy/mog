@@ -441,7 +441,7 @@ The core language is fully implemented and tested. The main gaps are in the tens
 |---|---|
 | **Type system** | `int`, `float`, `bool`, `string`, `?T` (Optional), `Result<T>`, type aliases, `as` casts, numeric precision types (`i8`–`i64`, `u8`–`u64`, `f16`, `bf16`, `f32`, `f64`) |
 | **Variables** | `:=` binding, `=` reassignment, type inference, explicit annotation |
-| **Functions** | `fn` with return types, single-expression bodies, closures/lambdas as first-class values, named arguments |
+| **Functions** | `fn` with return types, single-expression bodies, closures/lambdas as first-class values, named arguments with default values |
 | **Async** | `async fn`, `await`, `spawn`, `all()`, `race()`, coroutine-based with host event loop (LLVM + QBE backends) |
 | **Control flow** | `if`/`else`/`elif`, if-as-expression, `while`, `for i in 0..N`, `for item in array`, `for i, item in array`, `for key, value in map`, `break`, `continue`, `match` with literal/variant/wildcard patterns |
 | **Error handling** | `Result<T>` with `ok`/`err`, `?` propagation, `try`/`catch`, `match` on Result/Optional |
@@ -467,10 +467,6 @@ The core language is fully implemented and tested. The main gaps are in the tens
 | **Tensor reduction** | `.sum()`, `.mean()` | `.max()`, `.min()`, `.argmax()`, `.argmin()`, `.prod()`, `.any()`, `.all()`, dim-based variants |
 | **Tensor elementwise** | `+`, `-`, `*` | `/`, `**`, comparison (bool tensor), `abs`, `neg`, `exp`, `log`, `sqrt`, `clamp`, trig on tensors |
 | **Tensor linear algebra** | `matmul()`, `dot()` | `norm()`, `cross()` |
-| **Named args** | Parser support | Default parameter values in codegen |
-| **f64 struct fields** | Basic codegen, `str()` dispatch | `for-in` loop iteration over structs with f64 fields (some cases) |
-| **SoA with f64** | Basic SoA layout | SoA structs containing f64 fields |
-| **`?` in try blocks** | `?` propagation, `try`/`catch` | `?` used inside `try` block bodies |
 
 ### Not Yet Implemented
 
@@ -480,7 +476,6 @@ The core language is fully implemented and tested. The main gaps are in the tens
 | **Autograd** | `.requires_grad()`, `.backward()`, `.grad`, gradient tracking and backpropagation |
 | **Tensor dtype conversion** | `t.to(f16)`, `t.to(f32)`, `t.to(i32)` |
 | **Tensor advanced indexing** | `matrix[0, :]`, `volume[:, 0:10, :]` multi-dim slice syntax |
-| **Implicit widening** | `i32` → `int`, `f32` → `float` automatic promotion |
 | **Generics** | Out of scope per spec — Mog uses concrete types and type aliases instead |
 | **`http`, `model`, `log`, `db` capabilities** | Reference host implementations (the capability system itself works — hosts can register any capability) |
 

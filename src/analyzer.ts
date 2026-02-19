@@ -587,6 +587,8 @@ class SemanticAnalyzer {
   private lambdaScopeDepth: number = 0
   // Async function tracking
   private inAsyncFunction: boolean = false
+  // Per-function parameter info for named arg validation at call sites
+  private functionParamInfo: Map<string, { name: string; paramType: any; defaultValue?: any }[]> = new Map()
 
   constructor() {
     this.symbolTable = new SymbolTable()
@@ -602,6 +604,7 @@ class SemanticAnalyzer {
     this.warnings = []
     this.requiredCapabilities = []
     this.optionalCapabilities = []
+    this.functionParamInfo = new Map()
     this.declarePOSIXBuiltins()
     this.visitProgram(program)
     // Print warnings if any
@@ -1297,6 +1300,13 @@ class SemanticAnalyzer {
     const funcType = new FunctionType(paramTypes, returnType)
     this.symbolTable.declare(node.name, "function", funcType)
 
+    // Store param info for named arg validation at call sites
+    this.functionParamInfo.set(node.name, node.params.map((p: any) => ({
+      name: p.name,
+      paramType: p.paramType,
+      defaultValue: p.defaultValue,
+    })))
+
     const prevFunction = this.currentFunction
     this.currentFunction = node.name
 
@@ -1360,6 +1370,13 @@ class SemanticAnalyzer {
     const paramTypes = node.params.map((p: any) => p.paramType)
     const funcType = new FunctionType(paramTypes, futureReturnType)
     this.symbolTable.declare(node.name, "function", funcType)
+
+    // Store param info for named arg validation at call sites
+    this.functionParamInfo.set(node.name, node.params.map((p: any) => ({
+      name: p.name,
+      paramType: p.paramType,
+      defaultValue: p.defaultValue,
+    })))
 
     const prevFunction = this.currentFunction
     const prevAsync = this.inAsyncFunction
@@ -2164,13 +2181,45 @@ class SemanticAnalyzer {
 
       // Handle regular function calls - return the function's return type
       if (symbol && symbol.symbolType === "function") {
-        // Visit named args if present
-        const namedArgs = (node as any).namedArgs
-        if (namedArgs) {
+        const namedArgs: { name: string; value: any; position?: any }[] = (node as any).namedArgs ?? []
+        const positionalArgs: any[] = (node as any).args ?? (node as any).arguments ?? []
+
+        // Visit named arg expressions
+        for (const namedArg of namedArgs) {
+          this.visitExpression(namedArg.value)
+        }
+
+        // Validate named args and required params if we have param info
+        const paramInfo = this.functionParamInfo.get(identifier.name)
+        if (paramInfo) {
+          const paramNames = new Set(paramInfo.map(p => p.name))
+
+          // Check each named arg refers to a real parameter
           for (const namedArg of namedArgs) {
-            this.visitExpression(namedArg.value)
+            if (!paramNames.has(namedArg.name)) {
+              this.emitError(
+                `Unknown named argument '${namedArg.name}' in call to '${identifier.name}'`,
+                namedArg.value?.position || node.position
+              )
+            }
+          }
+
+          // Check that all required params (no default value) are covered
+          // by either a positional arg or a named arg
+          const namedArgNames = new Set(namedArgs.map((na: any) => na.name))
+          for (let i = 0; i < paramInfo.length; i++) {
+            const param = paramInfo[i]
+            const coveredByPositional = i < positionalArgs.length
+            const coveredByName = namedArgNames.has(param.name)
+            if (!coveredByPositional && !coveredByName && !param.defaultValue) {
+              this.emitError(
+                `Missing required argument '${param.name}' in call to '${identifier.name}'`,
+                node.position
+              )
+            }
           }
         }
+
         // If declaredType is a FunctionType, return its returnType
         if (symbol.declaredType && isFunctionType(symbol.declaredType)) {
           return (symbol.declaredType as FunctionType).returnType
