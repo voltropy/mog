@@ -445,6 +445,7 @@ The core language is fully implemented and tested. ML operations are not languag
 | **Backends** | LLVM IR backend (full optimization), QBE lightweight backend (~2x faster compile than LLVM -O1), f64 codegen with proper `str()`/`println` dispatch |
 | **Runtime** | Mark-and-sweep GC, `select()`-based async event loop with fd watchers and timers |
 | **Safety** | Cooperative interrupt polling at loop back-edges, `mog_request_interrupt()` host API, `mog_arm_timeout(ms)` for CPU time limits, automatic timeout via `MogLimits.max_cpu_ms` |
+| **Plugins** | Compile .mog to .dylib/.so shared libraries, `mog_load_plugin()`, `mog_plugin_call()`, capability sandboxing via `mog_load_plugin_sandboxed()`, plugin metadata (`MogPluginInfo`), `pub fn` export visibility |
 | **Operators** | Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison, logical (`and`, `or`, `not`), bitwise (`&`, `\|`, `^`, `~`, `<<`, `>>`), `?` propagation, `..` range, `as` cast |
 
 ### Not Yet Implemented
@@ -472,7 +473,7 @@ The QBE backend currently bottlenecks on the system assembler (`as`). For large 
 bun test
 ```
 
-1307 tests passing across 30 test files.
+1338 tests passing across 30 test files.
 
 ## Architecture
 
@@ -498,6 +499,8 @@ runtime/
   mog_async.c       Event loop, futures, coroutine resume, all/race
   mog_async.h       Async runtime headers
   posix_host.c      Built-in fs and process capability providers
+  mog_plugin.h      Plugin loading C API (dlopen, sandboxing)
+  mog_plugin.c      Plugin load/call/unload implementation
   mog_backend.c     In-process QBE + assembler bridge (FFI target)
 
 capabilities/
@@ -506,6 +509,7 @@ capabilities/
 examples/
   host.c            Example host application with custom capabilities
   build_showcase.sh Build script for the showcase demo
+  plugins/           Plugin example (math_plugin.mog + C host)
 ```
 
 ## Embedding
@@ -532,6 +536,30 @@ mog_vm_set_limits(vm, limits);
 // Or manually interrupt from another thread:
 mog_request_interrupt();
 ```
+
+### Plugins
+
+Compile Mog code to shared libraries and load them at runtime:
+
+```c
+#include "mog_plugin.h"
+
+// Load a pre-compiled Mog plugin
+MogPlugin *plugin = mog_load_plugin("./math_plugin.dylib", vm);
+
+// Call exported functions by name
+MogValue args[] = { mog_int(10) };
+MogValue result = mog_plugin_call(plugin, "fibonacci", args, 1);
+printf("fibonacci(10) = %lld\n", result.data.i);  // 55
+
+// Sandbox: restrict which capabilities a plugin can access
+const char *allowed[] = { "log", NULL };
+MogPlugin *safe = mog_load_plugin_sandboxed("./untrusted.dylib", vm, allowed);
+
+mog_unload_plugin(plugin);
+```
+
+Plugins use `pub fn` to export functions. Non-pub functions have internal linkage. See `examples/plugins/` for a complete example.
 
 ## License
 

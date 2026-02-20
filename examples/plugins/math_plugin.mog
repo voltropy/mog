@@ -1,0 +1,38 @@
+// Math utilities plugin
+//
+// Public functions are exported from the plugin and callable by the host.
+// Non-pub functions are internal helpers with hidden linkage.
+
+pub fn fibonacci(n: int) -> int {
+  if (n <= 1) {
+    return n;
+  }
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+pub fn factorial(n: int) -> int {
+  if (n <= 1) {
+    return 1;
+  }
+  return n * factorial(n - 1);
+}
+
+pub fn gcd(a: int, b: int) -> int {
+  x := a;
+  y := b;
+  while (y != 0) {
+    t := x % y;
+    x = y;
+    y = t;
+  }
+  return x;
+}
+
+// Internal helper - NOT exported (no `pub` keyword)
+fn square(x: int) -> int {
+  return x * x;
+}
+
+pub fn sum_of_squares(a: int, b: int) -> int {
+  return square(a) + square(b);
+}

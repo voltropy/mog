@@ -5,8 +5,10 @@ import { generateLLVMIR, generateModuleLLVMIR } from "./llvm_codegen.js"
 import { type ProgramNode } from "./analyzer.js"
 import { compileRuntime, linkToExecutable } from "./linker.js"
 import { parseCapabilityDecl } from "./capability.js"
-import { existsSync, readFileSync, readdirSync } from "fs"
+import { existsSync, readFileSync, readdirSync, writeFileSync, unlinkSync, mkdtempSync } from "fs"
 import * as path from "path"
+import { tmpdir } from "os"
+import { spawnSync } from "child_process"
 
 export interface Compiler {
   compile(source: string): Promise<CompiledProgram>
@@ -371,6 +373,177 @@ function collectExports(statements: any[]): Map<string, { name: string; kind: st
     }
   }
   return exports
+}
+
+/**
+ * Compile source in plugin mode, producing LLVM IR suitable for a shared library.
+ * Uses the same tokenize -> filter -> parse -> analyze pipeline as compile(),
+ * but passes pluginOptions to generateLLVMIR so the codegen emits plugin metadata
+ * and uses appropriate linkage.
+ */
+export async function compilePlugin(
+  source: string,
+  pluginName: string,
+  pluginVersion?: string,
+): Promise<{ llvmIR: string; errors: CompileError[] }> {
+  const errors: CompileError[] = []
+
+  try {
+    const tokens = tokenize(source)
+    const filteredTokens = tokens.filter((t) => t.type !== "WHITESPACE" && t.type !== "COMMENT")
+    const ast: ProgramNode = parseTokens(filteredTokens)
+
+    // Extract capability declarations from AST (same as compile)
+    const requiredCaps: string[] = []
+    const optionalCaps: string[] = []
+    const extractCaps = (statements: any[]) => {
+      for (const stmt of statements) {
+        if ((stmt as any).type === "RequiresDeclaration") {
+          requiredCaps.push(...(stmt as any).capabilities)
+        }
+        if ((stmt as any).type === "OptionalDeclaration") {
+          optionalCaps.push(...(stmt as any).capabilities)
+        }
+        if ((stmt as any).type === "Block" && (stmt as any).statements) {
+          extractCaps((stmt as any).statements)
+        }
+      }
+    }
+    extractCaps(ast.statements)
+
+    // Load capability declarations from .mogdecl files (same as compile)
+    const capabilityDecls = new Map<string, any>()
+    const allCaps = [...requiredCaps, ...optionalCaps]
+    const __dirname = import.meta.dirname || path.dirname(new URL(import.meta.url).pathname)
+    const searchPaths = [
+      path.resolve(__dirname, "../capabilities"),
+      path.resolve(process.cwd(), "capabilities"),
+    ]
+    for (const capName of allCaps) {
+      for (const searchPath of searchPaths) {
+        const declPath = path.join(searchPath, `${capName}.mogdecl`)
+        if (existsSync(declPath)) {
+          const declSource = readFileSync(declPath, "utf-8")
+          const decls = parseCapabilityDecl(declSource)
+          const decl = decls.find(d => d.name === capName)
+          if (decl) {
+            capabilityDecls.set(capName, decl)
+          }
+          break
+        }
+      }
+    }
+
+    const analyzer = new SemanticAnalyzer()
+    analyzer.setCapabilityDecls(capabilityDecls)
+    const semanticErrors = analyzer.analyze(ast)
+
+    if (semanticErrors.length > 0) {
+      errors.push(
+        ...semanticErrors.map((e) => ({
+          message: e.message,
+          line: e.position.start.line,
+          column: e.position.start.column,
+        })),
+      )
+      return { llvmIR: "", errors }
+    }
+
+    const llvmIR = generateLLVMIR(ast, undefined, allCaps, capabilityDecls, {
+      pluginMode: true,
+      pluginName: pluginName,
+      pluginVersion: pluginVersion || '0.1.0'
+    })
+
+    return { llvmIR, errors: [] }
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      let line = 0
+      let column = 0
+      const lineMatch = error.message.match(/at line (\d+)/)
+      if (lineMatch) {
+        line = parseInt(lineMatch[1], 10)
+      }
+      errors.push({
+        message: error.message,
+        line,
+        column,
+      })
+    }
+    return { llvmIR: "", errors }
+  }
+}
+
+/**
+ * Compile source to a shared library (.dylib on macOS) suitable for plugin loading.
+ * Runs the full plugin compilation pipeline, then invokes llc + clang to produce
+ * a position-independent shared library.
+ */
+export async function compilePluginToSharedLib(
+  source: string,
+  pluginName: string,
+  outputPath: string,
+  pluginVersion?: string,
+): Promise<CompiledProgram> {
+  const result = await compilePlugin(source, pluginName, pluginVersion)
+
+  if (result.errors.length > 0) {
+    return { llvmIR: result.llvmIR, errors: result.errors }
+  }
+
+  const tempDir = mkdtempSync(path.join(tmpdir(), "mog-plugin-"))
+  const llFile = path.join(tempDir, `${pluginName}.ll`)
+  const oFile = path.join(tempDir, `${pluginName}.o`)
+
+  try {
+    writeFileSync(llFile, result.llvmIR)
+
+    // Compile LLVM IR to object file with PIC relocation for shared library
+    const llcPath = "/opt/homebrew/opt/llvm/bin/llc"
+    const llcResult = spawnSync(llcPath, ["-filetype=obj", "-relocation-model=pic", "-O1", llFile, "-o", oFile], {
+      stdio: "pipe",
+    })
+
+    if (llcResult.status !== 0) {
+      const stderr = llcResult.stderr?.toString() || "unknown llc error"
+      return {
+        llvmIR: result.llvmIR,
+        errors: [{ message: `llc failed: ${stderr}`, line: 0, column: 0 }],
+      }
+    }
+
+    // Link to shared library
+    // On macOS use -dynamiclib; link against the runtime archive and system libs
+    // Look for runtime.a relative to project root (parent of src/)
+    const projectRoot = path.resolve(import.meta.dir, "..")
+    const runtimePath = path.resolve(projectRoot, "build", "runtime.a")
+    const clangArgs = [
+      "-shared", "-dynamiclib",
+      "-o", outputPath,
+      oFile,
+      ...(existsSync(runtimePath) ? [runtimePath] : []),
+      "-lSystem", "-lm",
+    ]
+
+    const clangResult = spawnSync("clang", clangArgs, {
+      stdio: "pipe",
+      cwd: process.cwd(),
+    })
+
+    if (clangResult.status !== 0) {
+      const stderr = clangResult.stderr?.toString() || "unknown clang error"
+      return {
+        llvmIR: result.llvmIR,
+        errors: [{ message: `clang linking failed: ${stderr}`, line: 0, column: 0 }],
+      }
+    }
+
+    return { llvmIR: result.llvmIR, errors: [] }
+  } finally {
+    // Clean up temp files
+    try { unlinkSync(llFile) } catch {}
+    try { unlinkSync(oFile) } catch {}
+  }
 }
 
 export async function compileToFile(source: string, outputPath: string): Promise<void> {

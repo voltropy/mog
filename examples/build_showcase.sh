@@ -41,6 +41,7 @@ clang -c runtime/runtime.c -o build/runtime.o
 clang -c -Iruntime runtime/mog_vm.c -o build/mog_vm.o
 clang -c -Iruntime runtime/mog_async.c -o build/mog_async.o
 clang -c -Iruntime runtime/posix_host.c -o build/posix_host.o
+clang -c -Iruntime runtime/mog_plugin.c -o build/mog_plugin.o
 
 # Step 4: Compile host
 echo "[4/6] Compiling host..."
@@ -49,7 +50,7 @@ clang -c -Iruntime examples/host.c -o build/host.o
 # Step 5: Link everything
 echo "[5/6] Linking..."
 clang build/showcase.o build/host.o build/runtime.o build/mog_vm.o \
-	build/mog_async.o build/posix_host.o -o showcase -lm
+	build/mog_async.o build/posix_host.o build/mog_plugin.o -o showcase -lm
 
 # Step 6: Verify
 echo "[6/6] Verifying..."

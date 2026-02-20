@@ -50,9 +50,21 @@ class LLVMIRGenerator {
   private blockTerminated = false
   private opts: OptimizationOptions
   private currentFunctionBasicBlocks = 0
+  // Plugin compilation mode
+  private pluginMode = false
+  private pluginName = "plugin"
+  private pluginVersion = "0.1.0"
+  // Track pub function declarations for plugin exports
+  private pubFunctions: { name: string; llvmName: string; params: any[]; returnType: any }[] = []
 
   constructor(options: Partial<OptimizationOptions> = {}) {
     this.opts = { ...defaultOptimizationOptions, ...options }
+  }
+
+  setPluginMode(name: string, version: string): void {
+    this.pluginMode = true
+    this.pluginName = name
+    this.pluginVersion = version
   }
 
   setCapabilities(caps: string[]): void {
@@ -272,7 +284,46 @@ class LLVMIRGenerator {
     // Determine if main is async
     const mainIsAsync = mainFunc && (mainFunc.type === "AsyncFunctionDeclaration" || this.asyncFunctions.has("main"))
 
-    if (hasMain) {
+    if (this.pluginMode) {
+      // Plugin protocol always needs mog_vm_set_global, even without capabilities
+      if (this.capabilities.size === 0) {
+        ir.push('declare void @mog_vm_set_global(ptr)')
+      }
+
+      // Plugin mode: generate @program for top-level init code, then plugin protocol functions
+      this.resetValueCounter(10)
+
+      ir.push("define internal void @program() {")
+      ir.push("entry:")
+
+      this.blockTerminated = false
+      for (const statement of ast.statements) {
+        this.generateStatement(ir, statement)
+        if (this.blockTerminated) break
+      }
+
+      if (!this.blockTerminated) {
+        ir.push("  ret void")
+      }
+      ir.push("}")
+
+      // Collect pub functions from declarations for export
+      for (const funcDecl of functionDeclarations) {
+        if (funcDecl.isPublic) {
+          const originalName = funcDecl.name === "program_user" ? "main" : funcDecl.name
+          this.pubFunctions.push({
+            name: originalName,
+            llvmName: funcDecl.name,
+            params: funcDecl.params || [],
+            returnType: funcDecl.returnType,
+          })
+        }
+      }
+
+      this.generatePluginInfo(ir)
+      this.generatePluginInit(ir)
+      this.generatePluginExports(ir)
+    } else if (hasMain) {
       // User defined main() - generate wrapper at @main
       ir.push("; Main entry point (calls user's main)")
       
@@ -5443,11 +5494,14 @@ class LLVMIRGenerator {
     const funcAttributes = this.determineFunctionAttributes(statement)
 
     // Build function definition with proper LLVM syntax:
-    // define <returntype> @<name>(<params>) [fn-attributes] {
+    // define [internal] <returntype> @<name>(<params>) [fn-attributes] {
     // Note: function attributes like nounwind, alwaysinline go after params, not before return type
     const attrSuffix = funcAttributes.trim()
 
-    ir.push(`define ${llvmReturnType} @${name}(${paramStr})${attrSuffix} {`)
+    // In plugin mode, non-pub functions get internal linkage (hidden in .dylib)
+    const linkage = (this.pluginMode && !statement.isPublic) ? "internal " : ""
+
+    ir.push(`define ${linkage}${llvmReturnType} @${name}(${paramStr})${attrSuffix} {`)
     ir.push("entry:")
     ir.push("  call void @gc_push_frame()")
 
@@ -5523,7 +5577,9 @@ class LLVMIRGenerator {
     const paramStr = llvmParams.map((p: LLVMValue) => `${p.type} %${p.name}`).join(", ")
 
     // Async functions use presplitcoroutine attribute (required for LLVM coroutine passes)
-    ir.push(`define ptr @${name}(${paramStr}) presplitcoroutine {`)
+    // In plugin mode, non-pub async functions get internal linkage
+    const asyncLinkage = (this.pluginMode && !statement.isPublic) ? "internal " : ""
+    ir.push(`define ${asyncLinkage}ptr @${name}(${paramStr}) presplitcoroutine {`)
     ir.push("entry:")
 
     // Coroutine setup
@@ -5741,6 +5797,154 @@ class LLVMIRGenerator {
       ir.push(`  ret ${returnType} ${reg}`)
     } else {
       ir.push("  ret void")
+    }
+  }
+
+  // ============================================================
+  // Plugin protocol: three exported functions for .dylib plugins
+  // ============================================================
+
+  private generatePluginInfo(ir: string[]): void {
+    ir.push("")
+    ir.push("; Plugin info constants")
+
+    // Plugin name string constant
+    const nameEsc = this.escapeStringForLLVM(this.pluginName)
+    const nameLen = nameEsc.byteLength + 1 // +1 for null terminator
+    ir.push(`@.plugin_name = private unnamed_addr constant [${nameLen} x i8] c"${nameEsc.escaped}\\00"`)
+
+    // Plugin version string constant
+    const verEsc = this.escapeStringForLLVM(this.pluginVersion)
+    const verLen = verEsc.byteLength + 1
+    ir.push(`@.plugin_version = private unnamed_addr constant [${verLen} x i8] c"${verEsc.escaped}\\00"`)
+
+    // Required capabilities: null-terminated array of i8* pointers
+    const caps = Array.from(this.capabilities)
+    for (let i = 0; i < caps.length; i++) {
+      const capEsc = this.escapeStringForLLVM(caps[i])
+      const capLen = capEsc.byteLength + 1
+      ir.push(`@.plugin_cap_${i} = private unnamed_addr constant [${capLen} x i8] c"${capEsc.escaped}\\00"`)
+    }
+    // Array of pointers to cap strings, null-terminated
+    const capPtrs = caps.map((_c, i) => {
+      const capEsc = this.escapeStringForLLVM(caps[i])
+      const capLen = capEsc.byteLength + 1
+      return `ptr @.plugin_cap_${i}`
+    })
+    capPtrs.push("ptr null") // null terminator
+    ir.push(`@.plugin_required_caps = private unnamed_addr constant [${capPtrs.length} x ptr] [${capPtrs.join(", ")}]`)
+
+    // Export names: null-terminated array
+    const exports = this.pubFunctions
+    for (let i = 0; i < exports.length; i++) {
+      const expNameEsc = this.escapeStringForLLVM(exports[i].name)
+      const expNameLen = expNameEsc.byteLength + 1
+      ir.push(`@.plugin_export_name_${i} = private unnamed_addr constant [${expNameLen} x i8] c"${expNameEsc.escaped}\\00"`)
+    }
+    const expNamePtrs = exports.map((_e, i) => `ptr @.plugin_export_name_${i}`)
+    expNamePtrs.push("ptr null") // null terminator
+    ir.push(`@.plugin_export_names = private unnamed_addr constant [${expNamePtrs.length} x ptr] [${expNamePtrs.join(", ")}]`)
+
+    // MogPluginInfo struct: { ptr name, ptr version, ptr required_caps, i64 num_exports, ptr export_names }
+    ir.push(`@.plugin_info = private unnamed_addr constant { ptr, ptr, ptr, i64, ptr } {`)
+    ir.push(`  ptr @.plugin_name,`)
+    ir.push(`  ptr @.plugin_version,`)
+    ir.push(`  ptr @.plugin_required_caps,`)
+    ir.push(`  i64 ${exports.length},`)
+    ir.push(`  ptr @.plugin_export_names`)
+    ir.push(`}`)
+
+    // The @mog_plugin_info function
+    ir.push("")
+    ir.push("; Plugin info query function")
+    ir.push("define ptr @mog_plugin_info() {")
+    ir.push("entry:")
+    ir.push("  ret ptr @.plugin_info")
+    ir.push("}")
+  }
+
+  private generatePluginInit(ir: string[]): void {
+    ir.push("")
+    ir.push("; Plugin initialization function")
+    ir.push("define i32 @mog_plugin_init(ptr %vm) {")
+    ir.push("entry:")
+    ir.push("  call void @gc_init()")
+    ir.push("  call void @gc_push_frame()")
+    ir.push("  call void @mog_vm_set_global(ptr %vm)")
+
+    // If async functions exist, create event loop
+    if (this.hasAsyncFunctions) {
+      ir.push("")
+      ir.push("  ; Set up async event loop")
+      ir.push("  %loop = call ptr @mog_loop_new()")
+      ir.push("  call void @mog_loop_set_global(ptr %loop)")
+    }
+
+    ir.push("")
+    ir.push("  ; Run top-level statements")
+    ir.push("  call void @program()")
+
+    ir.push("")
+    ir.push("  call void @gc_pop_frame()")
+    ir.push("  ret i32 0")
+    ir.push("}")
+  }
+
+  private generatePluginExports(ir: string[]): void {
+    const exports = this.pubFunctions
+
+    ir.push("")
+    ir.push("; Plugin export table: array of { ptr name, ptr func_ptr } pairs")
+
+    // Emit name constants for each export (reuse the ones from plugin_info)
+    // Emit the export table as a global constant array of { ptr, ptr } structs
+    if (exports.length > 0) {
+      const entries = exports.map((_exp, i) => {
+        const exportedName = `mogp_${exports[i].name}`
+        return `{ ptr, ptr } { ptr @.plugin_export_name_${i}, ptr @${exportedName} }`
+      })
+      ir.push(`@.plugin_export_table = private unnamed_addr constant [${exports.length} x { ptr, ptr }] [${entries.join(", ")}]`)
+    } else {
+      ir.push(`@.plugin_export_table = private unnamed_addr constant [0 x { ptr, ptr }] zeroinitializer`)
+    }
+
+    // The @mog_plugin_exports function
+    ir.push("")
+    ir.push("; Plugin exports query function")
+    ir.push("define ptr @mog_plugin_exports(ptr %count_out) {")
+    ir.push("entry:")
+    ir.push(`  store i64 ${exports.length}, ptr %count_out`)
+    ir.push("  ret ptr @.plugin_export_table")
+    ir.push("}")
+
+    // Generate mogp_ wrapper aliases for pub functions
+    // These are thin wrappers that forward to the actual function, ensuring
+    // a stable exported symbol name regardless of internal mangling
+    ir.push("")
+    ir.push("; Plugin export wrappers (mogp_ prefix)")
+    for (const exp of exports) {
+      const wrapperName = `mogp_${exp.name}`
+      const llvmRetType = this.toLLVMType(exp.returnType)
+      const llvmParams = (exp.params || []).map((p: any) => {
+        const t = this.toLLVMType(p.paramType)
+        return `${t} %${p.name}`
+      })
+      const paramStr = llvmParams.join(", ")
+      const callArgs = (exp.params || []).map((p: any) => {
+        const t = this.toLLVMType(p.paramType)
+        return `${t} %${p.name}`
+      }).join(", ")
+
+      ir.push(`define ${llvmRetType} @${wrapperName}(${paramStr}) {`)
+      ir.push("entry:")
+      if (llvmRetType === "void") {
+        ir.push(`  call void @${exp.llvmName}(${callArgs})`)
+        ir.push("  ret void")
+      } else {
+        ir.push(`  %result = call ${llvmRetType} @${exp.llvmName}(${callArgs})`)
+        ir.push(`  ret ${llvmRetType} %result`)
+      }
+      ir.push("}")
     }
   }
 
@@ -6609,13 +6813,25 @@ private getIntBits(type: LLVMType): number {
   }
 }
 
-export function generateLLVMIR(ast: ProgramNode, options?: Partial<OptimizationOptions>, capabilities?: string[], capabilityDecls?: Map<string, any>): string {
+export function generateLLVMIR(
+  ast: ProgramNode,
+  options?: Partial<OptimizationOptions>,
+  capabilities?: string[],
+  capabilityDecls?: Map<string, any>,
+  pluginOptions?: { pluginMode: boolean; pluginName?: string; pluginVersion?: string },
+): string {
   const generator = new LLVMIRGenerator(options)
   if (capabilities && capabilities.length > 0) {
     generator.setCapabilities(capabilities)
   }
   if (capabilityDecls && capabilityDecls.size > 0) {
     generator.setCapabilityDecls(capabilityDecls)
+  }
+  if (pluginOptions?.pluginMode) {
+    generator.setPluginMode(
+      pluginOptions.pluginName ?? "plugin",
+      pluginOptions.pluginVersion ?? "0.1.0",
+    )
   }
   return generator.generate(ast)
 }

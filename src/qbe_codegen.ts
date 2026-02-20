@@ -64,12 +64,24 @@ class QBECodeGen {
   public packagePrefix = ""
   public importedPackages: Map<string, string> = new Map()
 
+  // Plugin compilation mode
+  pluginMode: boolean = false
+  pluginName: string = 'plugin'
+  pluginVersion: string = '0.1.0'
+  pubFunctions: { name: string; paramCount: number; isAsync: boolean }[] = []
+
   // Tracks whether we're generating inside a function (vs top-level)
   private inFunction = false
   private currentFunctionName = ""
   private currentReturnType: QBEType = "l"
 
   // --- Configuration ---
+  setPluginMode(name: string, version: string): void {
+    this.pluginMode = true
+    this.pluginName = name
+    this.pluginVersion = version
+  }
+
   setCapabilities(caps: string[]): void {
     for (const cap of caps) this.capabilities.add(cap)
   }
@@ -2138,13 +2150,18 @@ class QBECodeGen {
     }
 
     // Build the function signature
-    const exportPrefix = stmt.isPublic ? "export " : ""
+    const exportPrefix = this.pluginMode
+      ? (stmt.isPublic ? "export " : "")
+      : (stmt.isPublic ? "export " : "")
     const retTypeSig = retQBE === "void" ? "" : ` ${retQBE}`
     const paramSig = params.map(p => `${p.qbeType} %${p.name}`).join(", ")
 
+    // In plugin mode, pub functions get mogp_ prefix and export; non-pub get no export
+    const emitName = (this.pluginMode && stmt.isPublic) ? `mogp_${stmt.name === "main" ? "main" : funcName}` : funcName
+
     // Assemble the function
     const funcLines: string[] = []
-    funcLines.push(`${exportPrefix}function${retTypeSig} $${funcName}(${paramSig}) {`)
+    funcLines.push(`${exportPrefix}function${retTypeSig} $${emitName}(${paramSig}) {`)
     funcLines.push(`@start`)
 
     // GC frame push
@@ -2435,8 +2452,11 @@ class QBECodeGen {
     const exportPrefix = stmt.isPublic ? "export " : ""
     const paramSig = params.map(p => `${p.qbeType} %${p.name}`).join(", ")
 
+    // In plugin mode, pub functions get mogp_ prefix and export
+    const emitName = (this.pluginMode && stmt.isPublic) ? `mogp_${stmt.name === "main" ? "main" : funcName}` : funcName
+
     const funcLines: string[] = []
-    funcLines.push(`${exportPrefix}function l $${funcName}(${paramSig}) {`)
+    funcLines.push(`${exportPrefix}function l $${emitName}(${paramSig}) {`)
     funcLines.push(`@start`)
 
     // Allocate coroutine frame
@@ -4099,13 +4119,33 @@ class QBECodeGen {
       s.type !== "ImportDeclaration"
     )
 
-    if (!hasMain && topLevelStmts.length > 0) {
-      // Generate a $program function from top-level statements
+    if (this.pluginMode) {
+      // Plugin mode: generate $program for top-level init code, then plugin protocol functions
+      // Always generate $program (even if empty — init still needs to call it)
       this.generateProgramFunction(topLevelStmts)
-    }
 
-    // Generate main entry point
-    this.generateMainEntry(hasMain, topLevelStmts.length > 0)
+      // Collect pub functions from declarations for export
+      for (const funcDecl of allFuncs) {
+        if (funcDecl.isPublic) {
+          const originalName = funcDecl.name === "program_user" ? "main" : funcDecl.name
+          const paramCount = (funcDecl.params || []).length
+          const isAsync = funcDecl.type === "AsyncFunctionDeclaration" || funcDecl.isAsync
+          this.pubFunctions.push({ name: originalName, paramCount, isAsync })
+        }
+      }
+
+      this.generatePluginInfo()
+      this.generatePluginInit()
+      this.generatePluginExports()
+    } else {
+      if (!hasMain && topLevelStmts.length > 0) {
+        // Generate a $program function from top-level statements
+        this.generateProgramFunction(topLevelStmts)
+      }
+
+      // Generate main entry point
+      this.generateMainEntry(hasMain, topLevelStmts.length > 0)
+    }
 
     // Assemble the final output
     const output: string[] = []
@@ -4154,8 +4194,9 @@ class QBECodeGen {
       this.generateStatement(this.currentFunc, stmt)
     }
 
-    // Emit the function
-    ir.push(`export function l $program() {`)
+    // Emit the function — in plugin mode, $program is internal (not exported)
+    const programExport = this.pluginMode ? "" : "export "
+    ir.push(`${programExport}function l $program() {`)
     ir.push(`@start`)
     ir.push(`  call $gc_push_frame()`)
     // Entry allocs
@@ -4259,6 +4300,119 @@ class QBECodeGen {
     }
     ir.push("")
   }
+
+  // ============================================================
+  // PLUGIN PROTOCOL FUNCTIONS
+  // ============================================================
+
+  private generatePluginInfo(): void {
+    const ir = this.funcSection
+    this.resetCounters()
+
+    // Plugin name string constant
+    const nameEsc = this.escapeStringForQBE(this.pluginName)
+    this.emitData(`data $plugin_name = { b "${nameEsc}", b 0 }`)
+
+    // Plugin version string constant
+    const verEsc = this.escapeStringForQBE(this.pluginVersion)
+    this.emitData(`data $plugin_version = { b "${verEsc}", b 0 }`)
+
+    // Required capabilities: null-terminated array of pointers
+    const caps = Array.from(this.capabilities)
+    for (let i = 0; i < caps.length; i++) {
+      const capEsc = this.escapeStringForQBE(caps[i])
+      this.emitData(`data $plugin_cap_${i} = { b "${capEsc}", b 0 }`)
+    }
+    const capEntries = caps.map((_c, i) => `l $plugin_cap_${i}`).join(", ")
+    const capData = caps.length > 0 ? `${capEntries}, ` : ""
+    this.emitData(`data $plugin_required_caps = { ${capData}l 0 }`)
+
+    // Export names: null-terminated array
+    const exports = this.pubFunctions
+    for (let i = 0; i < exports.length; i++) {
+      const expNameEsc = this.escapeStringForQBE(exports[i].name)
+      this.emitData(`data $plugin_export_name_${i} = { b "${expNameEsc}", b 0 }`)
+    }
+    const expNameEntries = exports.map((_e, i) => `l $plugin_export_name_${i}`).join(", ")
+    const expNameData = exports.length > 0 ? `${expNameEntries}, ` : ""
+    this.emitData(`data $plugin_export_names = { ${expNameData}l 0 }`)
+
+    // MogPluginInfo struct: { ptr name, ptr version, ptr required_caps, i64 num_exports, ptr export_names }
+    // In QBE: 5 fields × 8 bytes = 40 bytes total
+    this.emitData(`data $plugin_info = { l $plugin_name, l $plugin_version, l $plugin_required_caps, l ${exports.length}, l $plugin_export_names }`)
+
+    // The $mog_plugin_info function — returns pointer to the info struct
+    ir.push("")
+    ir.push("# Plugin info query function")
+    ir.push("export function l $mog_plugin_info() {")
+    ir.push("@start")
+    const infoReg = this.nextReg()
+    ir.push(`  ${infoReg} =l copy $plugin_info`)
+    ir.push(`  ret ${infoReg}`)
+    ir.push("}")
+    ir.push("")
+  }
+
+  private generatePluginInit(): void {
+    const ir = this.funcSection
+    this.resetCounters()
+
+    ir.push("# Plugin initialization function")
+    ir.push("export function w $mog_plugin_init(l %vm) {")
+    ir.push("@start")
+    ir.push("  call $gc_init()")
+    ir.push("  call $gc_push_frame()")
+    ir.push("  call $mog_vm_set_global(l %vm)")
+
+    // If async functions exist, create event loop
+    if (this.hasAsyncFunctions) {
+      ir.push("")
+      ir.push("  # Set up async event loop")
+      const loopReg = this.nextReg()
+      ir.push(`  ${loopReg} =l call $mog_loop_new()`)
+      ir.push(`  call $mog_loop_set_global(l ${loopReg})`)
+    }
+
+    ir.push("")
+    ir.push("  # Run top-level statements")
+    ir.push("  call $program()")
+    ir.push("")
+    ir.push("  call $gc_pop_frame()")
+    const retReg = this.nextReg()
+    ir.push(`  ${retReg} =w copy 0`)
+    ir.push(`  ret ${retReg}`)
+    ir.push("}")
+    ir.push("")
+  }
+
+  private generatePluginExports(): void {
+    const ir = this.funcSection
+    this.resetCounters()
+    const exports = this.pubFunctions
+
+    // Export table: array of { ptr name, ptr func_ptr } pairs
+    // Each entry is 16 bytes (two l values)
+    if (exports.length > 0) {
+      const entries = exports.map((_exp, i) => {
+        const exportedName = `mogp_${exports[i].name}`
+        return `l $plugin_export_name_${i}, l $${exportedName}`
+      }).join(", ")
+      this.emitData(`data $plugin_export_table = { ${entries} }`)
+    } else {
+      this.emitData(`data $plugin_export_table = { z 0 }`)
+    }
+
+    // The $mog_plugin_exports function
+    ir.push("# Plugin exports query function")
+    ir.push("export function l $mog_plugin_exports(l %count_out) {")
+    ir.push("@start")
+    ir.push(`  storel ${exports.length}, %count_out`)
+    const tableReg = this.nextReg()
+    ir.push(`  ${tableReg} =l copy $plugin_export_table`)
+    ir.push(`  ret ${tableReg}`)
+    ir.push("}")
+    ir.push("")
+  }
 }
 
 // ============================================================
@@ -4269,11 +4423,18 @@ export function generateQBEIR(
   ast: any,
   moduleName?: string,
   capabilities?: string[],
-  capabilityDecls?: Map<string, any>
+  capabilityDecls?: Map<string, any>,
+  pluginOptions?: { pluginMode: boolean; pluginName?: string; pluginVersion?: string }
 ): string {
   const gen = new QBECodeGen()
   if (capabilities) gen.setCapabilities(capabilities)
   if (capabilityDecls) gen.setCapabilityDecls(capabilityDecls)
+  if (pluginOptions?.pluginMode) {
+    gen.setPluginMode(
+      pluginOptions.pluginName ?? "plugin",
+      pluginOptions.pluginVersion ?? "0.1.0",
+    )
+  }
   return gen.generate(ast)
 }
 
