@@ -39,6 +39,8 @@ There is also a convenience script that compiles, links, and runs in a single st
 
 In production, Mog programs run embedded inside a host application. The host compiles the script, registers capabilities, and invokes the compiled code through a C API. But for learning the language, the standalone compilation path is all you need.
 
+There is a third compilation mode: **plugins**. You can compile a `.mog` file into a shared library (`.dylib` on macOS, `.so` on Linux) instead of a standalone executable. The host loads the library at runtime with `dlopen`, queries what functions are available, and calls them by name. Functions marked `pub` in the source become exported symbols; everything else gets internal linkage and is invisible to the loader. This is the right path when you want pre-compiled, hot-swappable modules — the host never sees the source code, just a binary it can load and unload. See Chapter 15 for the full plugin API.
+
 Mog also has a lightweight QBE backend as an alternative to LLVM. QBE compiles roughly twice as fast as LLVM with `-O1`, at the cost of less optimized output. Both backends produce correct native code from the same source.
 
 ## Program Structure
