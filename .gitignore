@@ -46,3 +46,6 @@ temp.*
 # Images
 *.png
 timer
+
+# Rust
+compiler/target/
