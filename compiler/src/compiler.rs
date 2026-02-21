@@ -73,6 +73,9 @@ pub struct CompileOptions {
     pub plugin_name: Option<String>,
     /// Plugin version string.
     pub plugin_version: Option<String>,
+    /// Path to the source file being compiled.  Used to resolve capability
+    /// declarations relative to the source file's directory.
+    pub source_path: Option<PathBuf>,
 }
 
 impl Default for CompileOptions {
@@ -84,6 +87,7 @@ impl Default for CompileOptions {
             plugin_mode: false,
             plugin_name: None,
             plugin_version: None,
+            source_path: None,
         }
     }
 }
@@ -146,7 +150,8 @@ pub fn compile(source: &str, options: &CompileOptions) -> CompileResult {
         .collect();
 
     // -- 5. Load .mogdecl files for each capability -------------------------
-    let capability_decls = load_capability_decls(&all_caps, &mut warnings);
+    let capability_decls =
+        load_capability_decls(&all_caps, options.source_path.as_ref(), &mut warnings);
 
     // -- 6. Semantic analysis -----------------------------------------------
     let mut analyzer = crate::analyzer::SemanticAnalyzer::new();
@@ -229,11 +234,12 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
     fs::write(&ir_path, &result.ir).map_err(|e| vec![format!("failed to write IR: {e}")])?;
 
     // --- QBE: IR → assembly ------------------------------------------------
+    // Note: -o must come BEFORE the input file for QBE
     run_command(
         Command::new(qbe_path())
-            .arg(&ir_path)
             .arg("-o")
-            .arg(&asm_path),
+            .arg(&asm_path)
+            .arg(&ir_path),
         "qbe",
     )?;
 
@@ -319,11 +325,12 @@ pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf
     fs::write(&ir_path, &result.ir).map_err(|e| vec![format!("failed to write IR: {e}")])?;
 
     // --- QBE: IR → assembly ------------------------------------------------
+    // Note: -o must come BEFORE the input file for QBE
     run_command(
         Command::new(qbe_path())
-            .arg(&ir_path)
             .arg("-o")
-            .arg(&asm_path),
+            .arg(&asm_path)
+            .arg(&ir_path),
         "qbe",
     )?;
 
@@ -481,6 +488,7 @@ fn extract_capabilities(stmt: &Statement, required: &mut Vec<String>, optional: 
 /// Search well-known directories for `.mogdecl` files and parse them.
 fn load_capability_decls(
     cap_names: &[String],
+    source_path: Option<&PathBuf>,
     warnings: &mut Vec<String>,
 ) -> HashMap<String, CapabilityDecl> {
     let mut decls = HashMap::new();
@@ -488,14 +496,23 @@ fn load_capability_decls(
     // Build a list of directories to search.
     let mut search_paths: Vec<PathBuf> = Vec::new();
 
-    // 1. Next to the compiler binary (../capabilities).
+    // 1. Relative to the source file being compiled (sibling capabilities/ dir).
+    if let Some(src) = source_path {
+        // Canonicalize to resolve relative paths like "../showcase.mog".
+        let resolved = src.canonicalize().unwrap_or_else(|_| src.clone());
+        if let Some(parent) = resolved.parent() {
+            search_paths.push(parent.join("capabilities"));
+        }
+    }
+
+    // 2. Next to the compiler binary (../capabilities).
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
             search_paths.push(parent.join("../capabilities"));
         }
     }
 
-    // 2. Relative to cwd.
+    // 3. Relative to cwd.
     if let Ok(cwd) = env::current_dir() {
         search_paths.push(cwd.join("capabilities"));
     }
@@ -609,19 +626,35 @@ fn cc_command() -> Command {
 /// Try to locate `runtime.a` relative to the compiler binary or the current
 /// working directory.
 fn find_runtime_archive() -> Option<PathBuf> {
-    // Relative to the compiler binary: ../build/runtime.a
+    // Relative to the compiler binary: ../../build/runtime.a
+    // (binary is at compiler/target/debug/mogc, runtime at build/runtime.a)
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let candidate = parent.join("../build/runtime.a");
-            if candidate.exists() {
-                return Some(candidate);
+            // Try going up from target/debug/ to the project root
+            for ancestor in [
+                parent.join("../../../build/runtime.a"), // from target/debug/
+                parent.join("../../build/runtime.a"),
+                parent.join("../build/runtime.a"),
+            ] {
+                if ancestor.exists() {
+                    return Some(ancestor);
+                }
             }
         }
     }
-    // Relative to cwd: build/runtime.a
-    let cwd_candidate = PathBuf::from("build/runtime.a");
-    if cwd_candidate.exists() {
-        return Some(cwd_candidate);
+    // Relative to cwd
+    for candidate in ["build/runtime.a", "../build/runtime.a"] {
+        let p = PathBuf::from(candidate);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // MOG_RUNTIME_DIR env var
+    if let Ok(dir) = env::var("MOG_RUNTIME_DIR") {
+        let p = PathBuf::from(dir).join("runtime.a");
+        if p.exists() {
+            return Some(p);
+        }
     }
     None
 }

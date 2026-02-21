@@ -175,7 +175,10 @@ fn test_array_method_result_used() {
 #[test]
 fn test_array_literal_creation() {
     let ir = qbe("arr := [10, 20, 30]");
-    assert!(ir.contains("call $array_new("), "should create array: {ir}");
+    assert!(
+        ir.contains("call $array_alloc("),
+        "should create array: {ir}"
+    );
     assert!(
         ir.contains("call $array_push("),
         "should push elements: {ir}"
@@ -185,7 +188,7 @@ fn test_array_literal_creation() {
 #[test]
 fn test_empty_array_literal() {
     let ir = qbe("arr := []");
-    assert!(ir.contains("call $array_new("), "should allocate: {ir}");
+    assert!(ir.contains("call $array_alloc("), "should allocate: {ir}");
 }
 
 #[test]
@@ -206,7 +209,10 @@ fn test_array_index_write() {
 #[test]
 fn test_array_with_many_elements() {
     let ir = qbe("arr := [1, 2, 3, 4, 5]");
-    assert!(ir.contains("call $array_new("), "should create array: {ir}");
+    assert!(
+        ir.contains("call $array_alloc("),
+        "should create array: {ir}"
+    );
     assert!(
         ir.contains("call $array_push("),
         "should push elements: {ir}"
@@ -216,7 +222,7 @@ fn test_array_with_many_elements() {
 #[test]
 fn test_array_fill_syntax() {
     let ir = qbe("arr := [0; 5]");
-    assert!(ir.contains("call $array_new("), "should allocate: {ir}");
+    assert!(ir.contains("call $array_alloc("), "should allocate: {ir}");
     assert!(
         ir.contains("jnz") || ir.contains("jmp"),
         "should have loop: {ir}"
@@ -891,8 +897,8 @@ fn test_gc_alloc_for_array() {
     let ir = qbe("arr := [1, 2]");
     // Array uses array_new which internally allocates
     assert!(
-        ir.contains("call $array_new("),
-        "should allocate via array_new: {ir}"
+        ir.contains("call $array_alloc("),
+        "should allocate via array_alloc: {ir}"
     );
 }
 

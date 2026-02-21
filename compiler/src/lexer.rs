@@ -62,6 +62,29 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Advance past one full UTF-8 character (may be multiple bytes).
+    fn advance_char(&mut self) {
+        if self.pos < self.bytes.len() {
+            let b = self.bytes[self.pos];
+            let char_len = if b < 0x80 {
+                1
+            } else if b < 0xE0 {
+                2
+            } else if b < 0xF0 {
+                3
+            } else {
+                4
+            };
+            if b == b'\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
+            }
+            self.pos += char_len.min(self.bytes.len() - self.pos);
+        }
+    }
+
     fn remaining(&self) -> &'a str {
         &self.input[self.pos..]
     }
@@ -317,7 +340,7 @@ impl<'a> Lexer<'a> {
             if (ch == b'/' && self.peek_at(1) == b'/') || ch == b'#' {
                 let start = self.pos;
                 while !self.at_end() && self.peek() != b'\n' {
-                    self.advance(1);
+                    self.advance_char();
                 }
                 let value = self.input[start..self.pos].to_string();
                 tokens.push(self.make_token(TokenType::Comment, value, start_pos));
@@ -340,7 +363,7 @@ impl<'a> Lexer<'a> {
                         depth -= 1;
                     } else {
                         comment_value.push(self.peek_char());
-                        self.advance(1);
+                        self.advance_char();
                     }
                 }
                 let tt = if depth > 0 {
@@ -629,10 +652,10 @@ impl<'a> Lexer<'a> {
                     if self.peek() == b'\\' {
                         self.advance(1); // backslash
                         if !self.at_end() {
-                            self.advance(1); // escaped char
+                            self.advance(1); // escaped char (always single byte)
                         }
                     } else {
-                        self.advance(1);
+                        self.advance_char(); // may be multi-byte UTF-8
                     }
                 }
                 if !self.at_end() && self.peek() == quote {
@@ -655,7 +678,7 @@ impl<'a> Lexer<'a> {
 
             // ----- Unknown -----
             let c = self.peek_char();
-            self.advance(1);
+            self.advance_char();
             tokens.push(self.make_token(TokenType::Unknown, c.to_string(), start_pos));
         }
 
@@ -785,7 +808,7 @@ impl<'a> Lexer<'a> {
                         break;
                     } else {
                         expr_str.push(self.peek_char());
-                        self.advance(1);
+                        self.advance_char(); // may be multi-byte UTF-8
                     }
                 }
                 if !expr_str.is_empty() {
@@ -848,7 +871,7 @@ impl<'a> Lexer<'a> {
                         }
                     } else {
                         str_value.push(self.peek_char());
-                        self.advance(1);
+                        self.advance_char(); // may be multi-byte UTF-8
                     }
                 }
                 if !str_value.is_empty() {
@@ -924,11 +947,11 @@ impl<'a> Lexer<'a> {
                         self.advance(1);
                         if !self.at_end() {
                             str_value.push(self.peek_char());
-                            self.advance(1);
+                            self.advance(1); // escaped chars are single byte
                         }
                     } else {
                         str_value.push(self.peek_char());
-                        self.advance(1);
+                        self.advance_char(); // may be multi-byte UTF-8
                     }
                 }
                 if !str_value.is_empty() {

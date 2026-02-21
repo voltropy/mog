@@ -1043,11 +1043,8 @@ impl SemanticAnalyzer {
             }
             ExprKind::IsErrExpression { binding, .. } => {
                 self.symbol_table.push_scope();
-                self.symbol_table.declare(
-                    binding,
-                    SymbolKind::Variable,
-                    Some(Type::array(Type::Unsigned(UnsignedKind::U8))),
-                );
+                self.symbol_table
+                    .declare(binding, SymbolKind::Variable, Some(Type::String));
                 for s in &true_branch.statements {
                     self.visit_statement(s);
                 }
@@ -2225,6 +2222,17 @@ impl SemanticAnalyzer {
                         }
                         return None;
                     }
+                    if name == "race" {
+                        // race() returns Future<T> where T is the inner type of the Future elements
+                        if let Some(Some(Type::Future(inner))) = elem_types.first() {
+                            return Some(Type::future(inner.as_ref().clone()));
+                        }
+                        // If elements aren't Future-wrapped, wrap the element type
+                        if let Some(Some(first)) = elem_types.first() {
+                            return Some(Type::future(first.clone()));
+                        }
+                        return None;
+                    }
                 }
                 let arg_type = self.visit_expression(&arguments[0]);
                 return arg_type;
@@ -2442,12 +2450,17 @@ impl SemanticAnalyzer {
                 );
             }
 
-            // Return the declared return type
-            return Some(func_decl.return_type.clone());
+            // Return the declared return type, wrapping in Future if async
+            let ret = func_decl.return_type.clone();
+            if func_decl.is_async {
+                return Some(Type::future(ret));
+            }
+            return Some(ret);
         }
 
         // If no declaration loaded, still allow it (runtime will handle)
-        Some(Type::int())
+        // Capability calls are always async, so wrap in Future
+        Some(Type::future(Type::int()))
     }
 
     // ── String method calls ──────────────────────────────────────────

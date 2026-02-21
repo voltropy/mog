@@ -1072,9 +1072,12 @@ fn function_calling_another_function() {
 // ==========================================================================
 
 #[test]
-fn array_literal_uses_array_new() {
+fn array_literal_uses_array_alloc() {
     let ir = qbe("arr := [10, 20, 30]\nprintln(arr)");
-    assert!(ir.contains("call $array_new("), "expected array_new call");
+    assert!(
+        ir.contains("call $array_alloc("),
+        "expected array_alloc call"
+    );
 }
 
 #[test]

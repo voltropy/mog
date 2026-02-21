@@ -438,6 +438,19 @@ impl Type {
             // ptr <-> string backward compat (both are pointers at IR level)
             (Self::Pointer(_), Self::String) => true,
             (Self::String, Self::Pointer(_)) => true,
+            // [u8] <-> string (byte arrays are the runtime representation of strings)
+            (
+                Self::Array {
+                    element_type: e, ..
+                },
+                Self::String,
+            ) if matches!(e.as_ref(), Self::Unsigned(UnsignedKind::U8)) => true,
+            (
+                Self::String,
+                Self::Array {
+                    element_type: e, ..
+                },
+            ) if matches!(e.as_ref(), Self::Unsigned(UnsignedKind::U8)) => true,
             _ => false,
         }
     }

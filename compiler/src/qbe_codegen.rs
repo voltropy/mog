@@ -46,6 +46,9 @@ pub struct QBECodeGen {
     package_prefix: String,
     imported_packages: HashMap<String, String>,
     function_param_info: HashMap<String, Vec<(String, Type)>>,
+    /// Tracks registers that hold `d` (f64) values, so we can emit
+    /// `stored` instead of `storel` when storing them to memory.
+    float_regs: HashSet<String>,
 }
 
 impl QBECodeGen {
@@ -87,6 +90,7 @@ impl QBECodeGen {
             package_prefix: String::new(),
             imported_packages: HashMap::new(),
             function_param_info: HashMap::new(),
+            float_regs: HashSet::new(),
         }
     }
 
@@ -106,6 +110,7 @@ impl QBECodeGen {
     fn reset_counters(&mut self) {
         self.reg_counter = 0;
         self.label_counter = 0;
+        self.float_regs.clear();
     }
 
     // --- Emit Helpers ---
@@ -144,6 +149,62 @@ impl QBECodeGen {
             ""
         } else {
             t
+        }
+    }
+
+    /// Return the correct QBE store instruction for a given value.
+    /// `stored` for f64 (d), `stores` for f32 (s), `storel` for everything else (l/ptr).
+    fn store_op_for_expr(&self, expr: &Expr) -> &'static str {
+        if self.is_float_operand(expr) {
+            "stored"
+        } else {
+            "storel"
+        }
+    }
+
+    /// Emit a store instruction, choosing stored/storel based on whether a
+    /// named variable is known to be float-typed.
+    fn emit_store_var(&mut self, val: &str, dest: &str, var_name: &str) {
+        let is_float = matches!(self.variable_types.get(var_name), Some(t) if t.is_float());
+        let op = if is_float { "stored" } else { "storel" };
+        self.emit(&format!("    {} {}, {}", op, val, dest));
+    }
+
+    /// Return the correct store instruction based on whether a register
+    /// was recorded as holding a float value.
+    fn store_op_for_reg(&self, reg: &str) -> &'static str {
+        if self.float_regs.contains(reg) {
+            "stored"
+        } else {
+            "storel"
+        }
+    }
+
+    /// Mark a register as holding a float (d) value.
+    fn mark_float_reg(&mut self, reg: &str) {
+        self.float_regs.insert(reg.to_string());
+    }
+
+    /// Ensure a register is `l` type. If it's a float (`d`), cast it to `l`.
+    fn ensure_long(&mut self, reg: &str) -> String {
+        if self.float_regs.contains(reg) {
+            let r = self.fresh_reg();
+            self.emit(&format!("  {} =l cast {}", r, reg));
+            r
+        } else {
+            reg.to_string()
+        }
+    }
+
+    /// Ensure a register is `d` type. If it's `l`, convert it with sltof.
+    fn ensure_double(&mut self, reg: &str) -> String {
+        if self.float_regs.contains(reg) {
+            reg.to_string()
+        } else {
+            let r = self.fresh_reg();
+            self.emit(&format!("  {} =d sltof {}", r, reg));
+            self.mark_float_reg(&r);
+            r
         }
     }
 
@@ -186,13 +247,14 @@ impl QBECodeGen {
 
     // --- Float Handling ---
     fn float_to_qbe(value: f64) -> String {
-        let bits = value.to_bits();
-        format!("d_{:016x}", bits)
+        // QBE uses fscanf %lf (decimal), not hex encoding
+        // Use enough precision to round-trip exactly
+        format!("d_{:.17e}", value)
     }
 
     fn float_to_single_qbe(value: f32) -> String {
-        let bits = value.to_bits();
-        format!("s_{:08x}", bits)
+        // QBE uses fscanf %f (decimal), not hex encoding
+        format!("s_{:.9e}", value)
     }
 
     // --- Float Detection ---
@@ -260,9 +322,16 @@ impl QBECodeGen {
     fn is_string_producing_expr(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::StringLiteral { .. } | ExprKind::TemplateLiteral { .. } => true,
-            ExprKind::Identifier { name } => {
-                matches!(self.variable_types.get(name.as_str()), Some(Type::String))
-            }
+            ExprKind::Identifier { name } => match self.variable_types.get(name.as_str()) {
+                Some(Type::String) => true,
+                Some(Type::Array { element_type, .. }) => {
+                    matches!(
+                        element_type.as_ref(),
+                        Type::Unsigned(crate::types::UnsignedKind::U8)
+                    )
+                }
+                _ => false,
+            },
             ExprKind::CallExpression { callee, .. } => {
                 if let ExprKind::Identifier { name } = &callee.kind {
                     matches!(
@@ -489,7 +558,7 @@ impl QBECodeGen {
                     let val = self.gen_expr(e);
                     if self.is_string_producing_expr(e) {
                         val
-                    } else if self.is_float_operand(e) {
+                    } else if self.is_float_operand(e) || self.float_regs.contains(&val) {
                         let r = self.fresh_reg();
                         self.emit(&format!("    {} =l call $f64_to_string(d {})", r, val));
                         r
@@ -522,15 +591,16 @@ impl QBECodeGen {
         value: &Expr,
     ) -> String {
         let val = self.gen_expr(value);
+        let val_store_op = self.store_op_for_expr(value);
         if let Some(n) = name {
             // Simple variable assignment or walrus declaration
             if let Some(reg) = self.variable_registers.get(n).cloned() {
-                self.emit(&format!("    storel {}, {}", val, reg));
+                self.emit(&format!("    {} {}, {}", val_store_op, val, reg));
             } else {
                 // New variable declaration via :=
                 let slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", slot));
-                self.emit(&format!("    storel {}, {}", val, slot));
+                self.emit(&format!("    {} {}, {}", val_store_op, val, slot));
                 self.variable_registers.insert(n.clone(), slot.clone());
                 // Infer type
                 if self.is_string_producing_expr(value) {
@@ -573,9 +643,11 @@ impl QBECodeGen {
                     if let Some(sname) = self.get_struct_type_for_expr(object) {
                         if let Some(fields) = self.struct_fields.get(&sname).cloned() {
                             if let Some(idx) = fields.iter().position(|(n, _)| n == property) {
+                                let field_is_float = fields[idx].1.is_float();
+                                let op = if field_is_float { "stored" } else { "storel" };
                                 let off = self.fresh_reg();
                                 self.emit(&format!("    {} =l add {}, {}", off, obj, idx * 8));
-                                self.emit(&format!("    storel {}, {}", val, off));
+                                self.emit(&format!("    {} {}, {}", op, val, off));
                             }
                         }
                     }
@@ -599,15 +671,25 @@ impl QBECodeGen {
         None
     }
 
-    fn gen_array_literal(&mut self, elements: &[Expr]) -> String {
+    /// Emit array_alloc(element_size=8, dimension_count=1, &[capacity])
+    fn emit_array_alloc(&mut self, capacity: &str) -> String {
+        let dims_slot = self.fresh_reg();
+        self.emit_alloc(&format!("    {} =l alloc8 8", dims_slot));
+        self.emit(&format!("    storel {}, {}", capacity, dims_slot));
         let arr = self.fresh_reg();
         self.emit(&format!(
-            "    {} =l call $array_new(l 8, l {})",
-            arr,
-            elements.len()
+            "    {} =l call $array_alloc(l 8, l 1, l {})",
+            arr, dims_slot
         ));
+        arr
+    }
+
+    fn gen_array_literal(&mut self, elements: &[Expr]) -> String {
+        // Allocate empty, then push each element
+        let arr = self.emit_array_alloc("0");
         for elem in elements {
             let v = self.gen_expr(elem);
+            let v = self.ensure_long(&v);
             self.emit(&format!("    call $array_push(l {}, l {})", arr, v));
         }
         arr
@@ -615,8 +697,7 @@ impl QBECodeGen {
 
     fn gen_array_fill(&mut self, value: &Expr, count: &Expr) -> String {
         let cnt = self.gen_expr(count);
-        let arr = self.fresh_reg();
-        self.emit(&format!("    {} =l call $array_new(l 8, l {})", arr, cnt));
+        let arr = self.emit_array_alloc("0");
         let val = self.gen_expr(value);
         let i_slot = self.fresh_reg();
         self.emit_alloc(&format!("    {} =l alloc8 8", i_slot));
@@ -632,6 +713,7 @@ impl QBECodeGen {
         let body_lbl = self.fresh_label();
         self.emit(&format!("    jnz {}, {}, {}", cmp, body_lbl, end_lbl));
         self.emit(&format!("{}", body_lbl));
+        let val = self.ensure_long(&val);
         self.emit(&format!("    call $array_push(l {}, l {})", arr, val));
         let inc = self.fresh_reg();
         self.emit(&format!("    {} =l add {}, 1", inc, i));
@@ -665,12 +747,13 @@ impl QBECodeGen {
         self.emit(&format!("    {} =l call $gc_alloc(l {})", ptr, size.max(8)));
         for (i, field) in fields.iter().enumerate() {
             let val = self.gen_expr(&field.value);
+            let op = self.store_op_for_expr(&field.value);
             if i == 0 {
-                self.emit(&format!("    storel {}, {}", val, ptr));
+                self.emit(&format!("    {} {}, {}", op, val, ptr));
             } else {
                 let off = self.fresh_reg();
                 self.emit(&format!("    {} =l add {}, {}", off, ptr, i * 8));
-                self.emit(&format!("    storel {}, {}", val, off));
+                self.emit(&format!("    {} {}, {}", op, val, off));
             }
         }
         if let Some(sn) = struct_name {
@@ -696,9 +779,9 @@ impl QBECodeGen {
                 self.emit(&format!("    {} =l call $string_length(l {})", r, obj));
                 return r;
             }
-            // Array .len
+            // Array .len — use runtime function
             let r = self.fresh_reg();
-            self.emit(&format!("    {} =l loadl {}", r, obj));
+            self.emit(&format!("    {} =l call $array_length(l {})", r, obj));
             return r;
         }
         if property == "cap" {
@@ -714,15 +797,27 @@ impl QBECodeGen {
         if let Some(sname) = self.get_struct_type_for_expr(object) {
             if let Some(fields) = self.struct_fields.get(&sname).cloned() {
                 if let Some(idx) = fields.iter().position(|(n, _)| n == property) {
+                    let field_is_float = fields[idx].1.is_float();
+                    let (load_op, qbe_ty) = if field_is_float {
+                        ("loadd", "d")
+                    } else {
+                        ("loadl", "l")
+                    };
                     if idx == 0 {
                         let r = self.fresh_reg();
-                        self.emit(&format!("    {} =l loadl {}", r, obj));
+                        self.emit(&format!("    {} ={} {} {}", r, qbe_ty, load_op, obj));
+                        if field_is_float {
+                            self.mark_float_reg(&r);
+                        }
                         return r;
                     }
                     let off = self.fresh_reg();
                     self.emit(&format!("    {} =l add {}, {}", off, obj, idx * 8));
                     let r = self.fresh_reg();
-                    self.emit(&format!("    {} =l loadl {}", r, off));
+                    self.emit(&format!("    {} ={} {} {}", r, qbe_ty, load_op, off));
+                    if field_is_float {
+                        self.mark_float_reg(&r);
+                    }
                     return r;
                 }
             }
@@ -784,6 +879,7 @@ impl QBECodeGen {
         } else if !is_src_float && is_dst_float {
             let r = self.fresh_reg();
             self.emit(&format!("    {} =d sltof {}", r, val));
+            self.mark_float_reg(&r);
             r
         } else {
             val
@@ -811,7 +907,9 @@ impl QBECodeGen {
         for stmt in &true_branch.statements {
             last_val = self.gen_stmt_value(stmt);
         }
-        self.emit(&format!("    storel {}, {}", last_val, result_slot));
+        let true_op = self.store_op_for_reg(&last_val);
+        let is_float_result = true_op == "stored";
+        self.emit(&format!("    {} {}, {}", true_op, last_val, result_slot));
         self.emit(&format!("    jmp {}", end_lbl));
         // false branch
         self.emit(&format!("{}", false_lbl));
@@ -826,12 +924,19 @@ impl QBECodeGen {
                 false_val = self.gen_expr(expr);
             }
         }
-        self.emit(&format!("    storel {}, {}", false_val, result_slot));
+        let false_op = self.store_op_for_reg(&false_val);
+        let is_float_result = is_float_result || false_op == "stored";
+        self.emit(&format!("    {} {}, {}", false_op, false_val, result_slot));
         self.emit(&format!("    jmp {}", end_lbl));
         // end
         self.emit(&format!("{}", end_lbl));
         let r = self.fresh_reg();
-        self.emit(&format!("    {} =l loadl {}", r, result_slot));
+        if is_float_result {
+            self.emit(&format!("    {} =d loadd {}", r, result_slot));
+            self.mark_float_reg(&r);
+        } else {
+            self.emit(&format!("    {} =l loadl {}", r, result_slot));
+        }
         r
     }
 
@@ -857,6 +962,7 @@ impl QBECodeGen {
         let result_slot = self.fresh_reg();
         self.emit_alloc(&format!("    {} =l alloc8 8", result_slot));
         let end_lbl = self.fresh_label();
+        let mut match_result_is_float = false;
         for (i, arm) in arms.iter().enumerate() {
             let arm_lbl = self.fresh_label();
             let next_lbl = if i + 1 < arms.len() {
@@ -912,7 +1018,11 @@ impl QBECodeGen {
                         self.emit(&format!("    storel {}, {}", pay_val, slot));
                         self.variable_registers.insert(bind_name.clone(), slot);
                         let body_val = self.gen_expr(&arm.body);
-                        self.emit(&format!("    storel {}, {}", body_val, result_slot));
+                        let body_op = self.store_op_for_reg(&body_val);
+                        if body_op == "stored" {
+                            match_result_is_float = true;
+                        }
+                        self.emit(&format!("    {} {}, {}", body_op, body_val, result_slot));
                         self.emit(&format!("    jmp {}", end_lbl));
                         if i + 1 < arms.len() {
                             self.emit(&format!("{}", next_lbl));
@@ -924,7 +1034,11 @@ impl QBECodeGen {
             // arm body
             self.emit(&format!("{}", arm_lbl));
             let body_val = self.gen_expr(&arm.body);
-            self.emit(&format!("    storel {}, {}", body_val, result_slot));
+            let body_op = self.store_op_for_reg(&body_val);
+            if body_op == "stored" {
+                match_result_is_float = true;
+            }
+            self.emit(&format!("    {} {}, {}", body_op, body_val, result_slot));
             self.emit(&format!("    jmp {}", end_lbl));
             if i + 1 < arms.len() && !matches!(arm.pattern, MatchPattern::WildcardPattern) {
                 self.emit(&format!("{}", next_lbl));
@@ -932,7 +1046,12 @@ impl QBECodeGen {
         }
         self.emit(&format!("{}", end_lbl));
         let r = self.fresh_reg();
-        self.emit(&format!("    {} =l loadl {}", r, result_slot));
+        if match_result_is_float {
+            self.emit(&format!("    {} =d loadd {}", r, result_slot));
+            self.mark_float_reg(&r);
+        } else {
+            self.emit(&format!("    {} =l loadl {}", r, result_slot));
+        }
         r
     }
 
@@ -984,14 +1103,22 @@ impl QBECodeGen {
             ));
             for (i, cap) in captured.iter().enumerate() {
                 if let Some(reg) = self.variable_registers.get(cap).cloned() {
+                    let cap_is_float =
+                        matches!(self.variable_types.get(cap), Some(t) if t.is_float());
                     let val = self.fresh_reg();
-                    self.emit(&format!("    {} =l loadl {}", val, reg));
+                    if cap_is_float {
+                        self.emit(&format!("    {} =d loadd {}", val, reg));
+                        self.mark_float_reg(&val);
+                    } else {
+                        self.emit(&format!("    {} =l loadl {}", val, reg));
+                    }
+                    let op = if cap_is_float { "stored" } else { "storel" };
                     if i == 0 {
-                        self.emit(&format!("    storel {}, {}", val, env));
+                        self.emit(&format!("    {} {}, {}", op, val, env));
                     } else {
                         let off = self.fresh_reg();
                         self.emit(&format!("    {} =l add {}, {}", off, env, i * 8));
-                        self.emit(&format!("    storel {}, {}", val, off));
+                        self.emit(&format!("    {} {}, {}", op, val, off));
                     }
                 }
             }
@@ -1016,34 +1143,37 @@ impl QBECodeGen {
 
     fn gen_ok_expr(&mut self, value: &Expr) -> String {
         let val = self.gen_expr(value);
+        let op = self.store_op_for_expr(value);
         let r = self.fresh_reg();
         self.emit(&format!("    {} =l call $gc_alloc(l 16)", r));
         self.emit(&format!("    storel 0, {}", r)); // tag=0 for Ok
         let pay = self.fresh_reg();
         self.emit(&format!("    {} =l add {}, 8", pay, r));
-        self.emit(&format!("    storel {}, {}", val, pay));
+        self.emit(&format!("    {} {}, {}", op, val, pay));
         r
     }
 
     fn gen_err_expr(&mut self, value: &Expr) -> String {
         let val = self.gen_expr(value);
+        let op = self.store_op_for_expr(value);
         let r = self.fresh_reg();
         self.emit(&format!("    {} =l call $gc_alloc(l 16)", r));
         self.emit(&format!("    storel 1, {}", r)); // tag=1 for Err
         let pay = self.fresh_reg();
         self.emit(&format!("    {} =l add {}, 8", pay, r));
-        self.emit(&format!("    storel {}, {}", val, pay));
+        self.emit(&format!("    {} {}, {}", op, val, pay));
         r
     }
 
     fn gen_some_expr(&mut self, value: &Expr) -> String {
         let val = self.gen_expr(value);
+        let op = self.store_op_for_expr(value);
         let r = self.fresh_reg();
         self.emit(&format!("    {} =l call $gc_alloc(l 16)", r));
         self.emit(&format!("    storel 0, {}", r)); // tag=0 for Some
         let pay = self.fresh_reg();
         self.emit(&format!("    {} =l add {}, 8", pay, r));
-        self.emit(&format!("    storel {}, {}", val, pay));
+        self.emit(&format!("    {} {}, {}", op, val, pay));
         r
     }
 
@@ -1136,13 +1266,21 @@ impl QBECodeGen {
         // Spill all locals to frame
         if let Some(frame) = self.coro_frame.clone() {
             let mut offset = CORO_HEADER_SIZE;
-            for var_name in self.coro_spilled_vars.clone() {
-                if let Some(reg) = self.variable_registers.get(&var_name).cloned() {
+            let spilled_vars = self.coro_spilled_vars.clone();
+            for var_name in &spilled_vars {
+                if let Some(reg) = self.variable_registers.get(var_name).cloned() {
+                    let var_is_float =
+                        matches!(self.variable_types.get(var_name), Some(t) if t.is_float());
                     let val = self.fresh_reg();
-                    self.emit(&format!("    {} =l loadl {}", val, reg));
+                    if var_is_float {
+                        self.emit(&format!("    {} =d loadd {}", val, reg));
+                    } else {
+                        self.emit(&format!("    {} =l loadl {}", val, reg));
+                    }
                     let off = self.fresh_reg();
                     self.emit(&format!("    {} =l add {}, {}", off, frame, offset));
-                    self.emit(&format!("    storel {}, {}", val, off));
+                    let op = if var_is_float { "stored" } else { "storel" };
+                    self.emit(&format!("    {} {}, {}", op, val, off));
                 }
                 offset += 8;
             }
@@ -1166,13 +1304,20 @@ impl QBECodeGen {
             self.emit(&format!("{}", cont_lbl));
             // Reload spilled vars
             let mut reload_offset = CORO_HEADER_SIZE;
-            for var_name in self.coro_spilled_vars.clone() {
-                if let Some(reg) = self.variable_registers.get(&var_name).cloned() {
+            for var_name in &spilled_vars {
+                if let Some(reg) = self.variable_registers.get(var_name).cloned() {
+                    let var_is_float =
+                        matches!(self.variable_types.get(var_name), Some(t) if t.is_float());
                     let roff = self.fresh_reg();
                     self.emit(&format!("    {} =l add {}, {}", roff, frame, reload_offset));
                     let rval = self.fresh_reg();
-                    self.emit(&format!("    {} =l loadl {}", rval, roff));
-                    self.emit(&format!("    storel {}, {}", rval, reg));
+                    if var_is_float {
+                        self.emit(&format!("    {} =d loadd {}", rval, roff));
+                    } else {
+                        self.emit(&format!("    {} =l loadl {}", rval, roff));
+                    }
+                    let op = if var_is_float { "stored" } else { "storel" };
+                    self.emit(&format!("    {} {}, {}", op, rval, reg));
                 }
                 reload_offset += 8;
             }
@@ -1208,7 +1353,7 @@ impl QBECodeGen {
             let data = self.gen_expr(&args[1]);
             let r = self.fresh_reg();
             self.emit(&format!(
-                "    {} =l call $tensor_from_data(l {}, l {})",
+                "    {} =l call $tensor_create_with_data(l {}, l {})",
                 r, shape, data
             ));
             r
@@ -1301,7 +1446,14 @@ impl QBECodeGen {
                 self.emit_alloc(&format!("    {} =l alloc8 8", slot));
                 if let Some(val) = value {
                     let v = self.gen_expr(val);
-                    self.emit(&format!("    storel {}, {}", v, slot));
+                    let op = if var_type.as_ref().map_or(false, |t| t.is_float())
+                        || self.is_float_operand(val)
+                    {
+                        "stored"
+                    } else {
+                        "storel"
+                    };
+                    self.emit(&format!("    {} {}, {}", op, v, slot));
                 }
                 self.variable_registers.insert(name.clone(), slot);
                 if let Some(t) = var_type {
@@ -1311,7 +1463,7 @@ impl QBECodeGen {
             StatementKind::Assignment { name, value } => {
                 let val = self.gen_expr(value);
                 if let Some(reg) = self.variable_registers.get(name).cloned() {
-                    self.emit(&format!("    storel {}, {}", val, reg));
+                    self.emit_store_var(&val, &reg, name);
                 }
             }
             StatementKind::Return { value } => {
@@ -1750,6 +1902,9 @@ impl QBECodeGen {
         let saved_func = std::mem::take(&mut self.current_func_lines);
         let saved_ret = self.current_function_return_type.take();
         let saved_term = self.block_terminated;
+        let saved_reg_counter = self.reg_counter;
+        let saved_label_counter = self.label_counter;
+        let saved_float_regs = self.float_regs.clone();
         self.block_terminated = false;
         self.reset_counters();
         self.current_function_return_type = Some(return_type.clone());
@@ -1762,7 +1917,8 @@ impl QBECodeGen {
         let ret = self.ret_type_str(return_type);
         let mut param_strs = Vec::new();
         for p in params {
-            param_strs.push(format!("l %p.{}", p.name));
+            let pty = self.to_qbe_type(&p.param_type);
+            param_strs.push(format!("{} %p.{}", pty, p.name));
         }
         let params_joined = param_strs.join(", ");
 
@@ -1770,7 +1926,12 @@ impl QBECodeGen {
         for p in params {
             let slot = self.fresh_reg();
             self.emit_alloc(&format!("    {} =l alloc8 8", slot));
-            self.emit(&format!("    storel %p.{}, {}", p.name, slot));
+            let op = if p.param_type.is_float() {
+                "stored"
+            } else {
+                "storel"
+            };
+            self.emit(&format!("    {} %p.{}, {}", op, p.name, slot));
             self.variable_registers.insert(p.name.clone(), slot);
             self.variable_types
                 .insert(p.name.clone(), p.param_type.clone());
@@ -1837,6 +1998,9 @@ impl QBECodeGen {
         self.current_func_lines = saved_func;
         self.current_function_return_type = saved_ret;
         self.block_terminated = saved_term;
+        self.reg_counter = saved_reg_counter;
+        self.label_counter = saved_label_counter;
+        self.float_regs = saved_float_regs;
     }
 
     fn gen_async_function_decl(
@@ -2172,17 +2336,26 @@ impl QBECodeGen {
         self.plugin_version = Some(version.to_string());
     }
 
-    fn gen_number_literal(&self, value: &str, literal_type: Option<&Type>) -> String {
+    fn gen_number_literal(&mut self, value: &str, literal_type: Option<&Type>) -> String {
         if let Some(ty) = literal_type {
             match ty {
                 Type::Float(FloatKind::F32) => {
                     if let Ok(v) = value.parse::<f32>() {
-                        return Self::float_to_single_qbe(v);
+                        let lit = Self::float_to_single_qbe(v);
+                        let reg = self.fresh_reg();
+                        self.emit(&format!("  {} =s copy {}", reg, lit));
+                        return reg;
                     }
                 }
                 Type::Float(_) => {
                     if let Ok(v) = value.parse::<f64>() {
-                        return Self::float_to_qbe(v);
+                        // Load float literal via copy to avoid QBE parser issues
+                        // with hex floats containing 'e' (treated as sci notation)
+                        let lit = Self::float_to_qbe(v);
+                        let reg = self.fresh_reg();
+                        self.emit(&format!("  {} =d copy {}", reg, lit));
+                        self.mark_float_reg(&reg);
+                        return reg;
                     }
                 }
                 _ => {}
@@ -2190,7 +2363,12 @@ impl QBECodeGen {
         }
         if value.contains('.') {
             if let Ok(v) = value.parse::<f64>() {
-                return Self::float_to_qbe(v);
+                // Load float literal via copy to avoid QBE parser issues
+                let lit = Self::float_to_qbe(v);
+                let reg = self.fresh_reg();
+                self.emit(&format!("  {} =d copy {}", reg, lit));
+                self.mark_float_reg(&reg);
+                return reg;
             }
         }
         value.to_string()
@@ -2206,6 +2384,7 @@ impl QBECodeGen {
             let is_float = matches!(self.variable_types.get(name), Some(t) if t.is_float());
             if is_float {
                 self.emit(&format!("  {} =d loadd {}", reg, slot));
+                self.mark_float_reg(&reg);
             } else {
                 self.emit(&format!("  {} =l loadl {}", reg, slot));
             }
@@ -2295,15 +2474,21 @@ impl QBECodeGen {
         let mut l = self.gen_expr(left);
         let mut r = self.gen_expr(right);
 
+        // Re-check float status after generation — struct field loads may have
+        // placed registers in float_regs that weren't detectable from AST alone
+        let is_float = is_float || self.float_regs.contains(&l) || self.float_regs.contains(&r);
+
         if is_float {
-            if !self.is_float_operand(left) {
+            if !self.is_float_operand(left) && !self.float_regs.contains(&l) {
                 let tmp = self.fresh_reg();
                 self.emit(&format!("  {} =d swtof {}", tmp, l));
+                self.mark_float_reg(&tmp);
                 l = tmp;
             }
-            if !self.is_float_operand(right) {
+            if !self.is_float_operand(right) && !self.float_regs.contains(&r) {
                 let tmp = self.fresh_reg();
                 self.emit(&format!("  {} =d swtof {}", tmp, r));
+                self.mark_float_reg(&tmp);
                 r = tmp;
             }
 
@@ -2311,21 +2496,25 @@ impl QBECodeGen {
                 "+" => {
                     let reg = self.fresh_reg();
                     self.emit(&format!("  {} =d add {}, {}", reg, l, r));
+                    self.mark_float_reg(&reg);
                     return reg;
                 }
                 "-" => {
                     let reg = self.fresh_reg();
                     self.emit(&format!("  {} =d sub {}, {}", reg, l, r));
+                    self.mark_float_reg(&reg);
                     return reg;
                 }
                 "*" => {
                     let reg = self.fresh_reg();
                     self.emit(&format!("  {} =d mul {}, {}", reg, l, r));
+                    self.mark_float_reg(&reg);
                     return reg;
                 }
                 "/" => {
                     let reg = self.fresh_reg();
                     self.emit(&format!("  {} =d div {}, {}", reg, l, r));
+                    self.mark_float_reg(&reg);
                     return reg;
                 }
                 _ => {}
@@ -2461,6 +2650,7 @@ impl QBECodeGen {
                 if is_float {
                     let r = self.fresh_reg();
                     self.emit(&format!("  {} =d neg {}", r, val));
+                    self.mark_float_reg(&r);
                     r
                 } else {
                     let r = self.fresh_reg();
@@ -2523,6 +2713,7 @@ impl QBECodeGen {
                 let r = self.fresh_reg();
                 let qbe_name = if name == "abs" { "fabs" } else { &name };
                 self.emit(&format!("  {} =d call ${}(d {})", r, qbe_name, arg_regs[0]));
+                self.mark_float_reg(&r);
                 return r;
             }
 
@@ -2544,6 +2735,7 @@ impl QBECodeGen {
                     "  {} =d call ${}(d {}, d {})",
                     r, qbe_name, arg_regs[0], arg_regs[1]
                 ));
+                self.mark_float_reg(&r);
                 return r;
             }
 
@@ -2551,10 +2743,20 @@ impl QBECodeGen {
             match name.as_str() {
                 "str" | "i64_to_string" => {
                     let r = self.fresh_reg();
-                    self.emit(&format!(
-                        "  {} =l call $i64_to_string(l {})",
-                        r, arg_regs[0]
-                    ));
+                    // Route to f64_to_string if argument is float
+                    if self.is_float_operand(&arguments[0])
+                        || self.float_regs.contains(&arg_regs[0])
+                    {
+                        self.emit(&format!(
+                            "  {} =l call $f64_to_string(d {})",
+                            r, arg_regs[0]
+                        ));
+                    } else {
+                        self.emit(&format!(
+                            "  {} =l call $i64_to_string(l {})",
+                            r, arg_regs[0]
+                        ));
+                    }
                     return r;
                 }
                 "u64_to_string" => {
@@ -2587,6 +2789,7 @@ impl QBECodeGen {
                         "  {} =d call $float_from_string(l {})",
                         r, arg_regs[0]
                     ));
+                    self.mark_float_reg(&r);
                     return r;
                 }
                 "input_i64" | "input_u64" => {
@@ -2597,6 +2800,7 @@ impl QBECodeGen {
                 "input_f64" => {
                     let r = self.fresh_reg();
                     self.emit(&format!("  {} =d call $input_f64()", r));
+                    self.mark_float_reg(&r);
                     return r;
                 }
                 "input_string" => {
@@ -2643,7 +2847,59 @@ impl QBECodeGen {
                     ));
                     return r;
                 }
+                "matmul" if arg_regs.len() == 2 => {
+                    let r = self.fresh_reg();
+                    self.emit(&format!(
+                        "  {} =l call $tensor_matmul(l {}, l {})",
+                        r, arg_regs[0], arg_regs[1]
+                    ));
+                    return r;
+                }
                 _ => {}
+            }
+
+            // Async combinators
+            match name.as_str() {
+                "all" => {
+                    let r = self.fresh_reg();
+                    let arg_list: String = arg_regs
+                        .iter()
+                        .map(|r| format!("l {}", r))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.emit(&format!("  {} =l call $mog_all({})", r, arg_list));
+                    return r;
+                }
+                "race" => {
+                    let r = self.fresh_reg();
+                    let arg_list: String = arg_regs
+                        .iter()
+                        .map(|r| format!("l {}", r))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.emit(&format!("  {} =l call $mog_race({})", r, arg_list));
+                    return r;
+                }
+                _ => {}
+            }
+
+            // If the name is a local variable (e.g. a closure binding), do an indirect call
+            if let Some(slot) = self.variable_registers.get(&name).cloned() {
+                let closure_reg = self.fresh_reg();
+                self.emit(&format!("  {} =l loadl {}", closure_reg, slot));
+                let fn_ptr = self.fresh_reg();
+                self.emit(&format!("  {} =l loadl {}", fn_ptr, closure_reg));
+                let env_off = self.fresh_reg();
+                self.emit(&format!("  {} =l add {}, 8", env_off, closure_reg));
+                let env_ptr = self.fresh_reg();
+                self.emit(&format!("  {} =l loadl {}", env_ptr, env_off));
+                let call_args_vec: Vec<String> = std::iter::once(format!("l {}", env_ptr))
+                    .chain(arg_regs.iter().map(|r| format!("l {}", r)))
+                    .collect();
+                let call_args = call_args_vec.join(", ");
+                let r = self.fresh_reg();
+                self.emit(&format!("  {} =l call {}({})", r, fn_ptr, call_args));
+                return r;
             }
 
             // General function calls
@@ -2653,9 +2909,24 @@ impl QBECodeGen {
                 .map(|t| self.to_qbe_type(t))
                 .unwrap_or("l");
 
+            // Determine argument types from function parameter info or float_regs
+            let param_info = self.function_param_info.get(&name).cloned();
             let arg_list: String = arg_regs
                 .iter()
-                .map(|r| format!("l {}", r))
+                .enumerate()
+                .map(|(i, r)| {
+                    let is_float_param = param_info
+                        .as_ref()
+                        .and_then(|pi| pi.get(i))
+                        .map(|(_, t)| t.is_float())
+                        .unwrap_or(false);
+                    let ty = if is_float_param || self.float_regs.contains(r) {
+                        "d"
+                    } else {
+                        "l"
+                    };
+                    format!("{} {}", ty, r)
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -2674,6 +2945,9 @@ impl QBECodeGen {
                 "  {} ={} call ${}({})",
                 r, ret_str, name, arg_list
             ));
+            if ret_str == "d" || ret_str == "s" {
+                self.mark_float_reg(&r);
+            }
             return r;
         }
 
@@ -2688,9 +2962,23 @@ impl QBECodeGen {
             if let Some(ref oname) = obj_name {
                 if let Some(pkg) = self.imported_packages.get(oname).cloned() {
                     let qualified = format!("{}_{}", pkg, method);
+                    let pkg_param_info = self.function_param_info.get(&qualified).cloned();
                     let all_args: String = arg_regs
                         .iter()
-                        .map(|r| format!("l {}", r))
+                        .enumerate()
+                        .map(|(i, r)| {
+                            let is_float_param = pkg_param_info
+                                .as_ref()
+                                .and_then(|pi| pi.get(i))
+                                .map(|(_, t)| t.is_float())
+                                .unwrap_or(false);
+                            let ty = if is_float_param || self.float_regs.contains(r) {
+                                "d"
+                            } else {
+                                "l"
+                            };
+                            format!("{} {}", ty, r)
+                        })
                         .collect::<Vec<_>>()
                         .join(", ");
                     let ret_type = self.function_types.get(&qualified).cloned();
@@ -2712,6 +3000,9 @@ impl QBECodeGen {
                         "  {} ={} call ${}({})",
                         r, ret_str, qualified, all_args
                     ));
+                    if ret_str == "d" || ret_str == "s" {
+                        self.mark_float_reg(&r);
+                    }
                     return r;
                 }
 
@@ -2721,10 +3012,20 @@ impl QBECodeGen {
                 }
             }
 
-            // String methods
-            if obj_name.as_ref().map_or(false, |n| {
-                matches!(self.variable_types.get(n.as_str()), Some(Type::String))
-            }) || self.is_string_producing_expr(object)
+            // String methods — check for String type or [u8] (byte array = string)
+            if obj_name
+                .as_ref()
+                .map_or(false, |n| match self.variable_types.get(n.as_str()) {
+                    Some(Type::String) => true,
+                    Some(Type::Array { element_type, .. }) => {
+                        matches!(
+                            element_type.as_ref(),
+                            Type::Unsigned(crate::types::UnsignedKind::U8)
+                        )
+                    }
+                    _ => false,
+                })
+                || self.is_string_producing_expr(object)
             {
                 let string_methods: HashMap<&str, (&str, bool)> = [
                     ("upper", ("string_upper", false)),
@@ -2762,10 +3063,8 @@ impl QBECodeGen {
             if matches!(&obj_type, Some(Type::Array { .. })) || self.is_array_expr(object) {
                 match method.as_str() {
                     "push" => {
-                        self.emit(&format!(
-                            "  call $array_push(l {}, l {})",
-                            obj_reg, arg_regs[0]
-                        ));
+                        let val = self.ensure_long(&arg_regs[0]);
+                        self.emit(&format!("  call $array_push(l {}, l {})", obj_reg, val));
                         return "0".to_string();
                     }
                     "pop" => {
@@ -2879,11 +3178,13 @@ impl QBECodeGen {
                     "sum" => {
                         let r = self.fresh_reg();
                         self.emit(&format!("  {} =d call $tensor_sum(l {})", r, obj_reg));
+                        self.mark_float_reg(&r);
                         return r;
                     }
                     "mean" => {
                         let r = self.fresh_reg();
                         self.emit(&format!("  {} =d call $tensor_mean(l {})", r, obj_reg));
+                        self.mark_float_reg(&r);
                         return r;
                     }
                     "matmul" => {
@@ -2966,6 +3267,7 @@ impl QBECodeGen {
                         "  {} =d call $tensor_{}(l {})",
                         r, method, obj_reg
                     ));
+                    self.mark_float_reg(&r);
                     return r;
                 }
                 "matmul" | "reshape" => {
