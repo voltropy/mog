@@ -435,6 +435,9 @@ impl Type {
             // int -> float (explicit cast needed in Mog, but compatible for codegen)
             (Self::Integer(_), Self::Float(_)) => true,
             (Self::Unsigned(_), Self::Float(_)) => true,
+            // ptr <-> string backward compat (both are pointers at IR level)
+            (Self::Pointer(_), Self::String) => true,
+            (Self::String, Self::Pointer(_)) => true,
             _ => false,
         }
     }

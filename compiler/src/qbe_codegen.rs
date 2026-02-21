@@ -273,6 +273,10 @@ impl QBECodeGen {
                             | "f64_to_string"
                             | "input_string"
                     )
+                } else if let ExprKind::MemberExpression { object, property } = &callee.kind {
+                    // String method calls like s.upper(), s.lower() produce strings
+                    matches!(property.as_str(), "upper" | "lower" | "trim" | "replace")
+                        && self.is_string_producing_expr(object)
                 } else {
                     false
                 }
@@ -1683,15 +1687,20 @@ impl QBECodeGen {
                 self.emit(&format!("{}", end_lbl));
             }
             StatementKind::WithBlock { context, body } => {
-                if let ExprKind::Identifier { name } = &context.kind {
-                    if name == "no_grad" {
-                        self.emit("    call $mog_no_grad_begin()");
-                        self.gen_block_stmts(&body.statements);
-                        self.emit("    call $mog_no_grad_end()");
-                        return;
+                let is_no_grad = match &context.kind {
+                    ExprKind::Identifier { name } => name == "no_grad",
+                    ExprKind::CallExpression { callee, .. } => {
+                        matches!(&callee.kind, ExprKind::Identifier { name } if name == "no_grad")
                     }
+                    _ => false,
+                };
+                if is_no_grad {
+                    self.emit("    call $mog_no_grad_begin()");
+                    self.gen_block_stmts(&body.statements);
+                    self.emit("    call $mog_no_grad_end()");
+                } else {
+                    self.gen_block_stmts(&body.statements);
                 }
-                self.gen_block_stmts(&body.statements);
             }
             StatementKind::TypeAliasDeclaration { .. } => { /* no codegen needed */ }
             StatementKind::PackageDeclaration { name } => {
@@ -2241,6 +2250,46 @@ impl QBECodeGen {
                 reg, l, r
             ));
             return reg;
+        }
+
+        // Element-wise array operations
+        let is_array_left = self.is_array_expr(left);
+        let is_array_right = self.is_array_expr(right);
+        if is_array_left && is_array_right {
+            let l = self.gen_expr(left);
+            let r = self.gen_expr(right);
+            let result = self.fresh_reg();
+            let runtime_fn = match op {
+                "+" => "vector_add",
+                "-" => "vector_sub",
+                "*" => "vector_mul",
+                "/" => "vector_div",
+                _ => "vector_add",
+            };
+            self.emit(&format!(
+                "  {} =l call ${}(l {}, l {}, l 0)",
+                result, runtime_fn, l, r
+            ));
+            return result;
+        }
+        if is_array_left || is_array_right {
+            // Scalar-array operation
+            let l = self.gen_expr(left);
+            let r = self.gen_expr(right);
+            let (scalar, array) = if is_array_left { (r, l) } else { (l, r) };
+            let result = self.fresh_reg();
+            let runtime_fn = match op {
+                "+" => "vector_scalar_add",
+                "-" => "vector_scalar_sub",
+                "*" => "vector_scalar_mul",
+                "/" => "vector_scalar_div",
+                _ => "vector_scalar_add",
+            };
+            self.emit(&format!(
+                "  {} =l call ${}(l {}, l {}, l 0)",
+                result, runtime_fn, scalar, array
+            ));
+            return result;
         }
 
         let mut l = self.gen_expr(left);
@@ -2907,6 +2956,50 @@ impl QBECodeGen {
                     }
                     _ => {}
                 }
+            }
+
+            // Tensor method fallback (when type info is not available)
+            match method.as_str() {
+                "sum" | "mean" => {
+                    let r = self.fresh_reg();
+                    self.emit(&format!(
+                        "  {} =d call $tensor_{}(l {})",
+                        r, method, obj_reg
+                    ));
+                    return r;
+                }
+                "matmul" | "reshape" => {
+                    let r = self.fresh_reg();
+                    self.emit(&format!(
+                        "  {} =l call $tensor_{}(l {}, l {})",
+                        r, method, obj_reg, arg_regs[0]
+                    ));
+                    return r;
+                }
+                "transpose" | "relu" | "sigmoid" | "tanh" => {
+                    let r = self.fresh_reg();
+                    let fn_name = if method == "tanh" {
+                        "tensor_tanh_act"
+                    } else {
+                        &format!("tensor_{}", method)
+                    };
+                    self.emit(&format!("  {} =l call ${}(l {})", r, fn_name, obj_reg));
+                    return r;
+                }
+                "softmax" => {
+                    let dim = if !arg_regs.is_empty() {
+                        arg_regs[0].clone()
+                    } else {
+                        "-1".to_string()
+                    };
+                    let r = self.fresh_reg();
+                    self.emit(&format!(
+                        "  {} =l call $tensor_softmax(l {}, l {})",
+                        r, obj_reg, dim
+                    ));
+                    return r;
+                }
+                _ => {}
             }
 
             // Fallback: generic method call

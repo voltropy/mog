@@ -544,6 +544,54 @@ impl SemanticAnalyzer {
             Some(Type::function(vec![], void_t.clone())),
         );
 
+        // Tensor creation and operation builtins
+        for &name in &[
+            "tensor_ones",
+            "tensor_zeros",
+            "tensor_randn",
+            "relu",
+            "sigmoid",
+        ] {
+            self.symbol_table.declare(
+                name,
+                SymbolKind::Function,
+                Some(Type::function(vec![ptr_t.clone()], ptr_t.clone())),
+            );
+        }
+        self.symbol_table.declare(
+            "softmax",
+            SymbolKind::Function,
+            Some(Type::function(
+                vec![ptr_t.clone(), i64t.clone()],
+                ptr_t.clone(),
+            )),
+        );
+        self.symbol_table.declare(
+            "tensor_sum",
+            SymbolKind::Function,
+            Some(Type::function(vec![ptr_t.clone()], f64t.clone())),
+        );
+        self.symbol_table.declare(
+            "tensor_matmul",
+            SymbolKind::Function,
+            Some(Type::function(
+                vec![ptr_t.clone(), ptr_t.clone()],
+                ptr_t.clone(),
+            )),
+        );
+        self.symbol_table.declare(
+            "tensor_transpose",
+            SymbolKind::Function,
+            Some(Type::function(vec![ptr_t.clone()], ptr_t.clone())),
+        );
+
+        // no_grad context manager
+        self.symbol_table.declare(
+            "no_grad",
+            SymbolKind::Function,
+            Some(Type::function(vec![], void_t.clone())),
+        );
+
         // len builtin (generic — works on arrays, strings, maps)
         self.symbol_table.declare(
             "len",
@@ -2069,8 +2117,12 @@ impl SemanticAnalyzer {
 
         if let Some(n) = name {
             let sym = self.symbol_table.lookup(n).cloned();
-            if sym.is_none() {
-                // Walrus-style auto-declare
+            if sym.is_none()
+                || sym
+                    .as_ref()
+                    .map_or(false, |s| s.symbol_kind != SymbolKind::Variable)
+            {
+                // Walrus-style auto-declare (also shadows non-variable symbols like builtins)
                 if let Some(ref vt) = value_type {
                     self.symbol_table
                         .declare(n, SymbolKind::Variable, value_type.clone());
@@ -2079,13 +2131,6 @@ impl SemanticAnalyzer {
                 return value_type;
             }
             let sym = sym.unwrap();
-            if sym.symbol_kind != SymbolKind::Variable {
-                self.emit_error(
-                    format!("Cannot assign to {:?} '{}'", sym.symbol_kind, n),
-                    span,
-                );
-                return None;
-            }
             if let Some(ref vt) = value_type {
                 if let Some(ref dt) = sym.declared_type {
                     if !dt.compatible_with(vt) && !vt.compatible_with(dt) {
@@ -2240,8 +2285,23 @@ impl SemanticAnalyzer {
                     }
                 }
 
-                // Validate named args
+                // Validate named args and positional arg count
                 if let Some(param_info) = self.function_param_info.get(name).cloned() {
+                    // Check positional argument count
+                    let required_count = param_info.iter().filter(|p| !p.has_default).count();
+                    let named_count = named_args.as_ref().map_or(0, |na| na.len());
+                    if arguments.len() + named_count < required_count {
+                        self.emit_error(
+                            format!(
+                                "Function '{}' expects {} arguments, got {}",
+                                name,
+                                required_count,
+                                arguments.len()
+                            ),
+                            span,
+                        );
+                    }
+
                     let param_names: HashSet<&str> =
                         param_info.iter().map(|p| p.name.as_str()).collect();
 

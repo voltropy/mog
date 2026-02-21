@@ -826,7 +826,9 @@ fn compatibility_matrix_exhaustive() {
             // These specific cross-type compatibilities are true
             let expected_compat = name_a == name_b
                 || (*name_a == "int" && *name_b == "float")
-                || (*name_a == "uint" && *name_b == "float");
+                || (*name_a == "uint" && *name_b == "float")
+                || (*name_a == "pointer" && *name_b == "string")
+                || (*name_a == "string" && *name_b == "pointer");
             assert_eq!(
                 compat, expected_compat,
                 "{name_a} -> {name_b}: expected {expected_compat}, got {compat}"
