@@ -762,10 +762,28 @@ impl QBECodeGen {
                 ExprKind::IndexExpression { object, index } => {
                     let obj = self.gen_expr(object);
                     let idx = self.gen_expr(index);
-                    self.emit(&format!(
-                        "    call $array_set(l {}, l {}, l {})",
-                        obj, idx, val
-                    ));
+                    if self.is_tensor_producing_expr(object) {
+                        // Tensor element write: convert value to f32 before storing
+                        let sf = self.fresh_reg();
+                        if self.is_float_operand(value) || self.float_regs.contains(&val) {
+                            // Already a double, truncate to single
+                            self.emit(&format!("    {} =s truncd {}", sf, val));
+                        } else {
+                            // Integer, convert to double then truncate
+                            let df = self.fresh_reg();
+                            self.emit(&format!("    {} =d sltof {}", df, val));
+                            self.emit(&format!("    {} =s truncd {}", sf, df));
+                        }
+                        self.emit(&format!(
+                            "    call $tensor_set_f32(l {}, l {}, s {})",
+                            obj, idx, sf
+                        ));
+                    } else {
+                        self.emit(&format!(
+                            "    call $array_set(l {}, l {}, l {})",
+                            obj, idx, val
+                        ));
+                    }
                     val
                 }
                 ExprKind::MemberExpression { object, property } => {
@@ -1083,21 +1101,35 @@ impl QBECodeGen {
     fn gen_index_expr(&mut self, object: &Expr, index: &Expr) -> String {
         let obj = self.gen_expr(object);
         let idx = self.gen_expr(index);
-        let r = self.fresh_reg();
         if self.is_map_expr(object) {
+            let r = self.fresh_reg();
             let klen = self.fresh_reg();
             self.emit(&format!("    {} =l call $string_length(l {})", klen, idx));
             self.emit(&format!(
                 "    {} =l call $map_get(l {}, l {}, l {})",
                 r, obj, idx, klen
             ));
+            r
+        } else if self.is_tensor_producing_expr(object) {
+            // Tensor element read: tensor_get_f32 returns single-precision float
+            let sf = self.fresh_reg();
+            self.emit(&format!(
+                "    {} =s call $tensor_get_f32(l {}, l {})",
+                sf, obj, idx
+            ));
+            // Extend to f64 for Mog's float type
+            let df = self.fresh_reg();
+            self.emit(&format!("    {} =d exts {}", df, sf));
+            self.float_regs.insert(df.clone());
+            df
         } else {
+            let r = self.fresh_reg();
             self.emit(&format!(
                 "    {} =l call $array_get(l {}, l {})",
                 r, obj, idx
             ));
+            r
         }
-        r
     }
 
     fn gen_slice_expr(&mut self, object: &Expr, start: &Expr, end: &Expr) -> String {
