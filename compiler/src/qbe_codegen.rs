@@ -2133,7 +2133,20 @@ impl QBECodeGen {
                 }
                 self.variable_registers.insert(name.clone(), slot);
                 if let Some(t) = var_type {
-                    self.variable_types.insert(name.clone(), t.clone());
+                    // Override pointer type with capability return type if available
+                    if matches!(t, Type::Pointer(_)) {
+                        if let Some(val) = value {
+                            if let Some(cap_ret) = self.get_capability_return_type(val) {
+                                self.variable_types.insert(name.clone(), cap_ret);
+                            } else {
+                                self.variable_types.insert(name.clone(), t.clone());
+                            }
+                        } else {
+                            self.variable_types.insert(name.clone(), t.clone());
+                        }
+                    } else {
+                        self.variable_types.insert(name.clone(), t.clone());
+                    }
                 }
             }
             StatementKind::Assignment { name, value } => {
