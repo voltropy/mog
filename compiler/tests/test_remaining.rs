@@ -279,9 +279,7 @@ fn tensor_parse_type_annotation() {
 fn tensor_codegen_zeros() {
     let ir = qbe("t := tensor<f32>([2, 3])");
     assert!(
-        ir.contains("$tensor_zeros")
-            || ir.contains("$tensor_new")
-            || ir.contains("$tensor_from_data"),
+        ir.contains("$tensor_create") || ir.contains("$tensor_zeros") || ir.contains("$tensor_new"),
         "expected tensor creation call in IR: {ir}"
     );
 }

@@ -269,7 +269,9 @@ impl QBECodeGen {
                 literal_type: None,
             } => value.contains('.'),
             ExprKind::Identifier { name } => {
-                matches!(self.variable_types.get(name.as_str()), Some(t) if t.is_float())
+                name == "PI"
+                    || name == "E"
+                    || matches!(self.variable_types.get(name.as_str()), Some(t) if t.is_float())
             }
             ExprKind::MemberExpression { object, property } => {
                 if let ExprKind::Identifier { name } = &object.kind {
@@ -380,6 +382,44 @@ impl QBECodeGen {
         }
     }
 
+    fn is_tensor_producing_expr(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::TensorConstruction { .. } => true,
+            ExprKind::Identifier { name } => {
+                matches!(
+                    self.variable_types.get(name.as_str()),
+                    Some(Type::Tensor { .. })
+                )
+            }
+            ExprKind::CallExpression { callee, .. } => {
+                // Check for tensor-producing functions
+                if let ExprKind::Identifier { name } = &callee.kind {
+                    matches!(
+                        name.as_str(),
+                        "tensor_zeros"
+                            | "tensor_ones"
+                            | "tensor_randn"
+                            | "tensor_add"
+                            | "tensor_sub"
+                            | "tensor_mul"
+                            | "tensor_div"
+                            | "tensor_transpose"
+                            | "tensor_relu"
+                            | "tensor_sigmoid"
+                            | "tensor_softmax"
+                            | "matmul"
+                    )
+                } else {
+                    false
+                }
+            }
+            ExprKind::BinaryExpression { left, right, .. } => {
+                self.is_tensor_producing_expr(left) || self.is_tensor_producing_expr(right)
+            }
+            _ => false,
+        }
+    }
+
     fn _infer_expression_type(&self, expr: &Expr) -> &'static str {
         if self.is_string_producing_expr(expr) {
             "string"
@@ -398,6 +438,59 @@ impl QBECodeGen {
         }
     }
 
+    /// Look up the return type of a capability call expression.
+    /// Handles both `cap.method(...)` and `await cap.method(...)`.
+    /// Check if a capability function is declared as async.
+    fn is_async_capability_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::CallExpression { callee, .. } = &expr.kind {
+            if let ExprKind::MemberExpression { object, property } = &callee.kind {
+                if let ExprKind::Identifier { name } = &object.kind {
+                    if let Some(decl) = self.capability_decls.get(name.as_str()) {
+                        for func in &decl.functions {
+                            if func.name == *property {
+                                return func.is_async;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if an expression is a capability call (object.method(...) where object is a capability).
+    fn is_capability_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::CallExpression { callee, .. } = &expr.kind {
+            if let ExprKind::MemberExpression { object, .. } = &callee.kind {
+                if let ExprKind::Identifier { name } = &object.kind {
+                    return self.capability_decls.contains_key(name.as_str());
+                }
+            }
+        }
+        false
+    }
+
+    fn get_capability_return_type(&self, expr: &Expr) -> Option<Type> {
+        let call_expr = match &expr.kind {
+            ExprKind::AwaitExpression { argument } => argument.as_ref(),
+            _ => expr,
+        };
+        if let ExprKind::CallExpression { callee, .. } = &call_expr.kind {
+            if let ExprKind::MemberExpression { object, property } = &callee.kind {
+                if let ExprKind::Identifier { name } = &object.kind {
+                    if let Some(decl) = self.capability_decls.get(name.as_str()) {
+                        for func in &decl.functions {
+                            if func.name == *property {
+                                return Some(func.return_type.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     // ============================================================
     // EXPRESSION GENERATION
     // ============================================================
@@ -414,7 +507,12 @@ impl QBECodeGen {
                     "0".to_string()
                 }
             }
-            ExprKind::NoneExpression => "0".to_string(),
+            ExprKind::NoneExpression => {
+                let r = self.fresh_reg();
+                self.emit(&format!("    {} =l call $gc_alloc(l 16)", r));
+                self.emit(&format!("    storel 1, {}", r)); // tag=1 for None
+                r
+            }
             ExprKind::StringLiteral { value } => self.gen_string_literal(value),
             ExprKind::TemplateLiteral { parts } => {
                 let parts = parts.clone();
@@ -523,10 +621,16 @@ impl QBECodeGen {
             ExprKind::ErrExpression { value } => self.gen_err_expr(value),
             ExprKind::SomeExpression { value } => self.gen_some_expr(value),
             ExprKind::PropagateExpression { value } => self.gen_propagate_expr(value),
-            ExprKind::IsSomeExpression { value, .. } => self.gen_is_some_expr(value),
+            ExprKind::IsSomeExpression { value, binding } => {
+                self.gen_is_some_expr(value, Some(binding))
+            }
             ExprKind::IsNoneExpression { value } => self.gen_is_none_expr(value),
-            ExprKind::IsOkExpression { value, .. } => self.gen_is_ok_expr(value),
-            ExprKind::IsErrExpression { value, .. } => self.gen_is_err_expr(value),
+            ExprKind::IsOkExpression { value, binding } => {
+                self.gen_is_ok_expr(value, Some(binding))
+            }
+            ExprKind::IsErrExpression { value, binding } => {
+                self.gen_is_err_expr(value, Some(binding))
+            }
             ExprKind::AwaitExpression { argument } => self.gen_await_expr(argument),
             ExprKind::SpawnExpression { argument } => self.gen_spawn_expr(argument),
             ExprKind::TensorConstruction { args, .. } => {
@@ -624,6 +728,32 @@ impl QBECodeGen {
                             value_type: Box::new(Type::Integer(IntegerKind::I64)),
                         },
                     );
+                } else if let Some(cap_ret) = self.get_capability_return_type(value) {
+                    self.variable_types.insert(n.clone(), cap_ret);
+                } else if matches!(&value.kind, ExprKind::Lambda { .. }) {
+                    // Closures are stored as pointers
+                    self.variable_types
+                        .insert(n.clone(), Type::Pointer(Some(Box::new(Type::Void))));
+                } else if self.is_tensor_producing_expr(value) {
+                    self.variable_types.insert(
+                        n.clone(),
+                        Type::Tensor {
+                            dtype: Box::new(Type::Float(FloatKind::F32)),
+                            shape: None,
+                        },
+                    );
+                } else if let ExprKind::SoAConstructor {
+                    struct_name,
+                    capacity,
+                } = &value.kind
+                {
+                    self.variable_types.insert(
+                        n.clone(),
+                        Type::SOA {
+                            struct_type: Box::new(Type::Custom(struct_name.clone())),
+                            capacity: Some(capacity.unwrap_or(0)),
+                        },
+                    );
                 }
             }
             val
@@ -639,6 +769,49 @@ impl QBECodeGen {
                     val
                 }
                 ExprKind::MemberExpression { object, property } => {
+                    // SoA transposed field write: soa_var[i].field = value
+                    if let ExprKind::IndexExpression {
+                        object: inner_obj,
+                        index,
+                    } = &object.kind
+                    {
+                        if let ExprKind::Identifier { name } = &inner_obj.kind {
+                            if let Some(Type::SOA { struct_type, .. }) =
+                                self.variable_types.get(name.as_str())
+                            {
+                                let soa_struct_name = if let Type::Custom(s) = struct_type.as_ref()
+                                {
+                                    s.clone()
+                                } else {
+                                    String::new()
+                                };
+                                let field_idx = self
+                                    .struct_fields
+                                    .get(soa_struct_name.as_str())
+                                    .and_then(|f| f.iter().position(|(n, _)| n == property))
+                                    .unwrap_or(0);
+                                let soa = self.gen_expr(inner_obj);
+                                let idx_val = self.gen_expr(index);
+                                let header_off = (field_idx + 1) * 8;
+                                let field_ptr_ptr = self.fresh_reg();
+                                self.emit(&format!(
+                                    "    {} =l add {}, {}",
+                                    field_ptr_ptr, soa, header_off
+                                ));
+                                let field_arr = self.fresh_reg();
+                                self.emit(&format!("    {} =l loadl {}", field_arr, field_ptr_ptr));
+                                let elem_off = self.fresh_reg();
+                                self.emit(&format!("    {} =l mul {}, 8", elem_off, idx_val));
+                                let elem_ptr = self.fresh_reg();
+                                self.emit(&format!(
+                                    "    {} =l add {}, {}",
+                                    elem_ptr, field_arr, elem_off
+                                ));
+                                self.emit(&format!("    storel {}, {}", val, elem_ptr));
+                                return val;
+                            }
+                        }
+                    }
                     let obj = self.gen_expr(object);
                     if let Some(sname) = self.get_struct_type_for_expr(object) {
                         if let Some(fields) = self.struct_fields.get(&sname).cloned() {
@@ -725,13 +898,15 @@ impl QBECodeGen {
 
     fn gen_map_literal(&mut self, entries: &[MapEntry]) -> String {
         let m = self.fresh_reg();
-        self.emit(&format!("    {} =l call $map_new()", m));
+        let cap = std::cmp::max(entries.len() * 2, 16);
+        self.emit(&format!("    {} =l call $map_new(l {})", m, cap));
         for entry in entries {
             let key_label = self.register_string(&entry.key);
+            let key_len = entry.key.len();
             let val = self.gen_expr(&entry.value);
             self.emit(&format!(
-                "    call $map_set(l {}, l {}, l {})",
-                m, key_label, val
+                "    call $map_set(l {}, l {}, l {}, l {})",
+                m, key_label, key_len, val
             ));
         }
         m
@@ -763,20 +938,97 @@ impl QBECodeGen {
         ptr
     }
 
-    fn gen_soa_constructor(&mut self, _struct_name: &str, capacity: Option<usize>) -> String {
+    fn gen_soa_constructor(&mut self, struct_name: &str, capacity: Option<usize>) -> String {
         let cap = capacity.unwrap_or(0) as i64;
-        let r = self.fresh_reg();
-        self.emit(&format!("    {} =l call $gc_alloc(l {})", r, cap * 8 + 16));
-        r
+        let field_count = self
+            .struct_fields
+            .get(struct_name)
+            .map(|f| f.len())
+            .unwrap_or(0);
+        // Header: [count, field0_ptr, field1_ptr, ...]
+        let header_size = (field_count + 1) * 8;
+        let header = self.fresh_reg();
+        self.emit(&format!(
+            "    {} =l call $gc_alloc(l {})",
+            header, header_size
+        ));
+        // Store count at offset 0
+        self.emit(&format!("    storel {}, {}", cap, header));
+        // For each field, allocate data array and store pointer in header
+        for i in 0..field_count {
+            let data_size = self.fresh_reg();
+            self.emit(&format!("    {} =l mul {}, 8", data_size, cap));
+            let field_arr = self.fresh_reg();
+            self.emit(&format!(
+                "    {} =l call $gc_alloc(l {})",
+                field_arr, data_size
+            ));
+            let offset = (i + 1) * 8;
+            let ptr = self.fresh_reg();
+            self.emit(&format!("    {} =l add {}, {}", ptr, header, offset));
+            self.emit(&format!("    storel {}, {}", field_arr, ptr));
+        }
+        header
     }
 
     fn gen_member_expr(&mut self, object: &Expr, property: &str) -> String {
+        // SoA transposed field access: soa_var[i].field
+        // Pattern: MemberExpression { object: IndexExpression { object: Identifier(soa_var), index }, property: field }
+        if let ExprKind::IndexExpression {
+            object: inner_obj,
+            index,
+        } = &object.kind
+        {
+            if let ExprKind::Identifier { name } = &inner_obj.kind {
+                if let Some(Type::SOA { struct_type, .. }) = self.variable_types.get(name.as_str())
+                {
+                    let soa_struct_name = if let Type::Custom(s) = struct_type.as_ref() {
+                        s.clone()
+                    } else {
+                        String::new()
+                    };
+                    // Get field index
+                    let field_idx = self
+                        .struct_fields
+                        .get(soa_struct_name.as_str())
+                        .and_then(|f| f.iter().position(|(n, _)| n == property))
+                        .unwrap_or(0);
+                    let soa = self.gen_expr(inner_obj);
+                    let idx = self.gen_expr(index);
+                    // Load field array pointer from header at offset (field_idx + 1) * 8
+                    let header_off = (field_idx + 1) * 8;
+                    let field_ptr_ptr = self.fresh_reg();
+                    self.emit(&format!(
+                        "    {} =l add {}, {}",
+                        field_ptr_ptr, soa, header_off
+                    ));
+                    let field_arr = self.fresh_reg();
+                    self.emit(&format!("    {} =l loadl {}", field_arr, field_ptr_ptr));
+                    // Load element at index
+                    let elem_off = self.fresh_reg();
+                    self.emit(&format!("    {} =l mul {}, 8", elem_off, idx));
+                    let elem_ptr = self.fresh_reg();
+                    self.emit(&format!(
+                        "    {} =l add {}, {}",
+                        elem_ptr, field_arr, elem_off
+                    ));
+                    let result = self.fresh_reg();
+                    self.emit(&format!("    {} =l loadl {}", result, elem_ptr));
+                    return result;
+                }
+            }
+        }
         // Check for .len/.cap on arrays/strings
         if property == "len" {
             let obj = self.gen_expr(object);
             if self.is_string_producing_expr(object) {
                 let r = self.fresh_reg();
                 self.emit(&format!("    {} =l call $string_length(l {})", r, obj));
+                return r;
+            }
+            if self.is_map_expr(object) {
+                let r = self.fresh_reg();
+                self.emit(&format!("    {} =l call $map_size(l {})", r, obj));
                 return r;
             }
             // Array .len — use runtime function
@@ -833,7 +1085,12 @@ impl QBECodeGen {
         let idx = self.gen_expr(index);
         let r = self.fresh_reg();
         if self.is_map_expr(object) {
-            self.emit(&format!("    {} =l call $map_get(l {}, l {})", r, obj, idx));
+            let klen = self.fresh_reg();
+            self.emit(&format!("    {} =l call $string_length(l {})", klen, idx));
+            self.emit(&format!(
+                "    {} =l call $map_get(l {}, l {}, l {})",
+                r, obj, idx, klen
+            ));
         } else {
             self.emit(&format!(
                 "    {} =l call $array_get(l {}, l {})",
@@ -1017,6 +1274,10 @@ impl QBECodeGen {
                         self.emit_alloc(&format!("    {} =l alloc8 8", slot));
                         self.emit(&format!("    storel {}, {}", pay_val, slot));
                         self.variable_registers.insert(bind_name.clone(), slot);
+                        // Type the binding: err bindings are String, ok/some inherit inner type
+                        if name == "err" {
+                            self.variable_types.insert(bind_name.clone(), Type::String);
+                        }
                         let body_val = self.gen_expr(&arm.body);
                         let body_op = self.store_op_for_reg(&body_val);
                         if body_op == "stored" {
@@ -1058,39 +1319,146 @@ impl QBECodeGen {
     fn gen_lambda(&mut self, params: &[FunctionParam], return_type: &Type, body: &Block) -> String {
         let lambda_name = format!("lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;
-        // Find captured variables
+
+        // Find captured variables (must do before saving state)
         let captured = self.find_captured_vars(body, params);
-        // Generate lambda function
-        let mut param_str = String::from("l %env");
-        for p in params {
-            param_str.push_str(&format!(", l %p_{}", p.name));
-        }
-        let ret = self.ret_type_str(return_type);
-        let mut func_ir = format!("function {} ${}({}) {{\n", ret, lambda_name, param_str);
-        func_ir.push_str("@start\n");
-        // Alloc slots for params
-        for p in params {
-            func_ir.push_str(&format!("    %s_{} =l alloc8 8\n", p.name));
-            func_ir.push_str(&format!("    storel 0, %s_{}\n", p.name));
-            func_ir.push_str(&format!("    storel %p_{}, %s_{}\n", p.name, p.name));
-        }
-        // Reload captures from env
-        for (i, cap) in captured.iter().enumerate() {
-            if i == 0 {
-                func_ir.push_str(&format!("    %cap_{} =l loadl %env\n", cap));
-            } else {
-                func_ir.push_str(&format!("    %off_cap_{} =l add %env, {}\n", cap, i * 8));
-                func_ir.push_str(&format!("    %cap_{} =l loadl %off_cap_{}\n", cap, cap));
+
+        // Save outer variable types for captures before we swap them out
+        let mut capture_types: Vec<(String, Type)> = Vec::new();
+        for cap in &captured {
+            if let Some(t) = self.variable_types.get(cap) {
+                capture_types.push((cap.clone(), t.clone()));
             }
-            func_ir.push_str(&format!("    %s_{} =l alloc8 8\n", cap));
-            func_ir.push_str(&format!("    storel 0, %s_{}\n", cap));
-            func_ir.push_str(&format!("    storel %cap_{}, %s_{}\n", cap, cap));
         }
-        // We need a sub-codegen for the body
-        func_ir.push_str("    ret 0\n");
+
+        // Save outer variable registers for closure building after restore
+        let outer_var_regs = self.variable_registers.clone();
+
+        // Save all codegen state (same pattern as gen_function_decl)
+        let saved_regs = std::mem::take(&mut self.variable_registers);
+        let saved_types = std::mem::take(&mut self.variable_types);
+        let saved_entry = std::mem::take(&mut self.entry_allocs);
+        let saved_func = std::mem::take(&mut self.current_func_lines);
+        let saved_ret = self.current_function_return_type.take();
+        let saved_term = self.block_terminated;
+        let saved_reg_counter = self.reg_counter;
+        let saved_label_counter = self.label_counter;
+        let saved_float_regs = self.float_regs.clone();
+        let saved_in_async = self.in_async_function;
+        let saved_coro_frame = self.coro_frame.take();
+        let saved_coro_future = self.coro_future.take();
+
+        self.block_terminated = false;
+        self.in_async_function = false; // lambdas are not async
+        self.reset_counters();
+        self.current_function_return_type = Some(return_type.clone());
+
+        // Build QBE parameter signature: env first, then user params
+        let mut param_strs = vec!["l %env".to_string()];
+        for p in params {
+            let pty = self.to_qbe_type(&p.param_type);
+            param_strs.push(format!("{} %p.{}", pty, p.name));
+        }
+        let params_joined = param_strs.join(", ");
+
+        // Allocate stack slot for env
+        let env_slot = self.fresh_reg();
+        self.emit_alloc(&format!("    {} =l alloc8 8", env_slot));
+        self.emit("    storel %env, %s_env");
+        // Actually use proper slot name
+        self.variable_registers
+            .insert("env".to_string(), env_slot.clone());
+
+        // Fix: store env into its slot
+        self.current_func_lines.pop(); // remove the wrong storel
+        self.emit(&format!("    storel %env, {}", env_slot));
+
+        // Allocate stack slots for params
+        for p in params {
+            let slot = self.fresh_reg();
+            self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+            let op = if p.param_type.is_float() {
+                "stored"
+            } else {
+                "storel"
+            };
+            self.emit(&format!("    {} %p.{}, {}", op, p.name, slot));
+            self.variable_registers.insert(p.name.clone(), slot);
+            self.variable_types
+                .insert(p.name.clone(), p.param_type.clone());
+        }
+
+        // Restore captured variables from env pointer
+        for (i, cap) in captured.iter().enumerate() {
+            let slot = self.fresh_reg();
+            self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+            self.variable_registers.insert(cap.clone(), slot.clone());
+
+            // Copy type info from outer scope
+            for (name, typ) in &capture_types {
+                if name == cap {
+                    self.variable_types.insert(cap.clone(), typ.clone());
+                }
+            }
+
+            // Load from env: env_ptr + i*8
+            let env_ptr = self.fresh_reg();
+            self.emit(&format!("    {} =l loadl {}", env_ptr, env_slot));
+            if i == 0 {
+                let cap_val = self.fresh_reg();
+                self.emit(&format!("    {} =l loadl {}", cap_val, env_ptr));
+                self.emit(&format!("    storel {}, {}", cap_val, slot));
+            } else {
+                let cap_off = self.fresh_reg();
+                self.emit(&format!("    {} =l add {}, {}", cap_off, env_ptr, i * 8));
+                let cap_val = self.fresh_reg();
+                self.emit(&format!("    {} =l loadl {}", cap_val, cap_off));
+                self.emit(&format!("    storel {}, {}", cap_val, slot));
+            }
+        }
+
+        // Generate body
+        self.emit("    call $gc_push_frame()");
+        self.gen_block_stmts(&body.statements);
+        if !self.block_terminated {
+            self.emit("    call $gc_pop_frame()");
+            if *return_type == Type::Void {
+                self.emit("    ret");
+            } else {
+                self.emit("    ret 0");
+            }
+        }
+
+        // Assemble the lambda function
+        let ret = self.ret_type_str(return_type);
+        let mut func_ir = format!("function {} ${}({}) {{\n", ret, lambda_name, params_joined);
+        func_ir.push_str("@start\n");
+        for alloc in &self.entry_allocs {
+            func_ir.push_str(alloc);
+            func_ir.push('\n');
+        }
+        for line in &self.current_func_lines {
+            func_ir.push_str(line);
+            func_ir.push('\n');
+        }
         func_ir.push_str("}\n\n");
         self.lambda_funcs.push_str(&func_ir);
-        // Build closure {fn_ptr, env_ptr}
+
+        // Restore outer state
+        self.variable_registers = saved_regs;
+        self.variable_types = saved_types;
+        self.entry_allocs = saved_entry;
+        self.current_func_lines = saved_func;
+        self.current_function_return_type = saved_ret;
+        self.block_terminated = saved_term;
+        self.reg_counter = saved_reg_counter;
+        self.label_counter = saved_label_counter;
+        self.float_regs = saved_float_regs;
+        self.in_async_function = saved_in_async;
+        self.coro_frame = saved_coro_frame;
+        self.coro_future = saved_coro_future;
+
+        // Build closure {fn_ptr, env_ptr} in outer context
         let cls = self.fresh_reg();
         self.emit(&format!("    {} =l call $gc_alloc(l 16)", cls));
         self.emit(&format!("    storel ${}, {}", lambda_name, cls));
@@ -1102,7 +1470,7 @@ impl QBECodeGen {
                 captured.len() * 8
             ));
             for (i, cap) in captured.iter().enumerate() {
-                if let Some(reg) = self.variable_registers.get(cap).cloned() {
+                if let Some(reg) = outer_var_regs.get(cap).cloned() {
                     let cap_is_float =
                         matches!(self.variable_types.get(cap), Some(t) if t.is_float());
                     let val = self.fresh_reg();
@@ -1125,20 +1493,174 @@ impl QBECodeGen {
             let ep = self.fresh_reg();
             self.emit(&format!("    {} =l add {}, 8", ep, cls));
             self.emit(&format!("    storel {}, {}", env, ep));
+        } else {
+            // No captures: store null env
+            let ep = self.fresh_reg();
+            self.emit(&format!("    {} =l add {}, 8", ep, cls));
+            self.emit(&format!("    storel 0, {}", ep));
         }
         cls
     }
 
     fn find_captured_vars(&self, block: &Block, params: &[FunctionParam]) -> Vec<String> {
         let param_names: HashSet<_> = params.iter().map(|p| p.name.clone()).collect();
+        let mut referenced = HashSet::new();
+        self.collect_identifiers_from_block(block, &mut referenced);
         let mut captured = Vec::new();
-        for name in self.variable_registers.keys() {
-            if !param_names.contains(name) {
+        for name in &referenced {
+            if !param_names.contains(name) && self.variable_registers.contains_key(name) {
                 captured.push(name.clone());
             }
         }
-        let _ = block; // Would walk AST to find used vars; simplified
+        captured.sort(); // deterministic ordering
         captured
+    }
+
+    fn collect_identifiers_from_block(&self, block: &Block, ids: &mut HashSet<String>) {
+        for stmt in &block.statements {
+            self.collect_identifiers_from_stmt(stmt, ids);
+        }
+    }
+
+    fn collect_identifiers_from_stmt(&self, stmt: &Statement, ids: &mut HashSet<String>) {
+        match &stmt.kind {
+            StatementKind::VariableDeclaration { value, .. } => {
+                if let Some(init) = value {
+                    self.collect_identifiers_from_expr(init, ids);
+                }
+            }
+            StatementKind::ExpressionStatement { expression } => {
+                self.collect_identifiers_from_expr(expression, ids);
+            }
+            StatementKind::Return { value } => {
+                if let Some(val) = value {
+                    self.collect_identifiers_from_expr(val, ids);
+                }
+            }
+            StatementKind::Conditional {
+                condition,
+                true_branch,
+                false_branch,
+            } => {
+                self.collect_identifiers_from_expr(condition, ids);
+                self.collect_identifiers_from_block(true_branch, ids);
+                if let Some(alt) = false_branch {
+                    self.collect_identifiers_from_block(alt, ids);
+                }
+            }
+            StatementKind::WhileLoop { test, body } => {
+                self.collect_identifiers_from_expr(test, ids);
+                self.collect_identifiers_from_block(body, ids);
+            }
+            StatementKind::ForLoop {
+                start, end, body, ..
+            } => {
+                self.collect_identifiers_from_expr(start, ids);
+                self.collect_identifiers_from_expr(end, ids);
+                self.collect_identifiers_from_block(body, ids);
+            }
+            StatementKind::ForEachLoop { array, body, .. } => {
+                self.collect_identifiers_from_expr(array, ids);
+                self.collect_identifiers_from_block(body, ids);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_identifiers_from_expr(&self, expr: &Expr, ids: &mut HashSet<String>) {
+        match &expr.kind {
+            ExprKind::Identifier { name } => {
+                ids.insert(name.clone());
+            }
+            ExprKind::BinaryExpression { left, right, .. } => {
+                self.collect_identifiers_from_expr(left, ids);
+                self.collect_identifiers_from_expr(right, ids);
+            }
+            ExprKind::UnaryExpression { operand, .. } => {
+                self.collect_identifiers_from_expr(operand, ids);
+            }
+            ExprKind::CallExpression {
+                callee, arguments, ..
+            } => {
+                self.collect_identifiers_from_expr(callee, ids);
+                for arg in arguments {
+                    self.collect_identifiers_from_expr(arg, ids);
+                }
+            }
+            ExprKind::MemberExpression { object, .. } => {
+                self.collect_identifiers_from_expr(object, ids);
+            }
+            ExprKind::IndexExpression { object, index } => {
+                self.collect_identifiers_from_expr(object, ids);
+                self.collect_identifiers_from_expr(index, ids);
+            }
+            ExprKind::AssignmentExpression { target, value, .. } => {
+                if let Some(t) = target {
+                    self.collect_identifiers_from_expr(t, ids);
+                }
+                self.collect_identifiers_from_expr(value, ids);
+            }
+            ExprKind::IfExpression {
+                condition,
+                true_branch,
+                false_branch,
+            } => {
+                self.collect_identifiers_from_expr(condition, ids);
+                self.collect_identifiers_from_block(true_branch, ids);
+                match false_branch {
+                    IfElseBranch::Block(b) => self.collect_identifiers_from_block(b, ids),
+                    IfElseBranch::IfExpression(e) => self.collect_identifiers_from_expr(e, ids),
+                }
+            }
+            ExprKind::BlockExpression { block } => {
+                self.collect_identifiers_from_block(block, ids);
+            }
+            ExprKind::MatchExpression { subject, arms } => {
+                self.collect_identifiers_from_expr(subject, ids);
+                for arm in arms {
+                    self.collect_identifiers_from_expr(&arm.body, ids);
+                }
+            }
+            ExprKind::TemplateLiteral { parts } => {
+                for part in parts {
+                    if let TemplatePart::Expr(e) = part {
+                        self.collect_identifiers_from_expr(e, ids);
+                    }
+                }
+            }
+            ExprKind::ArrayLiteral { elements } => {
+                for e in elements {
+                    self.collect_identifiers_from_expr(e, ids);
+                }
+            }
+            ExprKind::MapLiteral { entries } => {
+                for e in entries {
+                    self.collect_identifiers_from_expr(&e.value, ids);
+                }
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    self.collect_identifiers_from_expr(&f.value, ids);
+                }
+            }
+            ExprKind::OkExpression { value }
+            | ExprKind::ErrExpression { value }
+            | ExprKind::SomeExpression { value }
+            | ExprKind::PropagateExpression { value }
+            | ExprKind::IsSomeExpression { value, .. }
+            | ExprKind::IsNoneExpression { value }
+            | ExprKind::IsOkExpression { value, .. }
+            | ExprKind::IsErrExpression { value, .. }
+            | ExprKind::AwaitExpression { argument: value }
+            | ExprKind::SpawnExpression { argument: value }
+            | ExprKind::CastExpression { value, .. } => {
+                self.collect_identifiers_from_expr(value, ids);
+            }
+            ExprKind::Lambda { body, .. } => {
+                self.collect_identifiers_from_block(body, ids);
+            }
+            _ => {}
+        }
     }
 
     fn gen_ok_expr(&mut self, value: &Expr) -> String {
@@ -1209,14 +1731,27 @@ impl QBECodeGen {
         payload
     }
 
-    fn gen_is_some_expr(&mut self, value: &Expr) -> String {
+    fn gen_is_some_expr(&mut self, value: &Expr, binding: Option<&String>) -> String {
         let val = self.gen_expr(value);
         let tag = self.fresh_reg();
         self.emit(&format!("    {} =l loadl {}", tag, val));
         let cmp_w = self.fresh_reg();
-        self.emit(&format!("    {} =w ceql {}, 0", cmp_w, tag));
+        self.emit(&format!("    {} =w ceql {}, 0", cmp_w, tag)); // tag==0 means Some
         let result = self.fresh_reg();
         self.emit(&format!("    {} =l extsw {}", result, cmp_w));
+        // If there's a binding, extract the payload
+        if let Some(name) = binding {
+            if !name.is_empty() {
+                let slot = self.fresh_reg();
+                self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+                let pay_ptr = self.fresh_reg();
+                self.emit(&format!("    {} =l add {}, 8", pay_ptr, val));
+                let pay = self.fresh_reg();
+                self.emit(&format!("    {} =l loadl {}", pay, pay_ptr));
+                self.emit(&format!("    storel {}, {}", pay, slot));
+                self.variable_registers.insert(name.clone(), slot);
+            }
+        }
         result
     }
 
@@ -1225,31 +1760,56 @@ impl QBECodeGen {
         let tag = self.fresh_reg();
         self.emit(&format!("    {} =l loadl {}", tag, val));
         let cmp_w = self.fresh_reg();
-        self.emit(&format!("    {} =w ceql {}, 1", cmp_w, tag));
+        self.emit(&format!("    {} =w ceql {}, 1", cmp_w, tag)); // tag==1 means None
         let result = self.fresh_reg();
         self.emit(&format!("    {} =l extsw {}", result, cmp_w));
         result
     }
 
-    fn gen_is_ok_expr(&mut self, value: &Expr) -> String {
+    fn gen_is_ok_expr(&mut self, value: &Expr, binding: Option<&String>) -> String {
         let val = self.gen_expr(value);
         let tag = self.fresh_reg();
         self.emit(&format!("    {} =l loadl {}", tag, val));
         let cmp_w = self.fresh_reg();
-        self.emit(&format!("    {} =w ceql {}, 0", cmp_w, tag));
+        self.emit(&format!("    {} =w ceql {}, 0", cmp_w, tag)); // tag==0 means Ok
         let result = self.fresh_reg();
         self.emit(&format!("    {} =l extsw {}", result, cmp_w));
+        if let Some(name) = binding {
+            if !name.is_empty() {
+                let slot = self.fresh_reg();
+                self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+                let pay_ptr = self.fresh_reg();
+                self.emit(&format!("    {} =l add {}, 8", pay_ptr, val));
+                let pay = self.fresh_reg();
+                self.emit(&format!("    {} =l loadl {}", pay, pay_ptr));
+                self.emit(&format!("    storel {}, {}", pay, slot));
+                self.variable_registers.insert(name.clone(), slot);
+            }
+        }
         result
     }
 
-    fn gen_is_err_expr(&mut self, value: &Expr) -> String {
+    fn gen_is_err_expr(&mut self, value: &Expr, binding: Option<&String>) -> String {
         let val = self.gen_expr(value);
         let tag = self.fresh_reg();
         self.emit(&format!("    {} =l loadl {}", tag, val));
         let cmp_w = self.fresh_reg();
-        self.emit(&format!("    {} =w ceql {}, 1", cmp_w, tag));
+        self.emit(&format!("    {} =w ceql {}, 1", cmp_w, tag)); // tag==1 means Err
         let result = self.fresh_reg();
         self.emit(&format!("    {} =l extsw {}", result, cmp_w));
+        if let Some(name) = binding {
+            if !name.is_empty() {
+                let slot = self.fresh_reg();
+                self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+                let pay_ptr = self.fresh_reg();
+                self.emit(&format!("    {} =l add {}, 8", pay_ptr, val));
+                let pay = self.fresh_reg();
+                self.emit(&format!("    {} =l loadl {}", pay, pay_ptr));
+                self.emit(&format!("    storel {}, {}", pay, slot));
+                self.variable_registers.insert(name.clone(), slot);
+                self.variable_types.insert(name.clone(), Type::String);
+            }
+        }
         result
     }
 
@@ -1258,7 +1818,25 @@ impl QBECodeGen {
             // Not in async context: just evaluate the argument
             return self.gen_expr(argument);
         }
-        let future_val = self.gen_expr(argument);
+
+        // Check if this is a sync capability call — need to wrap in completed future
+        let is_sync_cap =
+            self.is_capability_call(argument) && !self.is_async_capability_call(argument);
+        let future_val = if is_sync_cap {
+            // Sync capability: call returns raw value, wrap in immediately-completed future
+            let cap_result = self.gen_expr(argument);
+            let new_future = self.fresh_reg();
+            self.emit(&format!("    {} =l call $mog_future_new()", new_future));
+            self.emit(&format!(
+                "    call $mog_future_complete(l {}, l {})",
+                new_future, cap_result
+            ));
+            new_future
+        } else {
+            // Async capability or regular async call: result IS a future pointer
+            self.gen_expr(argument)
+        };
+
         let await_idx = self.await_counter;
         self.await_counter += 1;
         let cont_lbl = format!("@await{}.cont", await_idx);
@@ -1342,26 +1920,100 @@ impl QBECodeGen {
     }
 
     fn gen_tensor_construction(&mut self, args: &[Expr]) -> String {
-        // Simplified: call tensor_new or tensor_ones/zeros based on args
         if args.is_empty() {
-            let r = self.fresh_reg();
-            self.emit(&format!("    {} =l call $tensor_new(l 0, l 0)", r));
-            return r;
-        }
-        let shape = self.gen_expr(&args[0]);
-        if args.len() > 1 {
-            let data = self.gen_expr(&args[1]);
+            // tensor<f32>() - empty 0-dim tensor
+            let shape_slot = self.fresh_reg();
+            self.emit_alloc(&format!("    {} =l alloc8 8", shape_slot));
+            self.emit(&format!("    storel 0, {}", shape_slot));
             let r = self.fresh_reg();
             self.emit(&format!(
-                "    {} =l call $tensor_create_with_data(l {}, l {})",
-                r, shape, data
+                "    {} =l call $tensor_create(l 0, l {}, l 0)",
+                r, shape_slot
             ));
-            r
-        } else {
-            let r = self.fresh_reg();
-            self.emit(&format!("    {} =l call $tensor_zeros(l {})", r, shape));
-            r
+            return r;
         }
+        // First arg is shape (should be ArrayLiteral)
+        let shape_arg = &args[0];
+        if let ExprKind::ArrayLiteral { elements } = &shape_arg.kind {
+            let ndim = elements.len();
+            // Allocate shape array on heap
+            let shape_buf = self.fresh_reg();
+            self.emit(&format!(
+                "    {} =l call $gc_alloc(l {})",
+                shape_buf,
+                ndim * 8
+            ));
+            for (i, elem) in elements.iter().enumerate() {
+                let dim_val = self.gen_expr(elem);
+                if i == 0 {
+                    self.emit(&format!("    storel {}, {}", dim_val, shape_buf));
+                } else {
+                    let off = self.fresh_reg();
+                    self.emit(&format!("    {} =l add {}, {}", off, shape_buf, i * 8));
+                    self.emit(&format!("    storel {}, {}", dim_val, off));
+                }
+            }
+            if args.len() >= 2 {
+                if let ExprKind::ArrayLiteral {
+                    elements: data_elems,
+                } = &args[1].kind
+                {
+                    // tensor<f32>([shape], [data]) — with float data
+                    let data_count = data_elems.len();
+                    let data_buf = self.fresh_reg();
+                    self.emit(&format!(
+                        "    {} =l call $gc_alloc(l {})",
+                        data_buf,
+                        data_count * 4
+                    )); // float = 4 bytes
+                    for (i, elem) in data_elems.iter().enumerate() {
+                        let elem_val = self.gen_expr(elem);
+                        // Convert to float (may need d->s conversion)
+                        let float_val = if self.float_regs.contains(elem_val.as_str()) {
+                            let sv = self.fresh_reg();
+                            self.emit(&format!("    {} =s truncd {}", sv, elem_val));
+                            sv
+                        } else {
+                            // Integer literal like 1.0 parsed as float
+                            let dv = self.fresh_reg();
+                            self.emit(&format!("    {} =d sltof {}", dv, elem_val));
+                            self.mark_float_reg(&dv);
+                            let sv = self.fresh_reg();
+                            self.emit(&format!("    {} =s truncd {}", sv, dv));
+                            sv
+                        };
+                        if i == 0 {
+                            self.emit(&format!("    stores {}, {}", float_val, data_buf));
+                        } else {
+                            let off = self.fresh_reg();
+                            self.emit(&format!("    {} =l add {}, {}", off, data_buf, i * 4));
+                            self.emit(&format!("    stores {}, {}", float_val, off));
+                        }
+                    }
+                    let r = self.fresh_reg();
+                    self.emit(&format!(
+                        "    {} =l call $tensor_create_with_data(l {}, l {}, l {}, l 0)",
+                        r, ndim, shape_buf, data_buf
+                    ));
+                    return r;
+                }
+            }
+            // tensor<f32>([shape]) — zeros
+            let r = self.fresh_reg();
+            self.emit(&format!(
+                "    {} =l call $tensor_create(l {}, l {}, l 0)",
+                r, ndim, shape_buf
+            ));
+            return r;
+        }
+        // Fallback: pass shape expr directly
+        let shape = self.gen_expr(shape_arg);
+        let r = self.fresh_reg();
+        self.emit(&format!(
+            "    {} =l call $tensor_create(l 1, l {}, l 0)",
+            r, shape
+        ));
+        r
     }
 
     fn gen_capability_call(
@@ -1369,11 +2021,14 @@ impl QBECodeGen {
         cap_name: &str,
         method: &str,
         arg_regs: &[String],
-        _arguments: &[Expr],
+        arguments: &[Expr],
     ) -> String {
         let nargs = arg_regs.len();
         let cap_str = self.register_string(cap_name);
         let method_str = self.register_string(method);
+        // Get VM pointer
+        let vm = self.fresh_reg();
+        self.emit(&format!("    {} =l call $mog_vm_get_global()", vm));
         // Allocate output MogValue (24 bytes)
         let out = self.fresh_reg();
         self.emit(&format!("    {} =l call $gc_alloc(l 24)", out));
@@ -1387,28 +2042,49 @@ impl QBECodeGen {
             ));
             for (i, arg) in arg_regs.iter().enumerate() {
                 let base = i * 24;
+                // Determine MogValue tag: 0=INT, 1=FLOAT, 3=STRING
+                let tag = if i < arguments.len() && self.is_string_producing_expr(&arguments[i]) {
+                    3 // MOG_STRING
+                } else if i < arguments.len() && self.is_float_operand(&arguments[i]) {
+                    1 // MOG_FLOAT
+                } else {
+                    0 // MOG_INT
+                };
                 if base == 0 {
-                    self.emit(&format!("    storel 0, {}", args_buf)); // tag=MOG_INT
+                    self.emit(&format!("    storel {}, {}", tag, args_buf));
                     let doff = self.fresh_reg();
                     self.emit(&format!("    {} =l add {}, 8", doff, args_buf));
-                    self.emit(&format!("    storel {}, {}", arg, doff));
+                    if tag == 1 {
+                        // Float: store as double bits
+                        let bits = self.fresh_reg();
+                        self.emit(&format!("    {} =l cast {}", bits, arg));
+                        self.emit(&format!("    storel {}, {}", bits, doff));
+                    } else {
+                        self.emit(&format!("    storel {}, {}", arg, doff));
+                    }
                 } else {
                     let toff = self.fresh_reg();
                     self.emit(&format!("    {} =l add {}, {}", toff, args_buf, base));
-                    self.emit(&format!("    storel 0, {}", toff)); // tag
+                    self.emit(&format!("    storel {}, {}", tag, toff));
                     let doff = self.fresh_reg();
                     self.emit(&format!("    {} =l add {}, {}", doff, args_buf, base + 8));
-                    self.emit(&format!("    storel {}, {}", arg, doff));
+                    if tag == 1 {
+                        let bits = self.fresh_reg();
+                        self.emit(&format!("    {} =l cast {}", bits, arg));
+                        self.emit(&format!("    storel {}, {}", bits, doff));
+                    } else {
+                        self.emit(&format!("    storel {}, {}", arg, doff));
+                    }
                 }
             }
             self.emit(&format!(
-                "    call $mog_cap_call_out(l {}, l 0, l {}, l {}, l {}, w {})",
-                out, cap_str, method_str, args_buf, nargs
+                "    call $mog_cap_call_out(l {}, l {}, l {}, l {}, l {}, w {})",
+                out, vm, cap_str, method_str, args_buf, nargs
             ));
         } else {
             self.emit(&format!(
-                "    call $mog_cap_call_out(l {}, l 0, l {}, l {}, l 0, w 0)",
-                out, cap_str, method_str
+                "    call $mog_cap_call_out(l {}, l {}, l {}, l {}, l 0, w 0)",
+                out, vm, cap_str, method_str
             ));
         }
         // Read result from out+8
@@ -1566,8 +2242,9 @@ impl QBECodeGen {
                     .insert(variable.clone(), slot.clone());
                 let test_lbl = self.fresh_label();
                 let body_lbl = self.fresh_label();
+                let step_lbl = self.fresh_label();
                 let end_lbl = self.fresh_label();
-                self.loop_stack.push((end_lbl.clone(), test_lbl.clone()));
+                self.loop_stack.push((end_lbl.clone(), step_lbl.clone()));
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", test_lbl));
                 let i = self.fresh_reg();
@@ -1577,6 +2254,10 @@ impl QBECodeGen {
                 self.emit(&format!("    jnz {}, {}, {}", cmp, body_lbl, end_lbl));
                 self.emit(&format!("{}", body_lbl));
                 self.gen_block_stmts(&body.statements);
+                if !self.block_terminated {
+                    self.emit(&format!("    jmp {}", step_lbl));
+                }
+                self.emit(&format!("{}", step_lbl));
                 let cur = self.fresh_reg();
                 self.emit(&format!("    {} =l loadl {}", cur, slot));
                 let inc = self.fresh_reg();
@@ -1603,8 +2284,9 @@ impl QBECodeGen {
                     .insert(variable.clone(), slot.clone());
                 let test_lbl = self.fresh_label();
                 let body_lbl = self.fresh_label();
+                let step_lbl = self.fresh_label();
                 let end_lbl = self.fresh_label();
-                self.loop_stack.push((end_lbl.clone(), test_lbl.clone()));
+                self.loop_stack.push((end_lbl.clone(), step_lbl.clone()));
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", test_lbl));
                 let i = self.fresh_reg();
@@ -1614,6 +2296,10 @@ impl QBECodeGen {
                 self.emit(&format!("    jnz {}, {}, {}", cmp, body_lbl, end_lbl));
                 self.emit(&format!("{}", body_lbl));
                 self.gen_block_stmts(&body.statements);
+                if !self.block_terminated {
+                    self.emit(&format!("    jmp {}", step_lbl));
+                }
+                self.emit(&format!("{}", step_lbl));
                 let cur = self.fresh_reg();
                 self.emit(&format!("    {} =l loadl {}", cur, slot));
                 let inc = self.fresh_reg();
@@ -1632,7 +2318,7 @@ impl QBECodeGen {
             } => {
                 let arr = self.gen_expr(array);
                 let len = self.fresh_reg();
-                self.emit(&format!("    {} =l loadl {}", len, arr));
+                self.emit(&format!("    {} =l call $array_length(l {})", len, arr));
                 let idx_slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", idx_slot));
                 self.emit(&format!("    storel 0, {}", idx_slot));
@@ -1642,8 +2328,9 @@ impl QBECodeGen {
                     .insert(variable.clone(), val_slot.clone());
                 let test_lbl = self.fresh_label();
                 let body_lbl = self.fresh_label();
+                let step_lbl = self.fresh_label();
                 let end_lbl = self.fresh_label();
-                self.loop_stack.push((end_lbl.clone(), test_lbl.clone()));
+                self.loop_stack.push((end_lbl.clone(), step_lbl.clone()));
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", test_lbl));
                 let idx = self.fresh_reg();
@@ -1659,6 +2346,10 @@ impl QBECodeGen {
                 ));
                 self.emit(&format!("    storel {}, {}", elem, val_slot));
                 self.gen_block_stmts(&body.statements);
+                if !self.block_terminated {
+                    self.emit(&format!("    jmp {}", step_lbl));
+                }
+                self.emit(&format!("{}", step_lbl));
                 let cur_idx = self.fresh_reg();
                 self.emit(&format!("    {} =l loadl {}", cur_idx, idx_slot));
                 let inc = self.fresh_reg();
@@ -1675,42 +2366,77 @@ impl QBECodeGen {
                 iterable,
                 body,
             } => {
+                let is_map = self.is_map_expr(iterable);
                 let arr = self.gen_expr(iterable);
                 let len = self.fresh_reg();
-                self.emit(&format!("    {} =l loadl {}", len, arr));
-                let idx_slot = self.fresh_reg();
-                self.emit_alloc(&format!("    {} =l alloc8 8", idx_slot));
-                self.emit(&format!("    storel 0, {}", idx_slot));
+                if is_map {
+                    self.emit(&format!("    {} =l call $map_size(l {})", len, arr));
+                } else {
+                    self.emit(&format!("    {} =l call $array_length(l {})", len, arr));
+                }
+                // For maps: use a hidden counter separate from the key variable
+                let counter_slot = self.fresh_reg();
+                self.emit_alloc(&format!("    {} =l alloc8 8", counter_slot));
+                self.emit(&format!("    storel 0, {}", counter_slot));
+                let key_slot = self.fresh_reg();
+                self.emit_alloc(&format!("    {} =l alloc8 8", key_slot));
                 self.variable_registers
-                    .insert(index_variable.clone(), idx_slot.clone());
+                    .insert(index_variable.clone(), key_slot.clone());
+                if is_map {
+                    self.variable_types
+                        .insert(index_variable.clone(), Type::String);
+                }
                 let val_slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", val_slot));
                 self.variable_registers
                     .insert(value_variable.clone(), val_slot.clone());
                 let test_lbl = self.fresh_label();
                 let body_lbl = self.fresh_label();
+                let step_lbl = self.fresh_label();
                 let end_lbl = self.fresh_label();
-                self.loop_stack.push((end_lbl.clone(), test_lbl.clone()));
+                self.loop_stack.push((end_lbl.clone(), step_lbl.clone()));
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", test_lbl));
                 let idx = self.fresh_reg();
-                self.emit(&format!("    {} =l loadl {}", idx, idx_slot));
+                self.emit(&format!("    {} =l loadl {}", idx, counter_slot));
                 let cmp = self.fresh_reg();
                 self.emit(&format!("    {} =w csltl {}, {}", cmp, idx, len));
                 self.emit(&format!("    jnz {}, {}, {}", cmp, body_lbl, end_lbl));
                 self.emit(&format!("{}", body_lbl));
-                let elem = self.fresh_reg();
-                self.emit(&format!(
-                    "    {} =l call $array_get(l {}, l {})",
-                    elem, arr, idx
-                ));
-                self.emit(&format!("    storel {}, {}", elem, val_slot));
+                if is_map {
+                    // For maps: key_slot = key (string), val_slot = value
+                    let key = self.fresh_reg();
+                    self.emit(&format!(
+                        "    {} =l call $map_key_at(l {}, l {})",
+                        key, arr, idx
+                    ));
+                    self.emit(&format!("    storel {}, {}", key, key_slot));
+                    let val = self.fresh_reg();
+                    self.emit(&format!(
+                        "    {} =l call $map_value_at(l {}, l {})",
+                        val, arr, idx
+                    ));
+                    self.emit(&format!("    storel {}, {}", val, val_slot));
+                } else {
+                    // For arrays: key_slot = index (int), val_slot = element
+                    self.emit(&format!("    storel {}, {}", idx, key_slot));
+                    let elem = self.fresh_reg();
+                    self.emit(&format!(
+                        "    {} =l call $array_get(l {}, l {})",
+                        elem, arr, idx
+                    ));
+                    self.emit(&format!("    storel {}, {}", elem, val_slot));
+                }
                 self.gen_block_stmts(&body.statements);
+                if !self.block_terminated {
+                    self.emit(&format!("    jmp {}", step_lbl));
+                }
+                self.emit(&format!("{}", step_lbl));
                 let cur_idx = self.fresh_reg();
-                self.emit(&format!("    {} =l loadl {}", cur_idx, idx_slot));
+                self.emit(&format!("    {} =l loadl {}", cur_idx, counter_slot));
                 let inc = self.fresh_reg();
                 self.emit(&format!("    {} =l add {}, 1", inc, cur_idx));
-                self.emit(&format!("    storel {}, {}", inc, idx_slot));
+                self.emit(&format!("    storel {}, {}", inc, counter_slot));
                 self.emit_interrupt_check();
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", end_lbl));
@@ -1723,10 +2449,8 @@ impl QBECodeGen {
                 body,
             } => {
                 let m = self.gen_expr(map);
-                let keys = self.fresh_reg();
-                self.emit(&format!("    {} =l call $map_keys(l {})", keys, m));
                 let len = self.fresh_reg();
-                self.emit(&format!("    {} =l loadl {}", len, keys));
+                self.emit(&format!("    {} =l call $map_size(l {})", len, m));
                 let idx_slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", idx_slot));
                 self.emit(&format!("    storel 0, {}", idx_slot));
@@ -1734,14 +2458,17 @@ impl QBECodeGen {
                 self.emit_alloc(&format!("    {} =l alloc8 8", key_slot));
                 self.variable_registers
                     .insert(key_variable.clone(), key_slot.clone());
+                self.variable_types
+                    .insert(key_variable.clone(), Type::String);
                 let val_slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", val_slot));
                 self.variable_registers
                     .insert(value_variable.clone(), val_slot.clone());
                 let test_lbl = self.fresh_label();
                 let body_lbl = self.fresh_label();
+                let step_lbl = self.fresh_label();
                 let end_lbl = self.fresh_label();
-                self.loop_stack.push((end_lbl.clone(), test_lbl.clone()));
+                self.loop_stack.push((end_lbl.clone(), step_lbl.clone()));
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", test_lbl));
                 let idx = self.fresh_reg();
@@ -1750,16 +2477,24 @@ impl QBECodeGen {
                 self.emit(&format!("    {} =w csltl {}, {}", cmp, idx, len));
                 self.emit(&format!("    jnz {}, {}, {}", cmp, body_lbl, end_lbl));
                 self.emit(&format!("{}", body_lbl));
+                // Get key and value by index
                 let key = self.fresh_reg();
                 self.emit(&format!(
-                    "    {} =l call $array_get(l {}, l {})",
-                    key, keys, idx
+                    "    {} =l call $map_key_at(l {}, l {})",
+                    key, m, idx
                 ));
                 self.emit(&format!("    storel {}, {}", key, key_slot));
                 let val = self.fresh_reg();
-                self.emit(&format!("    {} =l call $map_get(l {}, l {})", val, m, key));
+                self.emit(&format!(
+                    "    {} =l call $map_value_at(l {}, l {})",
+                    val, m, idx
+                ));
                 self.emit(&format!("    storel {}, {}", val, val_slot));
                 self.gen_block_stmts(&body.statements);
+                if !self.block_terminated {
+                    self.emit(&format!("    jmp {}", step_lbl));
+                }
+                self.emit(&format!("{}", step_lbl));
                 let cur_idx = self.fresh_reg();
                 self.emit(&format!("    {} =l loadl {}", cur_idx, idx_slot));
                 let inc = self.fresh_reg();
@@ -1905,7 +2640,11 @@ impl QBECodeGen {
         let saved_reg_counter = self.reg_counter;
         let saved_label_counter = self.label_counter;
         let saved_float_regs = self.float_regs.clone();
+        let saved_in_async = self.in_async_function;
+        let saved_coro_frame = self.coro_frame.take();
+        let saved_coro_future = self.coro_future.take();
         self.block_terminated = false;
+        self.in_async_function = false;
         self.reset_counters();
         self.current_function_return_type = Some(return_type.clone());
 
@@ -2001,6 +2740,110 @@ impl QBECodeGen {
         self.reg_counter = saved_reg_counter;
         self.label_counter = saved_label_counter;
         self.float_regs = saved_float_regs;
+        self.in_async_function = saved_in_async;
+        self.coro_frame = saved_coro_frame;
+        self.coro_future = saved_coro_future;
+    }
+
+    /// Scan a block's statements recursively for all variable names that need
+    /// spilling across await points in a coroutine frame.
+    fn collect_declared_vars(stmts: &[Statement], out: &mut Vec<String>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StatementKind::VariableDeclaration { name, .. } => {
+                    if !out.contains(name) {
+                        out.push(name.clone());
+                    }
+                }
+                StatementKind::ExpressionStatement { expression } => {
+                    if let ExprKind::AssignmentExpression {
+                        name: Some(name), ..
+                    } = &expression.kind
+                    {
+                        if !out.contains(name) {
+                            out.push(name.clone());
+                        }
+                    }
+                }
+                StatementKind::Conditional {
+                    true_branch,
+                    false_branch,
+                    ..
+                } => {
+                    Self::collect_declared_vars(&true_branch.statements, out);
+                    if let Some(fb) = false_branch {
+                        Self::collect_declared_vars(&fb.statements, out);
+                    }
+                }
+                StatementKind::WhileLoop { body, .. } => {
+                    Self::collect_declared_vars(&body.statements, out);
+                }
+                StatementKind::ForLoop { variable, body, .. } => {
+                    if !out.contains(variable) {
+                        out.push(variable.clone());
+                    }
+                    Self::collect_declared_vars(&body.statements, out);
+                }
+                StatementKind::ForEachLoop { variable, body, .. } => {
+                    if !out.contains(variable) {
+                        out.push(variable.clone());
+                    }
+                    Self::collect_declared_vars(&body.statements, out);
+                }
+                StatementKind::ForInRange { variable, body, .. } => {
+                    if !out.contains(variable) {
+                        out.push(variable.clone());
+                    }
+                    Self::collect_declared_vars(&body.statements, out);
+                }
+                StatementKind::ForInIndex {
+                    index_variable,
+                    value_variable,
+                    body,
+                    ..
+                } => {
+                    if !out.contains(index_variable) {
+                        out.push(index_variable.clone());
+                    }
+                    if !out.contains(value_variable) {
+                        out.push(value_variable.clone());
+                    }
+                    Self::collect_declared_vars(&body.statements, out);
+                }
+                StatementKind::ForInMap {
+                    key_variable,
+                    value_variable,
+                    body,
+                    ..
+                } => {
+                    if !out.contains(key_variable) {
+                        out.push(key_variable.clone());
+                    }
+                    if !out.contains(value_variable) {
+                        out.push(value_variable.clone());
+                    }
+                    Self::collect_declared_vars(&body.statements, out);
+                }
+                StatementKind::TryCatch {
+                    try_body,
+                    error_var,
+                    catch_body,
+                } => {
+                    Self::collect_declared_vars(&try_body.statements, out);
+                    if !out.contains(error_var) {
+                        out.push(error_var.clone());
+                    }
+                    Self::collect_declared_vars(&catch_body.statements, out);
+                }
+                StatementKind::Block { statements, .. } => {
+                    Self::collect_declared_vars(statements, out);
+                }
+                StatementKind::WithBlock { body, .. } => {
+                    Self::collect_declared_vars(&body.statements, out);
+                }
+                _ => {}
+            }
+        }
     }
 
     fn gen_async_function_decl(
@@ -2013,8 +2856,296 @@ impl QBECodeGen {
     ) {
         self.has_async_functions = true;
         self.async_functions.insert(name.to_string());
-        // For now, generate as sync function that returns a future
-        self.gen_function_decl(name, params, return_type, body, is_public);
+
+        // --- Save all codegen state (same pattern as gen_function_decl) ---
+        let saved_regs = std::mem::take(&mut self.variable_registers);
+        let saved_types = std::mem::take(&mut self.variable_types);
+        let saved_entry = std::mem::take(&mut self.entry_allocs);
+        let saved_func = std::mem::take(&mut self.current_func_lines);
+        let saved_ret = self.current_function_return_type.take();
+        let saved_term = self.block_terminated;
+        let saved_reg_counter = self.reg_counter;
+        let saved_label_counter = self.label_counter;
+        let saved_float_regs = self.float_regs.clone();
+        let saved_in_async = self.in_async_function;
+        let saved_coro_frame = self.coro_frame.take();
+        let saved_coro_future = self.coro_future.take();
+        let saved_await_counter = self.await_counter;
+        let saved_coro_spilled = std::mem::take(&mut self.coro_spilled_vars);
+        let saved_coro_resume = std::mem::take(&mut self.coro_resume_blocks);
+        self.block_terminated = false;
+        self.reset_counters();
+
+        let func_name = if name == "main" {
+            "program_user".to_string()
+        } else {
+            format!("{}{}", self.package_prefix, name)
+        };
+
+        // --- Set up async/coroutine state ---
+        self.in_async_function = true;
+        self.coro_frame = Some("%frame".to_string());
+        self.await_counter = 0;
+        self.coro_resume_blocks.clear();
+        self.current_function_return_type = Some(return_type.clone());
+
+        // Collect all variables that need spilling
+        let mut spilled: Vec<String> = Vec::new();
+        for p in params {
+            if !spilled.contains(&p.name) {
+                spilled.push(p.name.clone());
+            }
+        }
+        Self::collect_declared_vars(&body.statements, &mut spilled);
+        self.coro_spilled_vars = spilled.clone();
+
+        // Frame layout: [resume_fn(8)] [state(8)] [future(8)] [var0(8)] ... [varN(8)] [awaited_future(8)]
+        let num_spilled = spilled.len();
+        let frame_size = CORO_HEADER_SIZE as usize + (num_spilled + 1) * 8;
+        self._coro_frame_size = frame_size as u32;
+
+        // Set coro_future — will be loaded in the coro entry
+        self.coro_future = Some("%c.future".to_string());
+
+        // Register function param info and types
+        let param_info: Vec<(String, Type)> = params
+            .iter()
+            .map(|p| (p.name.clone(), p.param_type.clone()))
+            .collect();
+        self.function_param_info
+            .insert(func_name.clone(), param_info);
+        self.function_types
+            .insert(func_name.clone(), return_type.clone());
+
+        // --- Generate coroutine body ---
+        // Allocate stack slots for all params (same as gen_function_decl)
+        for p in params {
+            let slot = self.fresh_reg();
+            self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+            self.variable_registers.insert(p.name.clone(), slot);
+            self.variable_types
+                .insert(p.name.clone(), p.param_type.clone());
+        }
+
+        self.emit("    call $gc_push_frame()");
+        self.gen_block_stmts(&body.statements);
+        if !self.block_terminated {
+            // Implicit return: complete future with 0
+            self.emit(&format!("    call $mog_future_complete(l %c.future, l 0)"));
+            self.emit("    call $gc_pop_frame()");
+            self.emit("    ret");
+        }
+
+        // Capture generated lines and entry allocs
+        let body_entry_allocs = std::mem::take(&mut self.entry_allocs);
+        let body_lines = std::mem::take(&mut self.current_func_lines);
+        let resume_blocks = self.coro_resume_blocks.clone();
+
+        // ===================================================================
+        // Assemble the CORO function: $funcName.coro(l %frame)
+        // ===================================================================
+        let mut coro_ir = format!("function ${}.coro(l %frame) {{\n", func_name);
+        coro_ir.push_str("@c.entry\n");
+
+        // Entry allocs (must be in entry block per QBE rules)
+        for alloc in &body_entry_allocs {
+            coro_ir.push_str(alloc);
+            coro_ir.push('\n');
+        }
+
+        // Load future from frame
+        coro_ir.push_str("    %c.future.ptr =l add %frame, 16\n");
+        coro_ir.push_str("    %c.future =l loadl %c.future.ptr\n");
+
+        // Load state from frame
+        coro_ir.push_str("    %c.state.ptr =l add %frame, 8\n");
+        coro_ir.push_str("    %c.state =l loadl %c.state.ptr\n");
+
+        // Branch: initial (-1) vs dispatch (resume)
+        coro_ir.push_str("    %c.is_initial =w ceql %c.state, -1\n");
+        coro_ir.push_str("    jnz %c.is_initial, @c.initial, @c.dispatch\n");
+
+        // --- @c.dispatch: restore vars from frame and jump to the right resume point ---
+        coro_ir.push_str("@c.dispatch\n");
+
+        // Restore ALL spilled vars from frame
+        {
+            let mut offset = CORO_HEADER_SIZE;
+            for (i, var_name) in spilled.iter().enumerate() {
+                // Find the alloc slot for this var in body_entry_allocs
+                // The slot register is the i-th param/var allocation
+                // We need to find the register from the variable_registers map
+                // but that's been used during body generation.
+                // Instead, parse the entry_allocs to find the register name.
+                // The entry_allocs are pairs: "    %v.N =l alloc8 8" + "  storel 0, %v.N"
+                // The first param alloc is at index 0*2, second at 1*2, etc.
+                let alloc_idx = i * 2; // Each alloc produces 2 lines (alloc + zero-init)
+                if alloc_idx < body_entry_allocs.len() {
+                    if let Some(reg) = body_entry_allocs[alloc_idx]
+                        .split('=')
+                        .next()
+                        .map(|s| s.trim().to_string())
+                    {
+                        let roff = format!("%c.r.{}", i);
+                        coro_ir.push_str(&format!("    {} =l add %frame, {}\n", roff, offset));
+                        let rval = format!("%c.rv.{}", i);
+                        let var_is_float = params
+                            .iter()
+                            .find(|p| p.name == *var_name)
+                            .map(|p| p.param_type.is_float())
+                            .unwrap_or(false);
+                        if var_is_float {
+                            coro_ir.push_str(&format!("    {} =d loadd {}\n", rval, roff));
+                            coro_ir.push_str(&format!("    stored {}, {}\n", rval, reg));
+                        } else {
+                            coro_ir.push_str(&format!("    {} =l loadl {}\n", rval, roff));
+                            coro_ir.push_str(&format!("    storel {}, {}\n", rval, reg));
+                        }
+                    }
+                }
+                offset += 8;
+            }
+        }
+
+        // Linear dispatch chain: compare state to 0, 1, 2, ... and jump
+        for (i, lbl) in resume_blocks.iter().enumerate() {
+            let cmp_reg = format!("%c.cmp.{}", i);
+            coro_ir.push_str(&format!("    {} =w ceql %c.state, {}\n", cmp_reg, i));
+            let next_lbl = if i + 1 < resume_blocks.len() {
+                format!("@c.check.{}", i + 1)
+            } else {
+                "@c.dispatch.end".to_string()
+            };
+            coro_ir.push_str(&format!("    jnz {}, {}, {}\n", cmp_reg, lbl, next_lbl));
+            if i + 1 < resume_blocks.len() {
+                coro_ir.push_str(&format!("@c.check.{}\n", i + 1));
+            }
+        }
+
+        coro_ir.push_str("@c.dispatch.end\n");
+        coro_ir.push_str("    call $gc_pop_frame()\n");
+        coro_ir.push_str("    ret\n");
+
+        // --- @c.initial: load params from frame, then fall through to body ---
+        coro_ir.push_str("@c.initial\n");
+
+        // Load params from frame into their stack slots
+        {
+            let mut offset = CORO_HEADER_SIZE;
+            for (i, p) in params.iter().enumerate() {
+                let alloc_idx = i * 2;
+                if alloc_idx < body_entry_allocs.len() {
+                    if let Some(reg) = body_entry_allocs[alloc_idx]
+                        .split('=')
+                        .next()
+                        .map(|s| s.trim().to_string())
+                    {
+                        let poff = format!("%c.p.{}", i);
+                        coro_ir.push_str(&format!("    {} =l add %frame, {}\n", poff, offset));
+                        let pval = format!("%c.pv.{}", i);
+                        let op = if p.param_type.is_float() {
+                            coro_ir.push_str(&format!("    {} =d loadd {}\n", pval, poff));
+                            "stored"
+                        } else {
+                            coro_ir.push_str(&format!("    {} =l loadl {}\n", pval, poff));
+                            "storel"
+                        };
+                        coro_ir.push_str(&format!("    {} {}, {}\n", op, pval, reg));
+                    }
+                }
+                offset += 8;
+            }
+        }
+
+        // Body code
+        for line in &body_lines {
+            coro_ir.push_str(line);
+            coro_ir.push('\n');
+        }
+        coro_ir.push_str("}\n\n");
+        self.output.push_str(&coro_ir);
+
+        // ===================================================================
+        // Assemble the WRAPPER function: $funcName(params...) -> l (future)
+        // ===================================================================
+        let mut param_strs = Vec::new();
+        for p in params {
+            let pty = self.to_qbe_type(&p.param_type);
+            param_strs.push(format!("{} %p.{}", pty, p.name));
+        }
+        let params_joined = param_strs.join(", ");
+
+        let export = if is_public && self.plugin_mode {
+            "export "
+        } else {
+            ""
+        };
+
+        let mut wrapper_ir = format!(
+            "{}function l ${}({}) {{\n",
+            export, func_name, params_joined
+        );
+        wrapper_ir.push_str("@start\n");
+
+        // Allocate frame
+        wrapper_ir.push_str(&format!(
+            "    %init.frame =l call $malloc(l {})\n",
+            frame_size
+        ));
+        // frame[0] = resume function pointer
+        wrapper_ir.push_str(&format!("    storel ${}.coro, %init.frame\n", func_name));
+        // frame[8] = state = -1 (initial)
+        wrapper_ir.push_str("    %s0 =l add %init.frame, 8\n");
+        wrapper_ir.push_str("    storel -1, %s0\n");
+        // frame[16] = future
+        wrapper_ir.push_str("    %init.future =l call $mog_future_new()\n");
+        wrapper_ir.push_str("    %f0 =l add %init.frame, 16\n");
+        wrapper_ir.push_str("    storel %init.future, %f0\n");
+        // Set coro frame on the future
+        wrapper_ir.push_str("    call $mog_future_set_coro_frame(l %init.future, l %init.frame)\n");
+        // Store params into frame at offset 24+
+        {
+            let mut offset = CORO_HEADER_SIZE;
+            for (i, p) in params.iter().enumerate() {
+                let poff = format!("%wp.{}", i);
+                wrapper_ir.push_str(&format!("    {} =l add %init.frame, {}\n", poff, offset));
+                let op = if p.param_type.is_float() {
+                    "stored"
+                } else {
+                    "storel"
+                };
+                wrapper_ir.push_str(&format!("    {} %p.{}, {}\n", op, p.name, poff));
+                offset += 8;
+            }
+        }
+        // Eager execution: call the coro function
+        wrapper_ir.push_str(&format!("    call ${}.coro(l %init.frame)\n", func_name));
+        // Return the future
+        wrapper_ir.push_str("    ret %init.future\n");
+        wrapper_ir.push_str("}\n\n");
+        self.output.push_str(&wrapper_ir);
+
+        if is_public {
+            self.pub_functions
+                .push((name.to_string(), params.len(), true));
+        }
+
+        // --- Restore all state ---
+        self.variable_registers = saved_regs;
+        self.variable_types = saved_types;
+        self.entry_allocs = saved_entry;
+        self.current_func_lines = saved_func;
+        self.current_function_return_type = saved_ret;
+        self.block_terminated = saved_term;
+        self.reg_counter = saved_reg_counter;
+        self.label_counter = saved_label_counter;
+        self.float_regs = saved_float_regs;
+        self.in_async_function = saved_in_async;
+        self.coro_frame = saved_coro_frame;
+        self.coro_future = saved_coro_future;
+        self.await_counter = saved_await_counter;
+        self.coro_spilled_vars = saved_coro_spilled;
+        self.coro_resume_blocks = saved_coro_resume;
     }
 
     // -----------------------------------------------------------------------
@@ -2218,6 +3349,9 @@ impl QBECodeGen {
     }
 
     fn gen_main_entry(&mut self, has_program_fn: bool) {
+        let is_async_main =
+            self.async_functions.contains("main") || self.async_functions.contains("program_user");
+
         let mut main_ir = String::from("export function w $main() {\n@start\n");
         main_ir.push_str("    call $gc_init()\n");
         main_ir.push_str("    call $gc_push_frame()\n");
@@ -2231,19 +3365,36 @@ impl QBECodeGen {
         main_ir.push_str("    call $mog_register_posix_host(l %new_vm)\n");
         main_ir.push_str("    jmp @have_vm\n");
         main_ir.push_str("@have_vm\n");
-        if has_program_fn {
-            main_ir.push_str("    call $mog_program()\n");
-        }
-        if self.function_types.contains_key("main")
-            || self.function_types.contains_key("program_user")
-        {
-            main_ir.push_str("    %ret =l call $program_user()\n");
+
+        if is_async_main {
+            // Async main: create event loop, call program_user (returns future), run loop
+            main_ir.push_str("    %loop =l call $mog_loop_new()\n");
+            main_ir.push_str("    call $mog_loop_set_global(l %loop)\n");
+            if has_program_fn {
+                main_ir.push_str("    call $mog_program()\n");
+            }
+            main_ir.push_str("    %future =l call $program_user()\n");
+            main_ir.push_str("    call $mog_loop_run(l %loop)\n");
+            main_ir.push_str("    %ret =l call $mog_future_get_result(l %future)\n");
+            main_ir.push_str("    call $mog_loop_free(l %loop)\n");
             main_ir.push_str("    call $gc_pop_frame()\n");
             main_ir.push_str("    %retw =w copy %ret\n");
             main_ir.push_str("    ret %retw\n");
         } else {
-            main_ir.push_str("    call $gc_pop_frame()\n");
-            main_ir.push_str("    ret 0\n");
+            if has_program_fn {
+                main_ir.push_str("    call $mog_program()\n");
+            }
+            if self.function_types.contains_key("main")
+                || self.function_types.contains_key("program_user")
+            {
+                main_ir.push_str("    %ret =l call $program_user()\n");
+                main_ir.push_str("    call $gc_pop_frame()\n");
+                main_ir.push_str("    %retw =w copy %ret\n");
+                main_ir.push_str("    ret %retw\n");
+            } else {
+                main_ir.push_str("    call $gc_pop_frame()\n");
+                main_ir.push_str("    ret 0\n");
+            }
         }
         main_ir.push_str("}\n\n");
         self.output.push_str(&main_ir);
@@ -2379,6 +3530,19 @@ impl QBECodeGen {
     }
 
     fn gen_identifier(&mut self, name: &str) -> String {
+        // Math constants
+        if name == "PI" {
+            let r = self.fresh_reg();
+            self.emit(&format!("    {} =d copy d_3.141592653589793e0", r));
+            self.mark_float_reg(&r);
+            return r;
+        }
+        if name == "E" {
+            let r = self.fresh_reg();
+            self.emit(&format!("    {} =d copy d_2.718281828459045e0", r));
+            self.mark_float_reg(&r);
+            return r;
+        }
         if let Some(slot) = self.variable_registers.get(name).cloned() {
             let reg = self.fresh_reg();
             let is_float = matches!(self.variable_types.get(name), Some(t) if t.is_float());
@@ -2467,6 +3631,27 @@ impl QBECodeGen {
             self.emit(&format!(
                 "  {} =l call ${}(l {}, l {}, l 0)",
                 result, runtime_fn, scalar, array
+            ));
+            return result;
+        }
+
+        // Tensor element-wise operations
+        let is_tensor_left = self.is_tensor_producing_expr(left);
+        let is_tensor_right = self.is_tensor_producing_expr(right);
+        if is_tensor_left && is_tensor_right {
+            let l = self.gen_expr(left);
+            let r = self.gen_expr(right);
+            let result = self.fresh_reg();
+            let runtime_fn = match op {
+                "+" => "tensor_add",
+                "-" => "tensor_sub",
+                "*" => "tensor_mul",
+                "/" => "tensor_div",
+                _ => "tensor_add",
+            };
+            self.emit(&format!(
+                "  {} =l call ${}(l {}, l {})",
+                result, runtime_fn, l, r
             ));
             return result;
         }
@@ -2858,27 +4043,56 @@ impl QBECodeGen {
                 _ => {}
             }
 
-            // Async combinators
+            // Async combinators: all([...]) and race([...])
+            // mog_all / mog_race take (MogFuture** buf, int count)
             match name.as_str() {
-                "all" => {
-                    let r = self.fresh_reg();
-                    let arg_list: String = arg_regs
-                        .iter()
-                        .map(|r| format!("l {}", r))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.emit(&format!("  {} =l call $mog_all({})", r, arg_list));
-                    return r;
-                }
-                "race" => {
-                    let r = self.fresh_reg();
-                    let arg_list: String = arg_regs
-                        .iter()
-                        .map(|r| format!("l {}", r))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.emit(&format!("  {} =l call $mog_race({})", r, arg_list));
-                    return r;
+                "all" | "race" => {
+                    let runtime_fn = if name == "all" {
+                        "$mog_all"
+                    } else {
+                        "$mog_race"
+                    };
+                    // Check if the single argument is an ArrayLiteral
+                    if arguments.len() == 1 {
+                        if let ExprKind::ArrayLiteral { elements } = &arguments[0].kind {
+                            // Generate each element (future) individually
+                            let mut future_regs = Vec::new();
+                            for elem in elements {
+                                let fr = self.gen_expr(elem);
+                                future_regs.push(fr);
+                            }
+                            let count = future_regs.len();
+                            let buf_size = count * 8;
+                            let buf = self.fresh_reg();
+                            self.emit(&format!("  {} =l call $gc_alloc(l {})", buf, buf_size));
+                            for (i, fr) in future_regs.iter().enumerate() {
+                                if i == 0 {
+                                    self.emit(&format!("  storel {}, {}", fr, buf));
+                                } else {
+                                    let off = self.fresh_reg();
+                                    self.emit(&format!("  {} =l add {}, {}", off, buf, i * 8));
+                                    self.emit(&format!("  storel {}, {}", fr, off));
+                                }
+                            }
+                            let r = self.fresh_reg();
+                            self.emit(&format!(
+                                "  {} =l call {}(l {}, l {})",
+                                r, runtime_fn, buf, count
+                            ));
+                            return r;
+                        }
+                    }
+                    // Fallback: argument is not an ArrayLiteral (e.g. a variable)
+                    // Pass the already-evaluated arg as-is (pointer to array + count unknown,
+                    // use the single arg_reg as the buffer pointer with count 1)
+                    if !arg_regs.is_empty() {
+                        let r = self.fresh_reg();
+                        self.emit(&format!(
+                            "  {} =l call {}(l {}, l 1)",
+                            r, runtime_fn, arg_regs[0]
+                        ));
+                        return r;
+                    }
                 }
                 _ => {}
             }
@@ -3347,7 +4561,9 @@ impl QBECodeGen {
                 if let Some(ae) = arg_expr {
                     if self.is_string_producing_expr(ae) {
                         self.emit(&format!("  call $print{}_string(l {})", suffix, arg_reg));
-                    } else if self.is_float_operand(ae) {
+                    } else if self.is_float_operand(ae)
+                        || self.float_regs.contains(arg_reg.as_str())
+                    {
                         self.emit(&format!("  call $print{}_f64(d {})", suffix, arg_reg));
                     } else if let ExprKind::Identifier { name } = &ae.kind {
                         if matches!(

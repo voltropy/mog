@@ -2722,7 +2722,10 @@ impl<'a> Parser<'a> {
             };
 
             arms.push(MatchArm { pattern, body });
-            self.match_token(TokenType::Comma);
+            // Arms separated by commas or semicolons (both optional)
+            if !self.match_token(TokenType::Comma) {
+                self.match_token(TokenType::Semicolon);
+            }
         }
 
         self.consume(TokenType::RBrace, "Expected } after match expression");

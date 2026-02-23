@@ -157,6 +157,10 @@ impl SemanticAnalyzer {
         self.capability_decls = decls;
     }
 
+    pub fn get_capability_decls(&self) -> HashMap<String, CapabilityDecl> {
+        self.capability_decls.clone()
+    }
+
     // ── Main entry point ─────────────────────────────────────────────
 
     pub fn analyze(&mut self, program: &Statement) -> Vec<SemanticError> {

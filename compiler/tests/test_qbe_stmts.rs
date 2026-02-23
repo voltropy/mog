@@ -278,7 +278,7 @@ fn for_in_map_iterates() {
 #[test]
 fn for_in_map_creates_map() {
     let ir = qbe("m := {\"a\": 1, \"b\": 2}\nfor k, v in m { println(k) }");
-    assert!(ir.contains("call $map_new()"), "expected map_new call");
+    assert!(ir.contains("call $map_new(l"), "expected map_new call");
     assert!(ir.contains("call $map_set("), "expected map_set calls");
 }
 
@@ -308,14 +308,15 @@ fn continue_in_while_jumps_to_condition() {
 #[test]
 fn break_in_for_jumps_past_loop() {
     let ir = qbe("for i in 0..10 { break }");
-    assert!(ir.contains("jmp @L.2"), "expected jmp to end label @L.2");
+    // end label is now @L.3 (test=@L.0, body=@L.1, step=@L.2, end=@L.3)
+    assert!(ir.contains("jmp @L.3"), "expected jmp to end label @L.3");
 }
 
 #[test]
 fn continue_in_for_jumps_back() {
     let ir = qbe("for i in 0..10 { continue }");
-    // continue should jump to the step/condition part
-    assert!(ir.contains("jmp @L.0"), "expected jmp back");
+    // continue should jump to the step label @L.2
+    assert!(ir.contains("jmp @L.2"), "expected jmp to step label");
 }
 
 #[test]
@@ -1112,7 +1113,7 @@ fn array_len_loads_from_array() {
 #[test]
 fn map_literal_creates_map() {
     let ir = qbe("m := {\"a\": 1, \"b\": 2}\nprintln(m)");
-    assert!(ir.contains("call $map_new()"), "expected map_new");
+    assert!(ir.contains("call $map_new(l"), "expected map_new");
     assert!(ir.contains("call $map_set("), "expected map_set");
 }
 

@@ -169,7 +169,9 @@ pub fn compile(source: &str, options: &CompileOptions) -> CompileResult {
 
     // -- 7. Code generation (QBE IR) ----------------------------------------
     let ir = match options.backend {
-        Backend::Qbe => crate::qbe_codegen::generate_qbe_ir(&ast),
+        Backend::Qbe => {
+            crate::qbe_codegen::generate_qbe_ir_with_caps(&ast, analyzer.get_capability_decls())
+        }
     };
 
     CompileResult {
