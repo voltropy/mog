@@ -170,7 +170,13 @@ pub fn compile(source: &str, options: &CompileOptions) -> CompileResult {
     // -- 7. Code generation (QBE IR) ----------------------------------------
     let ir = match options.backend {
         Backend::Qbe => {
-            crate::qbe_codegen::generate_qbe_ir_with_caps(&ast, analyzer.get_capability_decls())
+            if options.plugin_mode {
+                let name = options.plugin_name.as_deref().unwrap_or("plugin");
+                let version = options.plugin_version.as_deref().unwrap_or("0.1.0");
+                crate::qbe_codegen::generate_plugin_qbe_ir(&ast, name, version)
+            } else {
+                crate::qbe_codegen::generate_qbe_ir_with_caps(&ast, analyzer.get_capability_decls())
+            }
         }
     };
 
@@ -628,11 +634,20 @@ fn cc_command() -> Command {
 /// Try to locate `runtime.a` relative to the compiler binary or the current
 /// working directory.
 fn find_runtime_archive() -> Option<PathBuf> {
-    // Relative to the compiler binary: ../../build/runtime.a
-    // (binary is at compiler/target/debug/mogc, runtime at build/runtime.a)
+    // 1. Relative to the mog compiler crate's source directory (compile-time).
+    //    This handles the case where mog is used as a library dependency.
+    {
+        let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let p = crate_dir.join("../build/runtime.a");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 2. Relative to the running binary.
+    //    (binary is at compiler/target/debug/mogc, runtime at build/runtime.a)
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
-            // Try going up from target/debug/ to the project root
             for ancestor in [
                 parent.join("../../../build/runtime.a"), // from target/debug/
                 parent.join("../../build/runtime.a"),
@@ -644,14 +659,21 @@ fn find_runtime_archive() -> Option<PathBuf> {
             }
         }
     }
-    // Relative to cwd
-    for candidate in ["build/runtime.a", "../build/runtime.a"] {
+
+    // 3. Relative to cwd.
+    for candidate in [
+        "build/runtime.a",
+        "../build/runtime.a",
+        "../../build/runtime.a",
+        "../../../build/runtime.a",
+    ] {
         let p = PathBuf::from(candidate);
         if p.exists() {
             return Some(p);
         }
     }
-    // MOG_RUNTIME_DIR env var
+
+    // 4. MOG_RUNTIME_DIR env var.
     if let Ok(dir) = env::var("MOG_RUNTIME_DIR") {
         let p = PathBuf::from(dir).join("runtime.a");
         if p.exists() {

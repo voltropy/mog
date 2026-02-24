@@ -1,0 +1,8 @@
+[package]
+name = "rust_host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mog = { path = "../../../compiler" }
+libloading = "0.8"

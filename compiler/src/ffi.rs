@@ -12,6 +12,7 @@
 //   - Borrowed pointers (`*const`) must remain valid for the duration of the call.
 
 use std::ffi::{c_char, c_int, CStr, CString};
+use std::path::PathBuf;
 use std::ptr;
 
 // ---------------------------------------------------------------------------
@@ -171,13 +172,13 @@ pub extern "C" fn mog_compile_to_binary(
         None => return -1,
     };
 
-    // Compile to IR first; binary emission will be wired up once the
-    // backend (QBE / LLVM) is fully integrated.
-    match crate::compiler::compile_simple(input) {
-        Ok(_ir) => {
-            // TODO: write binary to `_path` via codegen backend
-            0
-        }
+    let options = crate::compiler::CompileOptions {
+        output_path: Some(PathBuf::from(_path)),
+        ..Default::default()
+    };
+
+    match crate::compiler::compile_to_binary(input, &options) {
+        Ok(_) => 0,
         Err(_) => -1,
     }
 }
@@ -211,10 +212,15 @@ pub extern "C" fn mog_compile_plugin(
         None => return -1,
     };
 
-    // Compile, then emit as a plugin shared library.
-    match crate::compiler::compile_simple(input) {
-        Ok(_ir) => {
-            // TODO: emit plugin .dylib/.so with MogPluginInfo to `_path`
+    match crate::compiler::compile_plugin(input, _name, _version) {
+        Ok(lib_path) => {
+            // If the caller specified a different output path, copy the file there.
+            let target = PathBuf::from(_path);
+            if lib_path != target {
+                if let Err(_) = std::fs::copy(&lib_path, &target) {
+                    return -1;
+                }
+            }
             0
         }
         Err(_) => -1,

@@ -3467,10 +3467,10 @@ impl QBECodeGen {
     }
 
     fn gen_plugin_init(&mut self) {
-        let mut ir = String::from("export function $mog_plugin_init(l %vm) {\n@start\n");
+        let mut ir = String::from("export function w $mog_plugin_init(l %vm) {\n@start\n");
         ir.push_str("    call $mog_vm_set_global(l %vm)\n");
         ir.push_str("    call $gc_init()\n");
-        ir.push_str("    ret\n");
+        ir.push_str("    ret 0\n");
         ir.push_str("}\n\n");
         self.output.push_str(&ir);
     }
