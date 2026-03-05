@@ -21,6 +21,16 @@ pub fn getalias(f: &Fn, r: Ref) -> Alias {
     match r {
         Ref::Tmp(id) => {
             let mut a = f.tmps[id.0 as usize].alias.clone();
+            if a.typ == AliasType::Bot {
+                // Physical registers or temps not defined in this function
+                // (e.g., from ABI lowering) may have Bot alias type.
+                // Treat as unknown — conservative but safe.
+                a.typ = AliasType::Unk;
+                a.base = id.0 as i32;
+                a.offset = 0;
+                a.slot = None;
+                return a;
+            }
             if a.typ.is_stack() {
                 // Update type from the slot's current type.
                 // In C QBE: a->type = a->slot->type
@@ -28,7 +38,6 @@ pub fn getalias(f: &Fn, r: Ref) -> Alias {
                 let slot_typ = f.tmps[a.base as usize].alias.typ;
                 a.typ = slot_typ;
             }
-            assert!(a.typ != AliasType::Bot, "alias type must not be Bot");
             a
         }
         Ref::Con(id) => {
@@ -63,12 +72,13 @@ pub fn getalias(f: &Fn, r: Ref) -> Alias {
 pub fn alias(f: &Fn, p: Ref, op: i32, sp: i32, q: Ref, sq: i32) -> (AliasResult, i32) {
     let mut ap = getalias(f, p);
     let aq = getalias(f, q);
-    ap.offset += op as i64;
+    ap.offset = ap.offset.wrapping_add(op as i64);
 
     // When delta is meaningful (ovlap == true), we do not overflow i32
     // because sp and sq are bounded by 2^28.
-    let delta = (ap.offset - aq.offset) as i32;
-    let ovlap = ap.offset < aq.offset + sq as i64 && aq.offset < ap.offset + sp as i64;
+    let delta = ap.offset.wrapping_sub(aq.offset) as i32;
+    let ovlap = ap.offset < aq.offset.wrapping_add(sq as i64)
+        && aq.offset < ap.offset.wrapping_add(sp as i64);
 
     if ap.typ.is_stack() && aq.typ.is_stack() {
         // Both are offsets of the same stack slot — they alias iff they overlap.
@@ -281,11 +291,11 @@ pub fn fillalias(f: &mut Fn) {
 
                     if a0.typ == AliasType::Con {
                         let mut result = a1.clone();
-                        result.offset += a0.offset;
+                        result.offset = result.offset.wrapping_add(a0.offset);
                         f.tmps[to_id.0 as usize].alias = result;
                     } else if a1.typ == AliasType::Con {
                         let mut result = a0.clone();
-                        result.offset += a1.offset;
+                        result.offset = result.offset.wrapping_add(a1.offset);
                         f.tmps[to_id.0 as usize].alias = result;
                     }
                 }

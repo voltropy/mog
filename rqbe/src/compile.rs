@@ -68,12 +68,7 @@ pub fn compile(input: &str, target: &Target) -> Result<String, Error> {
 ///   link blocks → emitfn
 fn compile_fn(f: &mut Fn, target: &Target, typs: &[Typ], out: &mut String) {
     macro_rules! dbglog {
-        ($($arg:tt)*) => {{
-            use std::io::Write;
-            if let Ok(mut dbg) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rqbe_compile_debug.txt") {
-                writeln!(dbg, $($arg)*).ok();
-            }
-        }};
+        ($($arg:tt)*) => {};
     }
     dbglog!("=== compile_fn start ===");
 

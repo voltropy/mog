@@ -248,7 +248,7 @@ fn parse_type_with_alignment() {
     let result = parse_expect(input, 1, 0, 0);
     let typ = &result.types[0];
     assert_eq!(typ.name, "vec");
-    assert_eq!(typ.align, 16);
+    assert_eq!(typ.align, 4); // stored as log2(16) = 4
 }
 
 #[test]

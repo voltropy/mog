@@ -136,7 +136,7 @@ impl<'a> LoadOpt<'a> {
         self.ilog.push(Insert {
             is_phi: false,
             num,
-            bid: l.blk.0,
+            bid: self.f.blks[l.blk.0 as usize].id,
             off: l.off as u32,
             new: InsertNew::Ins(ins),
         });
@@ -429,8 +429,9 @@ impl<'a> LoadOpt<'a> {
         }
 
         // Check if there's already a phi in the log for this slice.
+        let b_rpoid = self.f.blks[bid.0 as usize].id;
         for ist in &self.ilog {
-            if ist.is_phi && ist.bid == bid.0 {
+            if ist.is_phi && ist.bid == b_rpoid {
                 if let InsertNew::Phi {
                     sl: ref m,
                     phi: ref p,
@@ -513,7 +514,7 @@ impl<'a> LoadOpt<'a> {
         let phi_log_idx = self.ilog.len();
         self.ilog.push(Insert {
             is_phi: true,
-            bid: bid.0,
+            bid: self.f.blks[bid.0 as usize].id,
             num: 0,
             off: 0,
             new: InsertNew::Phi {
@@ -647,7 +648,7 @@ pub fn loadopt(f: &mut Fn) {
         let bid = opt.f.rpo[n];
 
         // Insert phis.
-        while ist_idx < nlog && opt.ilog[ist_idx].bid == bid.0 && opt.ilog[ist_idx].is_phi {
+        while ist_idx < nlog && opt.ilog[ist_idx].bid == n as u32 && opt.ilog[ist_idx].is_phi {
             if let InsertNew::Phi { phi, .. } = opt.ilog[ist_idx].new.clone() {
                 opt.f.blks[bid.0 as usize].phi.push(phi);
             }
@@ -663,7 +664,7 @@ pub fn loadopt(f: &mut Fn) {
         loop {
             if ist_idx < nlog
                 && !opt.ilog[ist_idx].is_phi
-                && opt.ilog[ist_idx].bid == bid.0
+                && opt.ilog[ist_idx].bid == n as u32
                 && opt.ilog[ist_idx].off == ni as u32
             {
                 if let InsertNew::Ins(ins) = opt.ilog[ist_idx].new.clone() {

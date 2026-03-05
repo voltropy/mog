@@ -640,3 +640,15 @@ fn test_vararg1() {
 fn test_vararg2() {
     run_ssa_test("vararg2");
 }
+
+#[test]
+fn test_showcase_coro() {
+    let path = "/tmp/coro_minimal.ssa";
+    if !std::path::Path::new(path).exists() {
+        eprintln!("SKIP: {path} not found");
+        return;
+    }
+    let input = std::fs::read_to_string(path).unwrap();
+    let result = rqbe::compile(&input, &rqbe::arm64::T_ARM64_APPLE);
+    assert!(result.is_ok(), "Compilation failed: {:?}", result.err());
+}

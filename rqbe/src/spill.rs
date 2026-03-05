@@ -310,7 +310,7 @@ fn store(r: Ref, buf: &mut InsBuffer, tmps: &[crate::ir::Tmp]) {
                 Cls::Kd => Op::Stored,
                 Cls::Kx => Op::Storew,
             };
-            buf.emit(store_op, Cls::Kx, Ref::R, r, Ref::Slot(s as u32));
+            buf.emit(store_op, Cls::Kw, Ref::R, r, Ref::Slot(s as u32));
         }
     }
 }

@@ -373,12 +373,12 @@ pub fn coalesce(f: &mut Fn) {
             let preds: Vec<BlkId> = b.pred.clone();
             for &p in &preds {
                 let p_id = f.blks[p.0 as usize].id;
-                if p_id >= bid.0 {
+                if p_id >= ni as u32 {
                     // Back-edge: p -> bid. bid is a loop header.
                     // We need to mark the max RPO of blocks in this loop.
                     // For simplicity, use p's RPO id as a conservative bound.
-                    if blk_loop[bid.0 as usize] < p.0 as i32 {
-                        blk_loop[bid.0 as usize] = p.0 as i32;
+                    if blk_loop[bid.0 as usize] < p_id as i32 {
+                        blk_loop[bid.0 as usize] = p_id as i32;
                     }
                 }
             }
@@ -388,15 +388,15 @@ pub fn coalesce(f: &mut Fn) {
     // Track blit instructions for later fixup.
     let mut blit_locs: Vec<(usize, usize)> = Vec::new(); // (blk_idx, ins_idx)
 
-    // Block ranges for IP mapping.
-    let mut blk_range: Vec<Range> = vec![Range::default(); f.blks.len()];
+    // Block ranges for IP mapping, indexed by RPO id (matching C's br[n]).
+    let mut blk_range: Vec<Range> = vec![Range::default(); nblk];
     let mut ip = i32::MAX - 1;
 
     for n in (0..nblk).rev() {
         let bid = f.rpo[n];
         let b_idx = bid.0 as usize;
 
-        blk_range[b_idx].b = ip;
+        blk_range[n].b = ip;
         ip -= 1;
 
         // Initialize slot liveness from successors.
@@ -409,8 +409,8 @@ pub fn coalesce(f: &mut Fn) {
             s.l = 0;
             for succ_opt in &succ {
                 if let Some(succ_id) = succ_opt {
-                    let m = succ_id.0 as usize;
-                    if m > n as usize && s.r.contains(blk_range[m].a) {
+                    let m = f.blks[succ_id.0 as usize].id as usize;
+                    if m > n && s.r.contains(blk_range[m].a) {
                         s.l = s.m;
                         s.r.add(ip);
                     }
@@ -483,7 +483,7 @@ pub fn coalesce(f: &mut Fn) {
             }
         }
 
-        blk_range[b_idx].a = ip;
+        blk_range[n].a = ip;
     }
 
     // Kill dead stores.
