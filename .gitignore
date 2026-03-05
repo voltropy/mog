@@ -50,3 +50,4 @@ timer
 # Rust
 compiler/target/
 /rqbe/target/
+runtime-rs/target/

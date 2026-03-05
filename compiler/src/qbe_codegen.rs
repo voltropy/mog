@@ -3407,9 +3407,11 @@ impl QBECodeGen {
         main_ir.push_str("@create_vm\n");
         main_ir.push_str("    %new_vm =l call $mog_vm_new()\n");
         main_ir.push_str("    call $mog_vm_set_global(l %new_vm)\n");
-        main_ir.push_str("    call $mog_register_posix_host(l %new_vm)\n");
         main_ir.push_str("    jmp @have_vm\n");
         main_ir.push_str("@have_vm\n");
+        // Always register POSIX capabilities (idempotent if already present)
+        main_ir.push_str("    %vm.1 =l call $mog_vm_get_global()\n");
+        main_ir.push_str("    call $mog_register_posix_host(l %vm.1)\n");
 
         if is_async_main {
             // Async main: create event loop, call program_user (returns future), run loop

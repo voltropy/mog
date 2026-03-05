@@ -635,53 +635,59 @@ fn cc_command() -> Command {
     Command::new(cc)
 }
 
-/// Try to locate `runtime.a` relative to the compiler binary or the current
-/// working directory.
+/// Try to locate the Mog runtime archive.
+///
+/// Prefers the Rust runtime (`libmog_runtime.a`) over the legacy C runtime
+/// (`runtime.a`).  Falls back through several search strategies.
 fn find_runtime_archive() -> Option<PathBuf> {
+    // Candidate filenames in priority order.
+    let names = [
+        "runtime-rs/target/release/libmog_runtime.a", // Rust runtime
+        "build/runtime.a",                            // C runtime (legacy)
+    ];
+
     // 1. Relative to the mog compiler crate's source directory (compile-time).
-    //    This handles the case where mog is used as a library dependency.
     {
         let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let p = crate_dir.join("../build/runtime.a");
-        if p.exists() {
-            return Some(p);
+        for name in &names {
+            let p = crate_dir.join("..").join(name);
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
 
     // 2. Relative to the running binary.
-    //    (binary is at compiler/target/debug/mogc, runtime at build/runtime.a)
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
-            for ancestor in [
-                parent.join("../../../build/runtime.a"), // from target/debug/
-                parent.join("../../build/runtime.a"),
-                parent.join("../build/runtime.a"),
-            ] {
-                if ancestor.exists() {
-                    return Some(ancestor);
+            for depth in ["../../..", "../..", ".."] {
+                for name in &names {
+                    let p = parent.join(depth).join(name);
+                    if p.exists() {
+                        return Some(p);
+                    }
                 }
             }
         }
     }
 
     // 3. Relative to cwd.
-    for candidate in [
-        "build/runtime.a",
-        "../build/runtime.a",
-        "../../build/runtime.a",
-        "../../../build/runtime.a",
-    ] {
-        let p = PathBuf::from(candidate);
-        if p.exists() {
-            return Some(p);
+    for prefix in ["", "../", "../../", "../../../"] {
+        for name in &names {
+            let p = PathBuf::from(format!("{prefix}{name}"));
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
 
     // 4. MOG_RUNTIME_DIR env var.
     if let Ok(dir) = env::var("MOG_RUNTIME_DIR") {
-        let p = PathBuf::from(dir).join("runtime.a");
-        if p.exists() {
-            return Some(p);
+        for base in ["libmog_runtime.a", "runtime.a"] {
+            let p = PathBuf::from(&dir).join(base);
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
     None
