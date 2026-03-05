@@ -100,3 +100,353 @@
 {"type":"close","timestamp":"2026-02-17T00:47:09.730363Z","issue_id":"qbe-2c8","payload":{}}
 {"type":"status_update","timestamp":"2026-02-17T00:47:23.592896Z","issue_id":"qbe-8da","payload":{"status":"in_progress"}}
 {"type":"close","timestamp":"2026-02-17T00:59:57.090306Z","issue_id":"qbe-8da","payload":{}}
+{"type":"create","timestamp":"2026-03-04T23:43:02.584532Z","issue_id":"rqbe-620","payload":{"description":"Create rqbe/ crate. Define all IR types: Ref enum, Op (90 opcodes), Ins, Phi, Blk, Tmp, Con, Mem, Fn, Typ, Field, Dat, Lnk, BSet, Alias, Use, Target. Define typed index newtypes (BlkId, TmpId, ConId, MemId, TypId). Define Cls (Kw/Kl/Ks/Kd). Define jump types. Implement Display for IR pretty-printing. Port ops.h as Op enum.","priority":"0","title":"Crate + IR types","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:43:02.632478Z","issue_id":"rqbe-7b1","payload":{"description":"Implement top-level compile() that calls each pass in order (matching func() in main.c): abi0 → fillrpo → fillpreds → filluse → promote → ssa → filluse → ssacheck → fillalias → loadopt → filluse → fillalias → coalesce → filluse → ssacheck → copy → filluse → fold → abi1 → simpl → fillpreds → filluse → isel → fillrpo → filllive → fillloop → fillcost → spill → rega → simpljmp → fillpreds → fillrpo → emitfn. All passes are stub functions. Create public API: compile(input, target) → String.","priority":"0","title":"Pipeline + public API","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:43:02.692259Z","issue_id":"rqbe-476","payload":{"description":"Implement BSet (bitset: init, zero, count, set, clr, copy, union, inter, diff, equal, iter, has). Implement string interning (intern/str). Port hash(). Port emit()/emiti()/idup()/icpy() instruction buffer helpers. Port newtmp(), chuse(), newcon(), getcon(), addcon(), salloc(). Port cmpop()/cmpneg()/clsmerge()/phicls()/argcls()/isreg()/iscmp().","priority":"0","title":"Bitset + utilities","type":"task"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:43:29.47821Z","issue_id":"rqbe-7b1","payload":{"dep_type":"blocks","depends_on":"rqbe-620"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:43:29.523907Z","issue_id":"rqbe-476","payload":{"dep_type":"blocks","depends_on":"rqbe-620"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.045774Z","issue_id":"rqbe-632","payload":{"description":"Port lex(), lexinit() from parse.c. Hand-written tokenizer with perfect hash for QBE keywords. Token types: number, string, newline, ident, keyword, sigil. Handle: integer literals (decimal, hex, 0x), float literals (s_/d_ prefix), string literals with escapes, all operator tokens.","priority":"1","title":"Parser: tokenizer","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.092382Z","issue_id":"rqbe-6ee","payload":{"description":"Port parsetyp(), parsefields(), parsedat(), parselnk() from parse.c. Parse type definitions (struct/union with field lists), data definitions (DB/DH/DW/DL/DZ with refs and strings), linkage attributes (export, thread, section).","priority":"1","title":"Parser: types + data","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.137327Z","issue_id":"rqbe-b47","payload":{"description":"Port parsefn(), parseline(), parserefl(), parsecls(), typecheck() from parse.c. The big piece: parse function definitions with params, basic blocks (labels), phi nodes, instructions with 0-2 args, calls with argument lists, jump/branch/return terminators. State machine (PLbl/PPhi/PIns/PEnd). Build Fn struct with all blocks, tmps, cons.","priority":"1","title":"Parser: functions","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.180267Z","issue_id":"rqbe-a6a","payload":{"description":"Port fillpreds() and fillrpo() and newblk() from cfg.c. Compute predecessor lists for each block. Compute reverse post-order via DFS with loop-depth tie-breaking. Store rpo as Vec\u003cBlkId\u003e on Function.","priority":"1","title":"CFG: predecessors + RPO","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.22493Z","issue_id":"rqbe-bff","payload":{"description":"Port filldom(), sdom(), dom(), fillfron() from cfg.c. Iterative dominator computation (Cooper-Harvey-Kennedy algorithm). Dominance frontier computation. sdom() for strict dominance, dom() for dominance query.","priority":"1","title":"CFG: dominators + frontiers","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.271351Z","issue_id":"rqbe-88e","payload":{"description":"Port fillloop(), loopiter(), simpljmp() from cfg.c. Natural loop detection via back-edges with recursive marking, 10x nesting multiplier. Jump chain simplification with union-find.","priority":"1","title":"CFG: loops + jump simplification","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.316591Z","issue_id":"rqbe-2aa","payload":{"description":"Port ssa(), phiins(), renblk(), getstk(), rendef(), filluse(), ssacheck() from ssa.c. Standard dominance-frontier SSA: compute defs/uses per tmp, insert phi nodes at dominance frontiers, rename temporaries with scoped name stacks (walk dominator tree). Replace C Name free-list with Vec arena.","priority":"1","title":"SSA construction","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.363932Z","issue_id":"rqbe-2a6","payload":{"description":"Port fillalias(), getalias(), alias(), escapes() from alias.c (220 lines). Flow-insensitive alias classification: ALoc/AEsc/AUnk/ACon/ASym. Track pointer arithmetic for offset-based alias queries. Return MustAlias/MayAlias/NoAlias with offset deltas.","priority":"1","title":"Alias analysis","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.409615Z","issue_id":"rqbe-59d","payload":{"description":"Port loadopt() from load.c (493 lines). Store-to-load forwarding: walk backward through instructions and across CFG predecessors to find stores satisfying loads. Insert phi nodes at join points. Handle partial overlaps via bit-shifting and masking. loadsz()/storesz() helpers.","priority":"1","title":"Load optimization","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.453645Z","issue_id":"rqbe-f39","payload":{"description":"Port promote() from mem.c. Mem2reg: promote uniformly-accessed stack allocs to SSA temporaries. Detect allocs used only through loads/stores of uniform size.","priority":"1","title":"Memory: slot promotion","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.504404Z","issue_id":"rqbe-a56","payload":{"description":"Port coalesce() from mem.c. Backward liveness analysis on stack slots, dead store elimination, greedy size-sorted fusion of non-overlapping slot live ranges.","priority":"1","title":"Memory: slot coalescing","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.550332Z","issue_id":"rqbe-c04","payload":{"description":"Port fold() from fold.c (535 lines). Sparse Conditional Constant Propagation: two worklists (flow edges + SSA uses), lattice per tmp (Top/constant/Bot). Fold integer and float operations. Dead edge pruning, unreachable block removal.","priority":"1","title":"Constant folding (SCCP)","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.603776Z","issue_id":"rqbe-5da","payload":{"description":"Port copy() from copy.c (229 lines). Build copy-of map in RPO. Detect identity ops (copy, add/sub/or/xor/shift by 0, mul/div by 1, redundant extensions). Worklist-based phi simplification (Braun et al.) to resolve mutually-referencing phi clusters.","priority":"1","title":"Copy propagation","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.657886Z","issue_id":"rqbe-cc9","payload":{"description":"Port simpl() from simpl.c (82 lines). Replace blit0/blit1 pairs with sequences of individual load/store ops of decreasing granularity (8→4→2→1 bytes).","priority":"1","title":"Blit lowering","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.719031Z","issue_id":"rqbe-6ca","payload":{"description":"Port filllive(), liveon() from live.c (144 lines). Iterative backward dataflow: compute in/out/gen bitsets per block. Track peak live counts per register class (int/fp). Account for caller-save clobbers around calls.","priority":"1","title":"Liveness analysis","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.781773Z","issue_id":"rqbe-6df","payload":{"description":"Port fillcost(), spill() from spill.c (538 lines). Cost-based heuristic weighted by loop depth. When register pressure exceeds target limits, cheapest temps evicted to stack. 4B/8B slot packing. Handle parallel moves as atomic units.","priority":"1","title":"Spill cost + insertion","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.836479Z","issue_id":"rqbe-045","payload":{"description":"Port rega() from rega.c (698 lines). Priority-based linear-scan with hint propagation. RMap struct for register↔tmp tracking. Parallel move resolution (pmrec cycle detection with swap/copy). Block ordering by loop nesting (carve). Phi resolution with bridge blocks.","priority":"1","title":"Register allocation","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.905794Z","issue_id":"rqbe-6c2","payload":{"description":"Port arm64 abi0 from arm64/abi.c. Parameter/return lowering: AAPCS64 R0-R7 GP, V0-V7 FP. Struct classification (by-value ≤16B, HFA up to 4 floats, indirect pointer for large). Apple vararg model. elimsb() for sub-byte elimination.","priority":"1","title":"ARM64 ABI pass 0","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:42.966966Z","issue_id":"rqbe-148","payload":{"description":"Port arm64 abi1 from arm64/abi.c. Call lowering: argument emission to registers/stack, callee-save frame setup/teardown (stp/ldp pairs), return value placement, stack alignment.","priority":"1","title":"ARM64 ABI pass 1","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:43.030372Z","issue_id":"rqbe-e77","payload":{"description":"Port isel() from arm64/isel.c (317 lines). Immediate classification (12-bit, shifted-12-bit, 24-bit composite, logical bitmask). Comparison folding (negative → cmn). Comparison-branch fusion. Apple TLS sequences. Alloc→salloc lowering.","priority":"1","title":"ARM64 instruction selection","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:43.083766Z","issue_id":"rqbe-683","payload":{"description":"Port emitfn() from arm64/emit.c (644 lines). The omap[] table mapping 57 QBE ops to ARM64 mnemonics. Emit: arithmetic, FP ops, loads/stores (6+4 variants), extensions, conversions, comparisons (cmp/cmn/fcmpe), cset with 18 conditions, branches, bl/blr/ret, stp/ldp. Apple-specific: _ prefix, @page/@pageoff relocations.","priority":"1","title":"ARM64 assembly emission","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:43.135669Z","issue_id":"rqbe-b7b","payload":{"description":"Port emitdat(), emitfnlnk(), stashbits(), emitfin(), macho_emitfin() from emit.c (244 lines). Data emission (.byte/.short/.int/.quad/.ascii/.fill), BSS detection, function linkage (.text, .globl), FP constant dedup and emission to __TEXT,__literal4/8, DWARF debug directives (.file/.loc).","priority":"1","title":"Shared emission utilities","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:44:43.182667Z","issue_id":"rqbe-f65","payload":{"description":"Port printfn(), printref() from parse.c for debugging/testing. Print functions in QBE IL text format: function signature, blocks with phi nodes, instructions, jumps. This is essential for test comparison and debugging.","priority":"1","title":"IR printer","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:22.605514Z","issue_id":"rqbe-b60","payload":{"description":"Create Rust test runner: read .ssa test files from vendor/qbe-1.2/test/, extract embedded C driver (# \u003e\u003e\u003e driver sections) and expected output (# \u003e\u003e\u003e output), compile QBE IL via rqbe::compile(), assemble with as, link with cc, run, check output/return code. Integration test harness in rqbe/tests/.","priority":"1","title":"Port test infrastructure","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:22.652581Z","issue_id":"rqbe-5f1","payload":{"description":"Port QBE .ssa test files for basic operations: arithmetic, comparisons, control flow, simple functions. Files: sum.ssa, eucl.ssa, fpcnv.ssa, double.ssa, and any basic op tests.","priority":"1","title":"Port arithmetic/basic tests","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:22.700974Z","issue_id":"rqbe-9a2","payload":{"description":"Port abi1-8.ssa test files covering struct passing (by-value, indirect), varargs, return conventions, HFA, multi-register returns.","priority":"1","title":"Port ABI tests","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:22.747433Z","issue_id":"rqbe-e5b","payload":{"description":"Port load1-3.ssa, mem1-3.ssa tests for store-to-load forwarding, slot promotion, slot coalescing.","priority":"1","title":"Port memory/load tests","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:22.795787Z","issue_id":"rqbe-cf3","payload":{"description":"Port isel1-3.ssa, spill1.ssa, rega1.ssa tests for instruction selection, spilling, and register allocation.","priority":"1","title":"Port isel/spill/rega tests","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:22.84249Z","issue_id":"rqbe-d6a","payload":{"description":"Port algorithmic test programs: collatz.ssa, prime.ssa, mandel.ssa, queen.ssa, and similar compute-intensive tests.","priority":"1","title":"Port algorithm tests","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:22.889939Z","issue_id":"rqbe-1df","payload":{"description":"Port floating point and type conversion tests: fpcnv.ssa, double.ssa, cast tests, extension/truncation tests.","priority":"1","title":"Port float/conversion tests","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:22.940239Z","issue_id":"rqbe-283","payload":{"description":"Port remaining tests: TLS (thread-local), dynalloc, dark types, blit, copy/phi edge cases, vararg, and any other .ssa files not covered by other tasks.","priority":"1","title":"Port advanced tests","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:53.693257Z","issue_id":"rqbe-2f6","payload":{"description":"After Phase 2, identify and fix all parser-related test failures. Trace through test inputs, compare against C QBE output, fix parsing bugs.","priority":"2","title":"Fix failing tests: parser","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:53.742512Z","issue_id":"rqbe-07c","payload":{"description":"Fix all SSA construction and CFG analysis test failures. Verify dominators, frontiers, phi insertion, renaming produce correct output.","priority":"2","title":"Fix failing tests: SSA + CFG","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:53.791977Z","issue_id":"rqbe-3c2","payload":{"description":"Fix all optimization pass failures (fold, copy, simpl, load, alias, mem). Compare IR before/after each pass against C QBE reference.","priority":"2","title":"Fix failing tests: optimizations","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:53.839465Z","issue_id":"rqbe-5b3","payload":{"description":"Fix spill and register allocation failures. Verify register assignment, parallel move resolution, spill slot assignment.","priority":"2","title":"Fix failing tests: spill + regalloc","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:45:53.88895Z","issue_id":"rqbe-a45","payload":{"description":"Fix ARM64 instruction selection, ABI, and assembly emission failures. Compare generated assembly against C QBE reference output.","priority":"2","title":"Fix failing tests: ARM64 codegen","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:46:26.01888Z","issue_id":"rqbe-2b9","payload":{"description":"Replace qbe process spawning and C FFI in compiler/src/compiler.rs with direct rqbe::compile() calls. Add rqbe as a path dependency in compiler/Cargo.toml. Update compile_to_binary() to use in-process QBE.","priority":"2","title":"Wire rqbe into Mog compiler","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:46:26.067913Z","issue_id":"rqbe-03b","payload":{"description":"Run all 1,145 Mog Rust compiler tests with rqbe backend. Fix any integration issues. All tests must pass.","priority":"2","title":"Run Mog test suite with rqbe","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:46:26.118175Z","issue_id":"rqbe-aa8","payload":{"description":"Build and run showcase.mog through the full pipeline: Mog source → Rust compiler → rqbe → as → ld → execute. Verify all 28 sections produce correct output.","priority":"2","title":"Run showcase end-to-end","type":"task"}}
+{"type":"create","timestamp":"2026-03-04T23:46:26.166592Z","issue_id":"rqbe-aff","payload":{"description":"Compare compile times: old pipeline (spawn qbe process + as) vs new (in-process rqbe + as). Use existing benchmark suite at benchmarks/run_benchmarks.ts. Report speedup.","priority":"2","title":"Benchmark rqbe vs C QBE","type":"task"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.005408Z","issue_id":"rqbe-632","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.057578Z","issue_id":"rqbe-632","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.110637Z","issue_id":"rqbe-6ee","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.16202Z","issue_id":"rqbe-6ee","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.214766Z","issue_id":"rqbe-b47","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.267707Z","issue_id":"rqbe-b47","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.318593Z","issue_id":"rqbe-a6a","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.50724Z","issue_id":"rqbe-a6a","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.562904Z","issue_id":"rqbe-bff","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.615486Z","issue_id":"rqbe-bff","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.669897Z","issue_id":"rqbe-88e","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.914146Z","issue_id":"rqbe-88e","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:01.968775Z","issue_id":"rqbe-2aa","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.025368Z","issue_id":"rqbe-2aa","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.076228Z","issue_id":"rqbe-2a6","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.129511Z","issue_id":"rqbe-2a6","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.182022Z","issue_id":"rqbe-59d","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.252864Z","issue_id":"rqbe-59d","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.309356Z","issue_id":"rqbe-f39","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.365662Z","issue_id":"rqbe-f39","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.42039Z","issue_id":"rqbe-a56","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.481418Z","issue_id":"rqbe-a56","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.54265Z","issue_id":"rqbe-c04","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.674897Z","issue_id":"rqbe-c04","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.72769Z","issue_id":"rqbe-5da","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.780504Z","issue_id":"rqbe-5da","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.835349Z","issue_id":"rqbe-cc9","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.897163Z","issue_id":"rqbe-cc9","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:02.954637Z","issue_id":"rqbe-6ca","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.01097Z","issue_id":"rqbe-6ca","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.070422Z","issue_id":"rqbe-6df","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.130514Z","issue_id":"rqbe-6df","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.192389Z","issue_id":"rqbe-045","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.256652Z","issue_id":"rqbe-045","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.318232Z","issue_id":"rqbe-6c2","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.387979Z","issue_id":"rqbe-6c2","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.456712Z","issue_id":"rqbe-148","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.527126Z","issue_id":"rqbe-148","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.597244Z","issue_id":"rqbe-e77","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.664972Z","issue_id":"rqbe-e77","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.730851Z","issue_id":"rqbe-683","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.800815Z","issue_id":"rqbe-683","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.874068Z","issue_id":"rqbe-b7b","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:03.963715Z","issue_id":"rqbe-b7b","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.03152Z","issue_id":"rqbe-f65","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.117351Z","issue_id":"rqbe-f65","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.185684Z","issue_id":"rqbe-b60","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.263553Z","issue_id":"rqbe-b60","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.349395Z","issue_id":"rqbe-5f1","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.415862Z","issue_id":"rqbe-5f1","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.496367Z","issue_id":"rqbe-9a2","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.568442Z","issue_id":"rqbe-9a2","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.639173Z","issue_id":"rqbe-e5b","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.707206Z","issue_id":"rqbe-e5b","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.779555Z","issue_id":"rqbe-cf3","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.844488Z","issue_id":"rqbe-cf3","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:04.919746Z","issue_id":"rqbe-d6a","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.002435Z","issue_id":"rqbe-d6a","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.087142Z","issue_id":"rqbe-1df","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.16728Z","issue_id":"rqbe-1df","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.251621Z","issue_id":"rqbe-283","payload":{"dep_type":"blocks","depends_on":"rqbe-7b1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.321483Z","issue_id":"rqbe-283","payload":{"dep_type":"blocks","depends_on":"rqbe-476"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.397627Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-632"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.483262Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-6ee"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.580268Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-b47"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.675983Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-a6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.757896Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-bff"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.835679Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-88e"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:05.919873Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-2aa"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:06.021217Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-2a6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:06.121235Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-59d"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:06.273257Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-f39"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:06.490324Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-a56"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:06.596693Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-c04"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:06.934529Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-5da"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:07.170642Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-cc9"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:07.545375Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-6ca"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:07.799113Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-6df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:08.040082Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-045"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:08.292767Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-6c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:08.540424Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-148"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:08.871759Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-e77"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:09.132694Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-683"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:09.374417Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-b7b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:09.642705Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-f65"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:09.752461Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-b60"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:09.960563Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-5f1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:10.31326Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-9a2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:10.424271Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-e5b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:10.543255Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-cf3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:10.64718Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-d6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:10.735428Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-1df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:10.814221Z","issue_id":"rqbe-2f6","payload":{"dep_type":"blocks","depends_on":"rqbe-283"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:10.887636Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-632"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:10.977677Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-6ee"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.074811Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-b47"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.18278Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-a6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.282791Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-bff"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.378957Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-88e"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.461219Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-2aa"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.551949Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-2a6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.622233Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-59d"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.698609Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-f39"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.769521Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-a56"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.841041Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-c04"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.912162Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-5da"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:11.982992Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-cc9"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.05611Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-6ca"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.318691Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-6df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.387977Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-045"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.458613Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-6c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.531414Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-148"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.605128Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-e77"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.678197Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-683"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.751492Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-b7b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.824583Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-f65"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.897949Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-b60"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:12.971537Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-5f1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:13.044168Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-9a2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:13.119612Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-e5b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:13.19476Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-cf3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:13.273232Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-d6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:13.348398Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-1df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:13.422685Z","issue_id":"rqbe-07c","payload":{"dep_type":"blocks","depends_on":"rqbe-283"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:13.498503Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-632"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:13.575143Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-6ee"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.187634Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-b47"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.269233Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-a6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.345846Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-bff"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.421727Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-88e"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.501948Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-2aa"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.591216Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-2a6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.674253Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-59d"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.762798Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-f39"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.849145Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-a56"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:15.931892Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-c04"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:16.015016Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-5da"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:16.091773Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-cc9"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:16.167845Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-6ca"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:16.24504Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-6df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:16.32395Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-045"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:16.404057Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-6c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:16.492645Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-148"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:17.222147Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-e77"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:17.305109Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-683"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:17.387176Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-b7b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:17.471566Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-f65"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:17.667185Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-b60"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:17.747766Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-5f1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:17.831677Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-9a2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:17.914643Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-e5b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.005975Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-cf3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.092652Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-d6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.181986Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-1df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.267783Z","issue_id":"rqbe-3c2","payload":{"dep_type":"blocks","depends_on":"rqbe-283"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.354692Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-632"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.440059Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-6ee"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.523394Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-b47"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.606019Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-a6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:18.689563Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-bff"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:19.686654Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-88e"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:20.978695Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-2aa"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.065113Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-2a6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.151489Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-59d"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.23631Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-f39"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.32152Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-a56"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.40756Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-c04"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.49794Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-5da"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.586487Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-cc9"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.67084Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-6ca"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.76035Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-6df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.84889Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-045"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:21.941614Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-6c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.032688Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-148"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.124184Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-e77"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.216919Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-683"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.309793Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-b7b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.569678Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-f65"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.668311Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-b60"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.763043Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-5f1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.8576Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-9a2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:22.94023Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-e5b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.026666Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-cf3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.11268Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-d6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.200254Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-1df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.31468Z","issue_id":"rqbe-5b3","payload":{"dep_type":"blocks","depends_on":"rqbe-283"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.447331Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-632"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.553825Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-6ee"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.667745Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-b47"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.760413Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-a6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.847518Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-bff"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:23.937227Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-88e"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:24.029325Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-2aa"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:24.118536Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-2a6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:24.205014Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-59d"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:24.300739Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-f39"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:24.387485Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-a56"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:24.476663Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-c04"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:24.564349Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-5da"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:25.758298Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-cc9"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:26.618546Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-6ca"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:27.156351Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-6df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:27.616341Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-045"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:28.042944Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-6c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:28.497014Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-148"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:28.803184Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-e77"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:29.050365Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-683"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:29.295079Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-b7b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:29.489298Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-f65"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:29.666497Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-b60"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:29.813575Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-5f1"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:29.935197Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-9a2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.032079Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-e5b"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.12367Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-cf3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.221003Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-d6a"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.313136Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-1df"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.408021Z","issue_id":"rqbe-a45","payload":{"dep_type":"blocks","depends_on":"rqbe-283"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.502588Z","issue_id":"rqbe-2b9","payload":{"dep_type":"blocks","depends_on":"rqbe-2f6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.597775Z","issue_id":"rqbe-2b9","payload":{"dep_type":"blocks","depends_on":"rqbe-07c"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.694003Z","issue_id":"rqbe-2b9","payload":{"dep_type":"blocks","depends_on":"rqbe-3c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.788513Z","issue_id":"rqbe-2b9","payload":{"dep_type":"blocks","depends_on":"rqbe-5b3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.889005Z","issue_id":"rqbe-2b9","payload":{"dep_type":"blocks","depends_on":"rqbe-a45"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:30.985406Z","issue_id":"rqbe-03b","payload":{"dep_type":"blocks","depends_on":"rqbe-2f6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:31.07843Z","issue_id":"rqbe-03b","payload":{"dep_type":"blocks","depends_on":"rqbe-07c"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:31.175965Z","issue_id":"rqbe-03b","payload":{"dep_type":"blocks","depends_on":"rqbe-3c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:31.287531Z","issue_id":"rqbe-03b","payload":{"dep_type":"blocks","depends_on":"rqbe-5b3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:31.392872Z","issue_id":"rqbe-03b","payload":{"dep_type":"blocks","depends_on":"rqbe-a45"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:31.494364Z","issue_id":"rqbe-aa8","payload":{"dep_type":"blocks","depends_on":"rqbe-2f6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:32.009901Z","issue_id":"rqbe-aa8","payload":{"dep_type":"blocks","depends_on":"rqbe-07c"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:32.614899Z","issue_id":"rqbe-aa8","payload":{"dep_type":"blocks","depends_on":"rqbe-3c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:33.539923Z","issue_id":"rqbe-aa8","payload":{"dep_type":"blocks","depends_on":"rqbe-5b3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:33.640342Z","issue_id":"rqbe-aa8","payload":{"dep_type":"blocks","depends_on":"rqbe-a45"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:33.73416Z","issue_id":"rqbe-aff","payload":{"dep_type":"blocks","depends_on":"rqbe-2f6"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:33.832244Z","issue_id":"rqbe-aff","payload":{"dep_type":"blocks","depends_on":"rqbe-07c"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:33.930666Z","issue_id":"rqbe-aff","payload":{"dep_type":"blocks","depends_on":"rqbe-3c2"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:34.03031Z","issue_id":"rqbe-aff","payload":{"dep_type":"blocks","depends_on":"rqbe-5b3"}}
+{"type":"dep_add","timestamp":"2026-03-04T23:47:34.130586Z","issue_id":"rqbe-aff","payload":{"dep_type":"blocks","depends_on":"rqbe-a45"}}
+{"type":"status_update","timestamp":"2026-03-04T23:49:50.379646Z","issue_id":"rqbe-620","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-03-05T00:01:49.640674Z","issue_id":"rqbe-620","payload":{}}
+{"type":"status_update","timestamp":"2026-03-05T00:01:49.740225Z","issue_id":"rqbe-7b1","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:01:49.857Z","issue_id":"rqbe-476","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-03-05T00:11:50.576654Z","issue_id":"rqbe-7b1","payload":{}}
+{"type":"close","timestamp":"2026-03-05T00:11:50.69608Z","issue_id":"rqbe-476","payload":{}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:51.092345Z","issue_id":"rqbe-632","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:51.202939Z","issue_id":"rqbe-6ee","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:51.305074Z","issue_id":"rqbe-b47","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:51.413657Z","issue_id":"rqbe-a6a","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:51.535907Z","issue_id":"rqbe-bff","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:51.64002Z","issue_id":"rqbe-88e","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:51.791174Z","issue_id":"rqbe-2aa","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:51.944988Z","issue_id":"rqbe-2a6","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:52.113819Z","issue_id":"rqbe-59d","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:53.080206Z","issue_id":"rqbe-f39","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:53.190617Z","issue_id":"rqbe-a56","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:53.464774Z","issue_id":"rqbe-c04","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:53.747931Z","issue_id":"rqbe-5da","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:53.858098Z","issue_id":"rqbe-cc9","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:53.967585Z","issue_id":"rqbe-6ca","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:54.07831Z","issue_id":"rqbe-6df","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:54.206741Z","issue_id":"rqbe-045","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:54.316673Z","issue_id":"rqbe-6c2","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:54.440222Z","issue_id":"rqbe-148","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:54.559063Z","issue_id":"rqbe-e77","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:54.671753Z","issue_id":"rqbe-683","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:54.780668Z","issue_id":"rqbe-b7b","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:55.07733Z","issue_id":"rqbe-f65","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:55.187704Z","issue_id":"rqbe-b60","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:55.441673Z","issue_id":"rqbe-5f1","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:55.552713Z","issue_id":"rqbe-9a2","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:55.990524Z","issue_id":"rqbe-e5b","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:56.103084Z","issue_id":"rqbe-cf3","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:56.290851Z","issue_id":"rqbe-d6a","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:56.398247Z","issue_id":"rqbe-1df","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-03-05T00:12:56.607327Z","issue_id":"rqbe-283","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-03-05T01:19:27.860123Z","issue_id":"rqbe-632","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:27.99374Z","issue_id":"rqbe-6ee","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:28.121353Z","issue_id":"rqbe-b47","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:28.245167Z","issue_id":"rqbe-a6a","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:28.367933Z","issue_id":"rqbe-bff","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:28.498509Z","issue_id":"rqbe-88e","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:28.645458Z","issue_id":"rqbe-2aa","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:28.796262Z","issue_id":"rqbe-2a6","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:28.928744Z","issue_id":"rqbe-59d","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:29.073329Z","issue_id":"rqbe-f39","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:29.244109Z","issue_id":"rqbe-a56","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:29.416938Z","issue_id":"rqbe-c04","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:29.616391Z","issue_id":"rqbe-5da","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:29.86274Z","issue_id":"rqbe-cc9","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:30.239805Z","issue_id":"rqbe-6ca","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:30.532524Z","issue_id":"rqbe-6df","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:30.783868Z","issue_id":"rqbe-045","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:31.065075Z","issue_id":"rqbe-6c2","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:31.382939Z","issue_id":"rqbe-148","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:31.62672Z","issue_id":"rqbe-e77","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:31.883324Z","issue_id":"rqbe-683","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:32.468079Z","issue_id":"rqbe-b7b","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:33.185661Z","issue_id":"rqbe-f65","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:33.327316Z","issue_id":"rqbe-b60","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:33.439559Z","issue_id":"rqbe-5f1","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:33.554322Z","issue_id":"rqbe-9a2","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:33.670057Z","issue_id":"rqbe-e5b","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:33.779439Z","issue_id":"rqbe-cf3","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:33.892338Z","issue_id":"rqbe-d6a","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:34.004872Z","issue_id":"rqbe-1df","payload":{}}
+{"type":"close","timestamp":"2026-03-05T01:19:34.115149Z","issue_id":"rqbe-283","payload":{}}

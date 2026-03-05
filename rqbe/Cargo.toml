@@ -1,0 +1,5 @@
+[package]
+name = "rqbe"
+version = "0.1.0"
+edition = "2021"
+description = "A safe Rust rewrite of QBE, a lightweight compiler backend"
