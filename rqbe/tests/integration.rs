@@ -90,6 +90,9 @@ fn parse_ssa_file(contents: &str) -> SsaTestFile {
                     let stripped = line
                         .strip_prefix("# ")
                         .unwrap_or_else(|| line.strip_prefix('#').unwrap_or(line));
+                    // Strip trailing '#' (column marker in formatted output blocks),
+                    // matching C QBE's: sed -e 's/#$//'
+                    let stripped = stripped.strip_suffix('#').unwrap_or(stripped);
                     output_lines.push(stripped);
                 }
             }
@@ -125,6 +128,20 @@ fn run_ssa_test(test_name: &str) {
     let ssa_path = ssa_test_path(test_name);
     let contents = fs::read_to_string(&ssa_path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {}", ssa_path.display(), e));
+
+    // Check for skip directive on first line: "# skip ... arm64_apple ..."
+    if let Some(first_line) = contents.lines().next() {
+        if first_line.starts_with("# skip") {
+            let targets: Vec<&str> = first_line.split_whitespace().skip(2).collect();
+            if targets.iter().any(|&t| t == "arm64_apple" || t == "arm64") {
+                eprintln!(
+                    "Skipping test '{}' (not supported on arm64_apple)",
+                    test_name
+                );
+                return;
+            }
+        }
+    }
 
     let test_file = parse_ssa_file(&contents);
 
