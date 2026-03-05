@@ -76,6 +76,9 @@ pub struct CompileOptions {
     /// Path to the source file being compiled.  Used to resolve capability
     /// declarations relative to the source file's directory.
     pub source_path: Option<PathBuf>,
+    /// Extra object files, C source files, or static libraries to link into
+    /// the final binary.
+    pub extra_link_objects: Vec<PathBuf>,
 }
 
 impl Default for CompileOptions {
@@ -88,6 +91,7 @@ impl Default for CompileOptions {
             plugin_name: None,
             plugin_version: None,
             source_path: None,
+            extra_link_objects: Vec::new(),
         }
     }
 }
@@ -230,7 +234,6 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
     let tmp = env::temp_dir().join(format!("mog-{}", std::process::id()));
     fs::create_dir_all(&tmp).map_err(|e| vec![format!("failed to create temp dir: {e}")])?;
 
-    let ir_path = tmp.join("out.ssa");
     let asm_path = tmp.join("out.s");
     let obj_path = tmp.join("out.o");
     let bin_path = options
@@ -238,18 +241,10 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
         .clone()
         .unwrap_or_else(|| tmp.join("a.out"));
 
-    // --- write IR ----------------------------------------------------------
-    fs::write(&ir_path, &result.ir).map_err(|e| vec![format!("failed to write IR: {e}")])?;
-
-    // --- QBE: IR → assembly ------------------------------------------------
-    // Note: -o must come BEFORE the input file for QBE
-    run_command(
-        Command::new(qbe_path())
-            .arg("-o")
-            .arg(&asm_path)
-            .arg(&ir_path),
-        "qbe",
-    )?;
+    // --- QBE: IR → assembly (in-process via rqbe) ---------------------------
+    let asm = rqbe::compile(&result.ir, &rqbe::arm64::T_ARM64_APPLE)
+        .map_err(|e| vec![format!("QBE compilation failed: {e}")])?;
+    fs::write(&asm_path, &asm).map_err(|e| vec![format!("failed to write assembly: {e}")])?;
 
     // --- assembler: assembly → object --------------------------------------
     run_command(
@@ -263,6 +258,34 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
         .arg("-o")
         .arg(&bin_path)
         .arg(options.optimization.cc_flag());
+
+    // Extra objects/libraries from --link flags (compile .c files on the fly)
+    let tmp_ref = &tmp;
+    for extra in &options.extra_link_objects {
+        if extra.extension().is_some_and(|e| e == "c") {
+            // Compile .c to .o first
+            let c_obj = tmp_ref.join(
+                extra
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+                    + ".o",
+            );
+            run_command(
+                Command::new(cc_command().get_program())
+                    .arg("-c")
+                    .arg("-Iruntime")
+                    .arg(extra)
+                    .arg("-o")
+                    .arg(&c_obj),
+                "cc (compile extra C file)",
+            )?;
+            link.arg(&c_obj);
+        } else {
+            link.arg(extra);
+        }
+    }
 
     // Link against the Mog runtime if we can find it.
     if let Some(rt) = find_runtime_archive() {
@@ -279,7 +302,6 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
     run_command(&mut link, "cc (linker)")?;
 
     // --- clean up temp files (best-effort) ---------------------------------
-    let _ = fs::remove_file(&ir_path);
     let _ = fs::remove_file(&asm_path);
     let _ = fs::remove_file(&obj_path);
 
@@ -315,7 +337,6 @@ pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf
     let tmp = env::temp_dir().join(format!("mog-plugin-{}", std::process::id()));
     fs::create_dir_all(&tmp).map_err(|e| vec![format!("failed to create temp dir: {e}")])?;
 
-    let ir_path = tmp.join(format!("{name}.ssa"));
     let asm_path = tmp.join(format!("{name}.s"));
     let obj_path = tmp.join(format!("{name}.o"));
 
@@ -329,18 +350,10 @@ pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf
         .clone()
         .unwrap_or_else(|| tmp.join(format!("lib{name}.{lib_ext}")));
 
-    // --- write IR ----------------------------------------------------------
-    fs::write(&ir_path, &result.ir).map_err(|e| vec![format!("failed to write IR: {e}")])?;
-
-    // --- QBE: IR → assembly ------------------------------------------------
-    // Note: -o must come BEFORE the input file for QBE
-    run_command(
-        Command::new(qbe_path())
-            .arg("-o")
-            .arg(&asm_path)
-            .arg(&ir_path),
-        "qbe",
-    )?;
+    // --- QBE: IR → assembly (in-process via rqbe) ---------------------------
+    let asm = rqbe::compile(&result.ir, &rqbe::arm64::T_ARM64_APPLE)
+        .map_err(|e| vec![format!("QBE compilation failed: {e}")])?;
+    fs::write(&asm_path, &asm).map_err(|e| vec![format!("failed to write assembly: {e}")])?;
 
     // --- assembler: assembly → PIC object ----------------------------------
     run_command(
@@ -371,7 +384,6 @@ pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf
     run_command(&mut link, "cc (shared-library linker)")?;
 
     // --- clean up temp files (best-effort) ---------------------------------
-    let _ = fs::remove_file(&ir_path);
     let _ = fs::remove_file(&asm_path);
     let _ = fs::remove_file(&obj_path);
 
@@ -614,14 +626,6 @@ fn run_command(cmd: &mut Command, label: &str) -> Result<(), Vec<String>> {
     }
 
     Ok(())
-}
-
-/// Determine the path to the QBE binary.  Respects `$QBE` env-var, otherwise
-/// falls back to `qbe` (i.e. whatever is on `$PATH`).
-fn qbe_path() -> PathBuf {
-    env::var_os("QBE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("qbe"))
 }
 
 /// Return a [`Command`] for the system C compiler.  Respects `$CC`, defaulting

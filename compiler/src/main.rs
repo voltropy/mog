@@ -30,6 +30,7 @@ fn main() {
     let mut opt_level = OptLevel::O0;
     let mut plugin_name: Option<String> = None;
     let mut plugin_version = "0.1.0".to_string();
+    let mut extra_link: Vec<String> = Vec::new();
 
     let mut i = 1;
     while i < args.len() {
@@ -61,6 +62,14 @@ fn main() {
                     process::exit(1);
                 }
                 plugin_version = args[i].clone();
+            }
+            "--link" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("error: --link requires a path");
+                    process::exit(1);
+                }
+                extra_link.push(args[i].clone());
             }
             s if s.starts_with('-') => {
                 eprintln!("error: unknown option: {s}");
@@ -147,6 +156,7 @@ fn main() {
         optimization: opt_level,
         output_path: Some(out.clone()),
         source_path: Some(source_file.clone()),
+        extra_link_objects: extra_link.iter().map(PathBuf::from).collect(),
         ..Default::default()
     };
 
@@ -172,6 +182,7 @@ fn print_usage(program: &str) {
     eprintln!("  -o <path>              Output path (default: input stem)");
     eprintln!("  --emit-ir              Print QBE IR to stdout instead of compiling");
     eprintln!("  -O0, -O1, -O2         Optimization level (default: -O0)");
+    eprintln!("  --link <path>          Extra .c/.o/.a file to link (can repeat)");
     eprintln!("  --plugin <name>        Compile as shared library plugin");
     eprintln!("  --plugin-version <v>   Plugin version (default: 0.1.0)");
     eprintln!("  -h, --help             Show this help");

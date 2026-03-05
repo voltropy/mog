@@ -23,7 +23,12 @@ name = "mog"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "rqbe",
 ]
+
+[[package]]
+name = "rqbe"
+version = "0.1.0"
 
 [[package]]
 name = "windows-link"
