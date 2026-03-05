@@ -971,26 +971,5 @@ pub fn abi1(f: &mut Fn, t: &Target, typs: &[Typ]) {
         }
 
         f.blks[bid.0 as usize].ins = buf.finish();
-
-        // DEBUG: print instructions after ABI lowering
-        if f.strs
-            .first()
-            .map_or(false, |s| s.contains("main") || s.contains("test"))
-            || bid.0 == 0
-        {
-            let blk = &f.blks[bid.0 as usize];
-            eprintln!("ABI LOWER block {} ({} ins):", bid.0, blk.ins.len());
-            for (i, ins) in blk.ins.iter().enumerate() {
-                let regcpy_mark = if ins.op == Op::Copy && crate::ir::isreg(ins.arg[0]) {
-                    " [regcpy]"
-                } else {
-                    ""
-                };
-                eprintln!(
-                    "  ins[{}]: op={:?} to={:?} arg0={:?} arg1={:?}{}",
-                    i, ins.op, ins.to, ins.arg[0], ins.arg[1], regcpy_mark
-                );
-            }
-        }
     }
 }

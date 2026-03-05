@@ -55,13 +55,11 @@ fn ref_int_negative() {
     // sval sign-extends from bit 29 of the val() result.
     let v = r.val();
     assert_eq!(v, 0x1FFF_FFFF);
-    // The sign-extension recovers the original value if it fits in 29 bits.
-    // Note: sval() does `(val as i64) << 3 >> 3`, which sign-extends from bit 61,
-    // not bit 29. So values that set bit 28 are NOT properly sign-extended.
-    // For the actual encoding, Ref::Int stores the raw i32 and val() masks it.
+    // sval() sign-extends from bit 29 using i32 arithmetic:
+    // ((val as i64) << 3) as i32 >> 3
+    // For -1: val=0x1FFF_FFFF, shifted=0xFFFF_FFF8, as i32=-8, >>3 = -1
     let sv = r.sval();
-    // Verify sval is consistent with the implementation
-    assert_eq!(sv as u32, ((v as i64) << 3 >> 3) as u32);
+    assert_eq!(sv, -1);
 }
 
 #[test]

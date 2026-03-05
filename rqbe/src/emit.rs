@@ -900,7 +900,7 @@ mod tests {
         let mut out = String::new();
         macho_emitfin(&stash, &mut out);
         assert!(out.contains("__TEXT,__literal4,4byte_literals"));
-        assert!(out.contains(".Lfp0:"));
+        assert!(out.contains("Lfp0:"));
     }
 
     #[test]

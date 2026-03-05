@@ -590,29 +590,6 @@ pub fn spill(f: &mut Fn, t: &Target) {
                     v.clr(tv);
                 } else {
                     // Make sure we have a reg for the result.
-                    if tv < TMP0 {
-                        eprintln!("DEAD REG DEBUG: block={} ins_idx={} op={:?} to={:?} (val={}) arg0={:?} arg1={:?}",
-                            b_idx, i, ins.op, ins.to, tv, ins.arg[0], ins.arg[1]);
-                        eprintln!(
-                            "  v bits[0] = {:064b}",
-                            v.bits_raw().first().copied().unwrap_or(0)
-                        );
-                        // Print all instructions in this block
-                        for di in 0..f.blks[b_idx].ins.len() {
-                            let d = &f.blks[b_idx].ins[di];
-                            let is_rc = regcpy(d);
-                            eprintln!(
-                                "  ins[{}]: op={:?} to={:?} arg0={:?} arg1={:?}{}{}",
-                                di,
-                                d.op,
-                                d.to,
-                                d.arg[0],
-                                d.arg[1],
-                                if di == i { " <-- PANIC HERE" } else { "" },
-                                if is_rc { " [regcpy]" } else { "" }
-                            );
-                        }
-                    }
                     assert!(tv >= TMP0, "dead reg");
                     v.set(tv);
                     w.set(tv);

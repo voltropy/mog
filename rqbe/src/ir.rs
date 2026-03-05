@@ -147,10 +147,13 @@ impl Ref {
     }
 
     /// Signed value extraction (for `Int` and `Slot`), mirrors C `rsval`.
+    /// C: `(int32_t)((int64_t)r.val << 3) >> 3`
+    /// The cast to i32 BEFORE the right-shift is critical: it places the
+    /// 29-bit sign bit at the i32 sign position so arithmetic >> extends it.
     #[inline]
     pub fn sval(self) -> i32 {
         let v = self.val();
-        ((v as i64) << 3 >> 3) as i32
+        (((v as i64) << 3) as i32) >> 3
     }
 }
 

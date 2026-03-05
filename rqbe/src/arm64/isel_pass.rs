@@ -459,19 +459,5 @@ pub fn isel(f: &mut Fn, t: &Target) {
         }
 
         f.blks[bid.0 as usize].ins = buf.finish();
-
-        // DEBUG
-        if bid.0 == 0 {
-            let blk = &f.blks[bid.0 as usize];
-            if blk.ins.len() > 50 {
-                eprintln!("ISEL block {} ({} ins) - around call:", bid.0, blk.ins.len());
-                for idx in 60..std::cmp::min(90, blk.ins.len()) {
-                    let ins = &blk.ins[idx];
-                    eprintln!("  ins[{}]: op={:?} to={:?} arg0={:?} arg1={:?}", idx, ins.op, ins.to, ins.arg[0], ins.arg[1]);
-                }
-            }
-        }
-            }
-        }
     }
 }

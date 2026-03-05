@@ -96,9 +96,9 @@ pub fn simpl(f: &mut Fn) {
 
                     if !started {
                         // Copy all instructions after the blit pair into
-                        // the buffer (they've already been "processed"
-                        // since we're walking backward).
-                        for j in (i + 1)..nins {
+                        // the buffer in REVERSE order (since the buffer
+                        // stores in reverse and finish() reverses).
+                        for j in (i + 1..nins).rev() {
                             buf.emiti(f.blks[blk_idx].ins[j]);
                         }
                         started = true;
