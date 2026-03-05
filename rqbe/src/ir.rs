@@ -1484,28 +1484,16 @@ impl Target {
     ///
     /// Port of C QBE's `T.retregs(call_ref, nlv)`. The `nlv` parameter,
     /// if provided, is filled with per-class counts `[gpr, fpr]`.
-    ///
-    /// TODO: This is a stub — a full port needs per-target ABI logic.
-    pub fn retregs(&self, _call: Ref, nlv: Option<&mut [i32; 2]>) -> u64 {
-        if let Some(n) = nlv {
-            n[0] = 0;
-            n[1] = 0;
-        }
-        0
+    pub fn retregs(&self, call: Ref, nlv: Option<&mut [i32; 2]>) -> u64 {
+        crate::arm64::retregs(call, nlv)
     }
 
     /// Return the bitmask of registers used to pass arguments for a call.
     ///
     /// Port of C QBE's `T.argregs(call_ref, m)`. The `m` parameter,
     /// if provided, is filled with per-class counts `[gpr, fpr]`.
-    ///
-    /// TODO: This is a stub — a full port needs per-target ABI logic.
-    pub fn argregs(&self, _call: Ref, m: Option<&mut [i32; 2]>) -> u64 {
-        if let Some(n) = m {
-            n[0] = 0;
-            n[1] = 0;
-        }
-        0
+    pub fn argregs(&self, call: Ref, m: Option<&mut [i32; 2]>) -> u64 {
+        crate::arm64::argregs(call, m)
     }
 
     /// Return the number of memory operands an instruction can fold.

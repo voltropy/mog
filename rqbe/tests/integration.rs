@@ -17,18 +17,11 @@ use rqbe::Target;
 /// Build a Target suitable for the current platform.
 ///
 /// On macOS/arm64, this is the arm64-apple target.
-fn make_target() -> Target {
-    Target {
-        name: "arm64",
-        apple: cfg!(target_os = "macos"),
-        gpr0: 0,
-        ngpr: 28,
-        fpr0: 32,
-        nfpr: 30,
-        rglob: 0,
-        nrglob: 0,
-        rsave: &[],
-        nrsave: [0, 0],
+fn make_target() -> &'static Target {
+    if cfg!(target_os = "macos") {
+        &rqbe::arm64::T_ARM64_APPLE
+    } else {
+        &rqbe::arm64::T_ARM64
     }
 }
 
@@ -137,7 +130,7 @@ fn run_ssa_test(test_name: &str) {
 
     // Step 2: Compile QBE IL to assembly.
     let target = make_target();
-    let asm = rqbe::compile(&test_file.qbe_source, &target)
+    let asm = rqbe::compile(&test_file.qbe_source, target)
         .unwrap_or_else(|e| panic!("rqbe::compile failed for {}: {}", test_name, e));
 
     // Step 3-4: Write temp files.

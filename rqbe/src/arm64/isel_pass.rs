@@ -80,22 +80,22 @@ pub fn logimm(x: u64, k: Cls) -> bool {
     let mut n;
     n = x & 0xf;
     if 0x1111111111111111u64.wrapping_mul(n) == x {
-        return (n & (n + (n & n.wrapping_neg()))) == 0;
+        return (n & n.wrapping_add(n & n.wrapping_neg())) == 0;
     }
     n = x & 0xff;
     if 0x0101010101010101u64.wrapping_mul(n) == x {
-        return (n & (n + (n & n.wrapping_neg()))) == 0;
+        return (n & n.wrapping_add(n & n.wrapping_neg())) == 0;
     }
     n = x & 0xffff;
     if 0x0001000100010001u64.wrapping_mul(n) == x {
-        return (n & (n + (n & n.wrapping_neg()))) == 0;
+        return (n & n.wrapping_add(n & n.wrapping_neg())) == 0;
     }
     n = x & 0xffffffff;
     if 0x0000000100000001u64.wrapping_mul(n) == x {
-        return (n & (n + (n & n.wrapping_neg()))) == 0;
+        return (n & n.wrapping_add(n & n.wrapping_neg())) == 0;
     }
     n = x;
-    (n & (n + (n & n.wrapping_neg()))) == 0
+    (n & n.wrapping_add(n & n.wrapping_neg())) == 0
 }
 
 // ---------------------------------------------------------------------------
@@ -189,13 +189,15 @@ fn fixarg(pr: &mut Ref, k: Cls, phi: bool, f: &mut Fn, buf: &mut InsBuffer, appl
 fn selcmp(arg: &mut [Ref; 2], k: Cls, f: &mut Fn, buf: &mut InsBuffer, apple: bool) -> bool {
     if k.base() == 1 {
         // Float comparison
+        let cmp_idx = buf.len();
         buf.emit(Op::Afcmp, k, Ref::R, arg[0], arg[1]);
         let mut a0 = arg[0];
         let mut a1 = arg[1];
         fixarg(&mut a0, k, false, f, buf, apple);
         fixarg(&mut a1, k, false, f, buf, apple);
-        // Patch the emitted instruction's args
-        // (In the C code this patches curi->arg directly)
+        // Patch the emitted instruction's args using saved index
+        buf.at_mut(cmp_idx).arg[0] = a0;
+        buf.at_mut(cmp_idx).arg[1] = a1;
         return false;
     }
 
@@ -225,12 +227,15 @@ fn selcmp(arg: &mut [Ref; 2], k: Cls, f: &mut Fn, buf: &mut InsBuffer, apple: bo
         }
     }
 
+    let cmp_idx = buf.len();
     buf.emit(cmp, k, Ref::R, arg[0], r);
     let mut a0 = arg[0];
     fixarg(&mut a0, k, false, f, buf, apple);
+    buf.at_mut(cmp_idx).arg[0] = a0;
     if fix {
         let mut a1 = r;
         fixarg(&mut a1, k, false, f, buf, apple);
+        buf.at_mut(cmp_idx).arg[1] = a1;
     }
 
     swap
@@ -252,33 +257,32 @@ fn callable(r: Ref, f: &Fn) -> bool {
 fn sel(i: Ins, f: &mut Fn, buf: &mut InsBuffer, apple: bool) {
     // Alloc → salloc lowering
     if i.op.is_alloc() {
+        let salloc_idx = buf.len();
         util::salloc(i.to, i.arg[0], f, buf);
-        // Fix arg of the salloc instruction
-        let mut a0 = i.arg[0];
+        // Fix arg[0] of the salloc instruction — save index before fixarg
+        // because fixarg may push Copy instructions after it.
+        // We fix the salloc instruction's arg, not the original i.arg.
+        let mut a0 = buf.at_mut(salloc_idx).arg[0];
         fixarg(&mut a0, Cls::Kl, false, f, buf, apple);
+        buf.at_mut(salloc_idx).arg[0] = a0;
         return;
     }
 
     // Comparison → flag + cset
     if let Some((cc, ck)) = util::iscmp(i.op) {
         let k = Cls::from_i8(ck as i8);
-        // Emit flag instruction
+        // Emit flag instruction — save index before selcmp pushes more
+        let flag_idx = buf.len();
         let flag_val = Op::Flagieq as u16 + cc as u16;
         let flag_op = unsafe { std::mem::transmute::<u16, Op>(flag_val) };
         buf.emit(flag_op, i.cls, i.to, Ref::R, Ref::R);
         let mut arg = i.arg;
         if selcmp(&mut arg, k, f, buf, apple) {
-            // Swap: need to adjust the flag op
+            // Swap: adjust the flag op using saved index
             let swapped = cmpop(cc as u16);
-            let _flag_val2 = Op::Flagieq as u16 + swapped;
-            // We need to patch the already-emitted instruction.
-            // Since InsBuffer emits in reverse, the flag op is at the
-            // current tail. For simplicity we'll just re-emit.
-            // In practice, the buffer's last instruction needs patching.
-            let last = buf.last_mut();
             let new_flag_op =
                 unsafe { std::mem::transmute::<u16, Op>(Op::Flagieq as u16 + swapped) };
-            last.op = new_flag_op;
+            buf.at_mut(flag_idx).op = new_flag_op;
         }
         return;
     }
@@ -291,18 +295,18 @@ fn sel(i: Ins, f: &mut Fn, buf: &mut InsBuffer, apple: bool) {
 
     // Everything else
     if i.op != Op::Nop {
+        let ins_idx = buf.len();
         buf.emiti(i);
-        // Fix arguments
+        // Fix arguments — save index before fixarg may push Copys
         let ac0 = argcls(&i, 0);
         let ac1 = argcls(&i, 1);
         let mut a0 = i.arg[0];
         let mut a1 = i.arg[1];
         fixarg(&mut a0, ac0, false, f, buf, apple);
         fixarg(&mut a1, ac1, false, f, buf, apple);
-        // Patch emitted instruction
-        let last = buf.last_mut();
-        last.arg[0] = a0;
-        last.arg[1] = a1;
+        // Patch emitted instruction using saved index
+        buf.at_mut(ins_idx).arg[0] = a0;
+        buf.at_mut(ins_idx).arg[1] = a1;
     }
 }
 

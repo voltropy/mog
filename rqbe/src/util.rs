@@ -162,6 +162,14 @@ impl InsBuffer {
     pub fn last_mut(&mut self) -> &mut Ins {
         self.buf.last_mut().expect("InsBuffer is empty")
     }
+
+    /// Get a mutable reference to the instruction at absolute index `idx`.
+    ///
+    /// Use this instead of `last_mut()` when `fixarg()` calls may have pushed
+    /// additional instructions after the instruction you want to patch.
+    pub fn at_mut(&mut self, idx: usize) -> &mut Ins {
+        &mut self.buf[idx]
+    }
 }
 
 impl Default for InsBuffer {

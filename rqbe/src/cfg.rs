@@ -143,7 +143,7 @@ fn rporec(f: &mut Fn, b: BlkId, mut x: u32) -> u32 {
 
     f.blks[b.0 as usize].id = x;
     assert!(x != u32::MAX);
-    x - 1
+    x.wrapping_sub(1)
 }
 
 /// Compute reverse post-order numbering.  Populates `f.rpo` and sets each
@@ -162,8 +162,9 @@ pub fn fillrpo(f: &mut Fn) {
 
     let n_start = rporec(f, f.start, nblk - 1);
     // n_start is one less than the smallest RPO id assigned.
-    // Number of reachable blocks:
-    let n = n_start + 1; // offset to subtract
+    // Wrapping is intentional: when all blocks are reachable, n_start wraps to u32::MAX
+    // and n wraps back to 0.
+    let n = n_start.wrapping_add(1); // offset to subtract
 
     // Collect unreachable blocks and delete their edges.
     let unreachable: Vec<BlkId> = (0..nblk)
@@ -181,12 +182,12 @@ pub fn fillrpo(f: &mut Fn) {
     }
 
     // Build the RPO vector. Renumber reachable blocks.
-    let reachable_count = (nblk - n) as usize;
+    let reachable_count = nblk.wrapping_sub(n) as usize;
     let mut rpo = vec![BlkId::NONE; reachable_count];
     for i in 0..nblk {
         let blk = &mut f.blks[i as usize];
         if blk.id != u32::MAX {
-            blk.id -= n;
+            blk.id = blk.id.wrapping_sub(n);
             rpo[blk.id as usize] = BlkId(i);
         }
     }

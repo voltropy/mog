@@ -896,7 +896,10 @@ impl<'a> Parser<'a> {
                 self.errf(format!("multiple definitions of block @{}", name));
             }
             self.curb = Some(b);
-            self.insb.clear();
+            // Don't clear insb: closeblk() already drained it via drain(..)
+            // for the prior block. For the first label (when there was no prior
+            // curb), insb may contain function parameter instructions that
+            // belong to this block — clearing would destroy them.
             self.lex.expect(Tok::Tnl);
             return PState::PPhi;
         }
