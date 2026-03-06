@@ -53,7 +53,20 @@
             },
             {
               "name": "meta.interpolation.mog",
-              "match": "\\\\{[^{}]*\\}"
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.interpolation.begin.mog" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.section.interpolation.end.mog" }
+              },
+              "patterns": [
+                {
+                  "name": "variable.interpolation.mog",
+                  "match": "[A-Za-z_][A-Za-z0-9_]*"
+                }
+              ]
             }
           ]
         }

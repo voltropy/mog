@@ -69,7 +69,33 @@ module.exports = async function (eleventyConfig) {
     try {
       return highlighter.codeToHtml(code, {
         lang: highlighterLang,
-        theme
+        includeExplanation: true,
+        theme,
+        transformers: [
+          {
+            tokens(tokenLines) {
+              for (const line of tokenLines) {
+                for (const token of line) {
+                  const scopeNames = (token.explanation || [])
+                    .flatMap((explanation) => explanation.scopes || [])
+                    .map((scope) => scope.scopeName);
+
+                  if (
+                    scopeNames.some((scopeName) => scopeName.includes("variable.interpolation.mog"))
+                  ) {
+                    token.color = "#ffd86a";
+                    token.htmlStyle = {
+                      ...(token.htmlStyle || {}),
+                      color: "#ffd86a"
+                    };
+                  }
+                }
+              }
+
+              return tokenLines;
+            }
+          }
+        ]
       });
     } catch (_error) {
       return `<pre><code class="language-${rawLang || "text"}">${md.utils.escapeHtml(
