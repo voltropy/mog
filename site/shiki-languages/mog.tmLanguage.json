@@ -6,24 +6,37 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
-    { "include": "#keywords" },
+    { "include": "#attributes" },
+    { "include": "#declarations" },
+    { "include": "#control" },
     { "include": "#types" },
+    { "include": "#literals" },
     { "include": "#constants" },
     { "include": "#numbers" },
     { "include": "#functions" },
-    { "include": "#operators" }
+    { "include": "#operators" },
+    { "include": "#punctuation" }
   ],
   "repository": {
     "comments": {
       "patterns": [
+        {
+          "name": "comment.block.documentation.mog",
+          "begin": "\\/\\*\\*",
+          "end": "\\*\/"
+        },
         {
           "name": "comment.block.mog",
           "begin": "\\/\\*",
           "end": "\\*\/"
         },
         {
+          "name": "comment.line.documentation.mog",
+          "match": "\\/\/\/.*$"
+        },
+        {
           "name": "comment.line.double-slash.mog",
-          "match": "\\/\\/.*$"
+          "match": "\\/\/.*$"
         }
       ]
     },
@@ -32,39 +45,124 @@
         {
           "name": "string.quoted.double.mog",
           "begin": "\"",
-          "end": "\""
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.mog",
+              "match": "\\\\(?:x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]{1,6}\\}|u[0-9A-Fa-f]{4}|[abfnrtv\\\\\"'])"
+            },
+            {
+              "name": "meta.interpolation.mog",
+              "match": "\\\\{[^{}]*\\}"
+            }
+          ]
         }
       ]
     },
-    "keywords": {
+    "attributes": {
+      "patterns": [
+        {
+          "name": "entity.name.tag.mog",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.function.declaration.mog",
+          "match": "\\b(async\\s+)?(pub\\s+)?(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.mog" },
+            "2": { "name": "storage.modifier.mog" },
+            "3": { "name": "keyword.declaration.mog" },
+            "4": { "name": "entity.name.function.mog" }
+          }
+        },
+        {
+          "name": "meta.struct.declaration.mog",
+          "match": "\\b(struct)\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.mog" },
+            "2": { "name": "entity.name.class.mog" }
+          }
+        },
+        {
+          "name": "keyword.declaration.mog",
+          "match": "\\b(let|var|const|type|enum|impl|trait|import|from|export|pub|mut|requires|optional)\\b"
+        }
+      ]
+    },
+    "control": {
       "patterns": [
         {
           "name": "keyword.control.mog",
-          "match": "\\b(await|async|fn|for|while|if|else|match|return|break|continue|defer|requires|optional|throws|try|catch|finally|import|from|export|in|true|false|nil|none|ok|err)\\b"
+          "match": "\\b(await|async|if|else|for|while|loop|match|return|break|continue|defer|try|catch|finally|throw|in|where|yield|move|with)\\b"
         }
       ]
     },
     "types": {
       "patterns": [
         {
-          "name": "storage.type.mog",
-          "match": "\\b(int|i32|i64|u32|u64|f16|bf16|f32|f64|float|string|bool|byte|bytes|void|Task|Result|Error|tensor)\\b"
+          "name": "storage.type.primitive.mog",
+          "match": "\\b(i8|i16|i32|i64|u8|u16|u32|u64|f16|f32|f64|bf16|int|float|string|bool|byte|bytes|void|tensor|map|array)\\b"
+        },
+        {
+          "name": "entity.name.type.mog",
+          "match": "\\b(Task|Result|Error|Option|Some|None|Ok|Err)\\b"
+        },
+        {
+          "name": "entity.name.type.mog",
+          "match": "\\:[ \t]*[A-Z][A-Za-z0-9_]*(?:\\s*<[^>]*>)?"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.character.mog",
+          "match": "'.'"
+        },
+        {
+          "name": "string.quoted.triple.mog",
+          "begin": "r\"",
+          "end": "\""
         }
       ]
     },
     "constants": {
       "patterns": [
         {
-          "name": "constant.language.mog",
-          "match": "\\b(nil|none|true|false)\\b"
+          "name": "constant.language.boolean.mog",
+          "match": "\\b(true|false|nil|none)\\b"
+        },
+        {
+          "name": "constant.language.result.mog",
+          "match": "\\b(ok|err)\\b"
         }
       ]
     },
     "numbers": {
       "patterns": [
         {
-          "name": "constant.numeric.mog",
-          "match": "\\b(0x[0-9A-Fa-f]+|0b[01]+|0o[0-7]+|[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|\\.[0-9]+(?:[eE][+-]?[0-9]+)?)\\b"
+          "name": "constant.numeric.hex.mog",
+          "match": "\\b0x[0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.mog",
+          "match": "\\b0b[01]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.mog",
+          "match": "\\b0o[0-7]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.mog",
+          "match": "\\b[0-9]+\\.[0-9]+(?:[eE][+-]?[0-9]+)?\\b|\\b0?\\.[0-9]+(?:[eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.mog",
+          "match": "\\b[0-9]+\\b"
         }
       ]
     },
@@ -73,14 +171,50 @@
         {
           "name": "entity.name.function.mog",
           "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()"
+        },
+        {
+          "name": "entity.name.method.mog",
+          "match": "\\.[A-Za-z_][A-Za-z0-9_]*(?=\\()"
         }
       ]
     },
     "operators": {
       "patterns": [
         {
-          "name": "keyword.operator.mog",
-          "match": "(\\+\\+|--|=>|==|!=|<=|>=|\\|\\||&&|:=|->|[+\\-*/%<>]=?|[=.,:;(){}\\[\\]])"
+          "name": "keyword.operator.arrow.mog",
+          "match": "(->|=>)"
+        },
+        {
+          "name": "keyword.operator.assignment.mog",
+          "match": "(=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|:=)"
+        },
+        {
+          "name": "keyword.operator.comparison.mog",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.mog",
+          "match": "(\\|\\||&&|!)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.mog",
+          "match": "(\\+\\+|--|\\+|-|\\*|/|%|<<|>>|&|\\||\\^)"
+        },
+        {
+          "name": "keyword.operator.other.mog",
+          "match": "([+\\-*/%]=?|=[^=]|[.:;?,])"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.mog",
+          "match": "[,;]"
+        },
+        {
+          "name": "punctuation.bracket.mog",
+          "match": "[()\\[\\]{}]"
         }
       ]
     }
