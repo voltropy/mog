@@ -6,8 +6,10 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use mog::compiler::{compile, compile_to_binary, CompileOptions};
 
@@ -15,20 +17,31 @@ use mog::compiler::{compile, compile_to_binary, CompileOptions};
 // CLI
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy)]
+enum BenchMode {
+    Full,
+    HostStop,
+}
+
 struct Args {
     iterations: usize,
     warmup: usize,
+    mode: BenchMode,
 }
 
 fn parse_args() -> Args {
     let mut args = Args {
         iterations: 5,
         warmup: 2,
+        mode: BenchMode::Full,
     };
     let argv: Vec<String> = env::args().collect();
     let mut i = 1;
     while i < argv.len() {
         match argv[i].as_str() {
+            "--host-stop-bench" => {
+                args.mode = BenchMode::HostStop;
+            }
             "--iterations" => {
                 i += 1;
                 args.iterations = argv[i].parse().expect("--iterations requires a number");
@@ -38,7 +51,9 @@ fn parse_args() -> Args {
                 args.warmup = argv[i].parse().expect("--warmup requires a number");
             }
             "--help" | "-h" => {
-                eprintln!("Usage: mog-bench [--iterations N] [--warmup N]");
+                eprintln!(
+                    "Usage: mog-bench [--iterations N] [--warmup N] [--host-stop-bench]"
+                );
                 std::process::exit(0);
             }
             other => {
@@ -49,6 +64,177 @@ fn parse_args() -> Args {
         i += 1;
     }
     args
+}
+
+#[derive(Clone, Copy)]
+struct HostLimits {
+    max_memory: usize,
+    max_cpu_ms: i32,
+    initial_memory: usize,
+}
+
+struct HostStopCase {
+    label: String,
+    source: String,
+    limits: HostLimits,
+    stop_guard: Duration,
+}
+
+const HOST_C_TEMPLATE: &str = r#"
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct MogVM MogVM;
+
+typedef struct {
+    int32_t tag;
+    int32_t pad;
+    union {
+        int64_t i;
+        double f;
+        int64_t b;
+        const char* s;
+        const void* handle;
+        const char* error;
+    } data;
+} MogValue;
+
+typedef struct {
+    size_t max_memory;
+    int max_cpu_ms;
+    int max_stack_depth;
+    size_t initial_memory;
+} MogLimits;
+
+extern MogVM* mog_vm_new(void);
+extern void mog_vm_set_global(MogVM* vm);
+extern void mog_vm_set_limits(MogVM* vm, const MogLimits* limits);
+
+static void setup_mog_limits(MogVM* vm) {
+    const MogLimits limits = {
+        (size_t){{MAX_MEMORY}},
+        {{MAX_CPU_MS}},
+        1024,
+        (size_t){{INITIAL_MEMORY}},
+    };
+    mog_vm_set_limits(vm, &limits);
+}
+
+__attribute__((constructor))
+static void setup_mog_vm(void) {
+    MogVM* vm = mog_vm_new();
+    if (!vm) {
+        fprintf(stderr, "bench-host: mog_vm_new failed\n");
+        exit(1);
+    }
+    setup_mog_limits(vm);
+    mog_vm_set_global(vm);
+}
+"#;
+
+static HOST_STOP_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+fn project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(std::borrow::ToOwned::to_owned)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn host_source_for(limits: HostLimits) -> String {
+    HOST_C_TEMPLATE
+        .replace("{{MAX_MEMORY}}", &limits.max_memory.to_string())
+        .replace("{{MAX_CPU_MS}}", &limits.max_cpu_ms.to_string())
+        .replace("{{INITIAL_MEMORY}}", &limits.initial_memory.to_string())
+}
+
+fn compile_hosted_binary(source: &str, limits: HostLimits, label: &str) -> Option<PathBuf> {
+    let counter = HOST_STOP_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let host_path = std::env::temp_dir().join(format!("mog-stop-host-{pid}-{counter}.c"));
+    let out_path = std::env::temp_dir().join(format!("mog-stop-bin-{pid}-{counter}.out"));
+
+    fs::write(&host_path, host_source_for(limits)).unwrap();
+
+    let options = CompileOptions {
+        output_path: Some(out_path.clone()),
+        source_path: Some(project_root()),
+        extra_link_objects: vec![host_path.clone()],
+        ..Default::default()
+    };
+
+    match compile_to_binary(source, &options) {
+        Ok(path) => Some(path),
+        Err(errors) => {
+            let msg = errors.join("; ");
+            if msg.contains("qbe") || msg.contains("runtime") || msg.contains("not found") {
+                eprintln!("skipping host-stop binary '{label}': {msg}");
+                None
+            } else {
+                panic!("compile_to_binary failed for '{label}': {msg}");
+            }
+        }
+    }
+}
+
+fn run_with_wall_timeout(executable: &Path, timeout: Duration) -> (Duration, bool, Option<i32>) {
+    let mut child = Command::new(executable)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap_or_else(|e| panic!("failed to launch host-stop binary: {e}"));
+
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return (start.elapsed(), false, status.code());
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return (start.elapsed(), true, None);
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn time_host_timeout_binary(executable: &Path, stop_limit: Duration, run_guard: Duration) -> f64 {
+    let (elapsed, timed_out, exit_code) = run_with_wall_timeout(executable, run_guard);
+    assert!(!timed_out, "benchmark case exceeded wall timeout: elapsed={:?}", elapsed);
+    assert!(
+        exit_code.is_some(),
+        "benchmark case terminated by signal before stop: elapsed={:?}",
+        elapsed
+    );
+    assert!(
+        elapsed < stop_limit,
+        "benchmark case stopped slower than budget: elapsed={:?}",
+        elapsed
+    );
+    elapsed.as_secs_f64() * 1000.0
+}
+
+fn time_host_stop_case(
+    case: &HostStopCase,
+    warmup: usize,
+    iterations: usize,
+) -> Option<BenchResult> {
+    let binary = compile_hosted_binary(&case.source, case.limits, &case.label)?;
+
+    let stop_limit = case.stop_guard;
+    let run_guard = stop_limit * 6;
+    let case_label = case.label.clone();
+    let path = binary;
+
+    Some(run_bench(
+        &case_label,
+        1,
+        warmup,
+        iterations,
+        move || time_host_timeout_binary(&path, stop_limit, run_guard),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +355,54 @@ fn count_lines(text: &str) -> usize {
     text.chars().filter(|&c| c == '\n').count()
 }
 
+fn load_host_stop_cases(bench_dir: &Path) -> Vec<HostStopCase> {
+    vec![
+        (
+            "host-stop-tiny-spin",
+            "host-stop-spin.mog",
+            HostLimits {
+                max_memory: 32 * 1024 * 1024,
+                max_cpu_ms: 120,
+                initial_memory: 8 * 1024 * 1024,
+            },
+            Duration::from_millis(700),
+        ),
+        (
+            "host-stop-memory-leak",
+            "host-stop-memory.mog",
+            HostLimits {
+                max_memory: 64 * 1024,
+                max_cpu_ms: 180,
+                initial_memory: 32 * 1024,
+            },
+            Duration::from_millis(900),
+        ),
+        (
+            "host-stop-async-suspend",
+            "host-stop-async.mog",
+            HostLimits {
+                max_memory: 16 * 1024 * 1024,
+                max_cpu_ms: 120,
+                initial_memory: 4 * 1024 * 1024,
+            },
+            Duration::from_millis(900),
+        ),
+    ]
+    .into_iter()
+    .map(|(label, file, limits, stop_guard)| {
+        let path = bench_dir.join("mog").join(file);
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read benchmark source {}: {e}", path.display()));
+        HostStopCase {
+            label: label.to_string(),
+            source,
+            limits,
+            stop_guard,
+        }
+    })
+    .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Benchmark entry
 // ---------------------------------------------------------------------------
@@ -240,6 +474,40 @@ fn print_row(r: &BenchResult) {
     );
 }
 
+fn run_host_stop_suite(args: &Args, bench_dir: &Path) {
+    let stop_cases = load_host_stop_cases(bench_dir);
+    let mut stop_results: Vec<BenchResult> = Vec::new();
+    let mut skipped = 0usize;
+
+    println!(
+        "host-stop benchmark iterations={}  warmup={}",
+        args.iterations, args.warmup
+    );
+
+    for case in &stop_cases {
+        match time_host_stop_case(case, args.warmup, args.iterations) {
+            Some(result) => stop_results.push(result),
+            None => skipped += 1,
+        }
+    }
+
+    if stop_results.is_empty() {
+        eprintln!("no host-stop benchmark cases ran (all skipped)");
+    } else {
+        print_header("host-stop worst-case latency");
+        for result in &stop_results {
+            print_row(result);
+        }
+    }
+
+    if skipped > 0 {
+        eprintln!("skipped {skipped} host-stop benchmark case(s)");
+    }
+
+    println!();
+    println!("done.");
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -255,6 +523,11 @@ fn main() {
         "mog-bench  iterations={}  warmup={}",
         args.iterations, args.warmup
     );
+
+    if let BenchMode::HostStop = args.mode {
+        run_host_stop_suite(&args, &bench_dir);
+        return;
+    }
 
     // Pre-read all source files.
     let mog_sources: Vec<(String, String, PathBuf)> = sizes

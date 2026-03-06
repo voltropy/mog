@@ -1,0 +1,16 @@
+// host-stop-spin.mog
+// Host timeout stress case: recursive CPU burn in a tight loop.
+
+fn expensive(x: int) -> int {
+    if x <= 0 {
+        return 0;
+    }
+    return expensive(x - 1) + expensive(x - 1);
+}
+
+fn main() -> int {
+    while 1 {
+        x: int = expensive(10);
+    }
+    return 0;
+}

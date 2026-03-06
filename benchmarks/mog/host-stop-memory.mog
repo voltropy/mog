@@ -1,0 +1,21 @@
+// host-stop-memory.mog
+// Host timeout stress case: retained allocation pressure to force GC and hard limits.
+
+fn main() -> int {
+    live: [int] = [0];
+    i: int = 0;
+    while 1 {
+        chunk: [int] = [0];
+        j: int = 0;
+        while j < 128 {
+            chunk.push(i + j);
+            j = j + 1;
+        }
+        live.push(i);
+        if ((i % 1024) == 0) {
+            live = [0];
+        }
+        i = i + 1;
+    }
+    return 0;
+}
