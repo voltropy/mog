@@ -17,8 +17,6 @@
       <div class="site-shell">
         <a class="brand" href="/">Mog</a>
         <nav aria-label="Primary">
-          <a href="/introduction/">Introduction</a>
-          <a href="/">Guide</a>
           <a
             class="github-link"
             href="https://github.com/voltropy/mog"
@@ -44,5 +42,108 @@
         &copy; 2026 Voltropy PBC · Created by <a href="https://voltropy.com" target="_blank" rel="noopener noreferrer">Voltropy</a>
       </p>
     </footer>
+    <script>
+      (() => {
+        const tocLinks = Array.from(document.querySelectorAll(".guide-toc-list a[href^='#']"));
+        if (!tocLinks.length) {
+          return;
+        }
+
+        const tocContainer = document.querySelector(".guide-toc");
+        const idToLink = new Map();
+        for (const link of tocLinks) {
+          const id = link.getAttribute("href").slice(1);
+          if (id) {
+            idToLink.set(id, link);
+          }
+        }
+
+        const headings = Array.from(idToLink.keys())
+          .map((id) => document.getElementById(id))
+          .filter(Boolean)
+          .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top || a.id.localeCompare(b.id));
+
+        if (!headings.length) {
+          return;
+        }
+
+        let activeId = null;
+        let rafPending = false;
+        const revealOffset = 120;
+
+        function clearActive() {
+          for (const link of tocLinks) {
+            link.classList.remove("is-active");
+            link.removeAttribute("aria-current");
+          }
+        }
+
+        function setActive(id) {
+          if (activeId === id) {
+            return;
+          }
+          activeId = id;
+          clearActive();
+
+          const activeLink = idToLink.get(id);
+          if (!activeLink) {
+            return;
+          }
+
+          activeLink.classList.add("is-active");
+          activeLink.setAttribute("aria-current", "true");
+
+          const li = activeLink.closest(".guide-toc-item");
+          if (li && tocContainer) {
+            const linkRect = li.getBoundingClientRect();
+            const containerRect = tocContainer.getBoundingClientRect();
+            const pad = 10;
+
+            if (linkRect.top < containerRect.top + pad) {
+              tocContainer.scrollTop -= containerRect.top + pad - linkRect.top;
+            } else if (linkRect.bottom > containerRect.bottom - pad) {
+              tocContainer.scrollTop += linkRect.bottom - (containerRect.bottom - pad);
+            }
+          }
+        }
+
+        function currentSectionId() {
+          const scrollTop = window.scrollY + revealOffset;
+          let current = headings[0] ? headings[0].id : "";
+
+          for (const heading of headings) {
+            if (heading.offsetTop <= scrollTop) {
+              current = heading.id;
+            } else {
+              break;
+            }
+          }
+
+          const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 8;
+          if (nearBottom && headings.length) {
+            current = headings[headings.length - 1].id;
+          }
+
+          return current;
+        }
+
+        function onScroll() {
+          if (!rafPending) {
+            rafPending = true;
+            window.requestAnimationFrame(() => {
+              const next = currentSectionId();
+              setActive(next);
+              if (next && window.location.hash !== `#${next}`) {
+                history.replaceState(null, "", `#${next}`);
+              }
+              rafPending = false;
+            });
+          }
+        }
+
+        onScroll();
+        window.addEventListener("scroll", onScroll, { passive: true });
+      })();
+    </script>
   </body>
 </html>

@@ -1,7 +1,7 @@
 ---
-layout: introduction_page.njk
+layout: null
 title: "Mog: A Programming Language for AI Agents"
-permalink: /introduction/
+permalink: false
 ---
 
 # Mog: A Programming Language for AI Agents
@@ -21,6 +21,7 @@ Mog is a statically typed, compiled, embedded language (think statically typed L
 - The compiler is being rewritten in safe Rust so the entire toolchain can be audited for security.
 - Even without a full security audit, Mog is already useful for agents extending themselves with their own code.
 - MIT licensed, contributions welcome. https://github.com/voltropy/mog
+- The [Mog Guide](/) has lots of examples.
 
 ## Why Mog?
 

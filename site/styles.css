@@ -339,6 +339,27 @@ h4 {
   color: var(--ink);
 }
 
+.guide-toc-item a.is-active {
+  position: relative;
+  color: var(--ink);
+  font-weight: 700;
+  background: #ecf3ff;
+  border-radius: 6px;
+  padding: 0.08rem 0.42rem;
+}
+
+.guide-toc-item a.is-active::before {
+  content: "";
+  position: absolute;
+  left: -0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0.26rem;
+  height: 0.76rem;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
 .guide-toc-level-1 a {
   color: var(--ink);
   font-weight: 700;
