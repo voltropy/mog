@@ -22,6 +22,59 @@ function mapLanguage(rawLang) {
   return normalized;
 }
 
+function slugifyHeading(text) {
+  const normalized = String(text || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+  const collapsed = normalized.replace(/-+/g, "-");
+  return collapsed.replace(/^-+|-+$/g, "") || "section";
+}
+
+function makeUniqueSlug(base, seen) {
+  const baseSlug = slugifyHeading(base);
+  const count = seen.get(baseSlug) || 0;
+  seen.set(baseSlug, count + 1);
+  return count === 0 ? baseSlug : `${baseSlug}-${count + 1}`;
+}
+
+function buildGuideArtifacts(markdown, mdRenderer) {
+  const tokens = mdRenderer.parse(markdown, {});
+  const used = new Map();
+  const guideToc = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.type !== "heading_open") {
+      continue;
+    }
+
+    const next = tokens[i + 1];
+    if (!next || next.type !== "inline") {
+      continue;
+    }
+
+    const level = Number(token.tag.substring(1));
+    const title = next.content.trim();
+    if (!title) {
+      continue;
+    }
+
+    const id = makeUniqueSlug(title, used);
+    token.attrSet("id", id);
+
+    if (level >= 1 && level <= 4) {
+      guideToc.push({ id, level, title });
+    }
+  }
+
+  const guideHtml = mdRenderer.renderer.render(tokens, mdRenderer.options, {});
+  return { guideHtml, guideToc };
+}
+
 module.exports = async function (eleventyConfig) {
   const mogLanguage = JSON.parse(await fs.readFile(mogLanguagePath, "utf8"));
   if (!mogLanguage.id) {
@@ -104,11 +157,31 @@ module.exports = async function (eleventyConfig) {
     }
   };
 
+  let guideArtifacts = null;
+  let guideMtime = 0;
+
+  async function getGuideArtifacts() {
+    const stats = await fs.stat(guidePath);
+    if (guideArtifacts && guideMtime === stats.mtimeMs) {
+      return guideArtifacts;
+    }
+
+    const guideMarkdown = await fs.readFile(guidePath, "utf8");
+    guideArtifacts = buildGuideArtifacts(guideMarkdown, md);
+    guideMtime = stats.mtimeMs;
+    return guideArtifacts;
+  }
+
   eleventyConfig.setLibrary("md", md);
 
   eleventyConfig.addGlobalData("guideHtml", async () => {
-    const guideMarkdown = await fs.readFile(guidePath, "utf8");
-    return md.render(guideMarkdown);
+    const { guideHtml } = await getGuideArtifacts();
+    return guideHtml;
+  });
+
+  eleventyConfig.addGlobalData("guideToc", async () => {
+    const { guideToc } = await getGuideArtifacts();
+    return guideToc;
   });
 
   eleventyConfig.addPassthroughCopy("site/styles.css");
