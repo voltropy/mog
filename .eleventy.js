@@ -3,6 +3,7 @@ const path = require("node:path");
 const MarkdownIt = require("markdown-it");
 
 const guidePath = path.join(__dirname, "docs/guide.md");
+const introductionPath = path.join(__dirname, "site", "introduction.md");
 const mogLanguagePath = path.join(__dirname, "site", "shiki-languages", "mog.tmLanguage.json");
 
 function mapLanguage(rawLang) {
@@ -41,7 +42,7 @@ function makeUniqueSlug(base, seen) {
   return count === 0 ? baseSlug : `${baseSlug}-${count + 1}`;
 }
 
-function buildGuideArtifacts(markdown, mdRenderer) {
+function buildDocumentArtifacts(markdown, mdRenderer) {
   const tokens = mdRenderer.parse(markdown, {});
   const used = new Map();
   const guideToc = [];
@@ -159,6 +160,8 @@ module.exports = async function (eleventyConfig) {
 
   let guideArtifacts = null;
   let guideMtime = 0;
+  let introductionArtifacts = null;
+  let introductionMtime = 0;
 
   async function getGuideArtifacts() {
     const stats = await fs.stat(guidePath);
@@ -167,9 +170,21 @@ module.exports = async function (eleventyConfig) {
     }
 
     const guideMarkdown = await fs.readFile(guidePath, "utf8");
-    guideArtifacts = buildGuideArtifacts(guideMarkdown, md);
+    guideArtifacts = buildDocumentArtifacts(guideMarkdown, md);
     guideMtime = stats.mtimeMs;
     return guideArtifacts;
+  }
+
+  async function getIntroductionArtifacts() {
+    const stats = await fs.stat(introductionPath);
+    if (introductionArtifacts && introductionMtime === stats.mtimeMs) {
+      return introductionArtifacts;
+    }
+
+    const introductionMarkdown = await fs.readFile(introductionPath, "utf8");
+    introductionArtifacts = buildDocumentArtifacts(introductionMarkdown, md);
+    introductionMtime = stats.mtimeMs;
+    return introductionArtifacts;
   }
 
   eleventyConfig.setLibrary("md", md);
@@ -184,10 +199,21 @@ module.exports = async function (eleventyConfig) {
     return guideToc;
   });
 
+  eleventyConfig.addGlobalData("introductionHtml", async () => {
+    const { guideHtml } = await getIntroductionArtifacts();
+    return guideHtml;
+  });
+
+  eleventyConfig.addGlobalData("introductionToc", async () => {
+    const { guideToc } = await getIntroductionArtifacts();
+    return guideToc;
+  });
+
   eleventyConfig.addPassthroughCopy("site/styles.css");
   eleventyConfig.addPassthroughCopy("site/CNAME");
   eleventyConfig.addPassthroughCopy("site/assets");
   eleventyConfig.addWatchTarget("docs/guide.md");
+  eleventyConfig.addWatchTarget("site/introduction.md");
 
   return {
     dir: {

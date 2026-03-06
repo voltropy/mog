@@ -1,0 +1,20 @@
+---
+layout: base.njk
+---
+
+<section class="guide-layout">
+  <details class="guide-toc" open>
+    <summary>Contents</summary>
+    <a class="guide-toc-top" href="#introduction">Back to top</a>
+    <ol class="guide-toc-list">
+      {% for item in introductionToc %}
+        <li class="guide-toc-item guide-toc-level-{{ item.level }}">
+          <a href="#{{ item.id }}">{{ item.title }}</a>
+        </li>
+      {% endfor %}
+    </ol>
+  </details>
+  <article id="introduction" class="guide-wrap">
+    {{ introductionHtml | safe }}
+  </article>
+</section>

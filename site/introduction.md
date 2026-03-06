@@ -1,5 +1,5 @@
 ---
-layout: guide_page.njk
+layout: introduction_page.njk
 title: "Mog: A Programming Language for AI Agents"
 permalink: /introduction/
 ---
