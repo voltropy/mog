@@ -9,6 +9,8 @@ permalink: false
 > What if an AI agent could modify itself quickly, easily, and safely? Mog is a
 > programming language designed for exactly this.
 
+<a class="jump-to-examples" href="#chapter-1-your-first-mog-program">Jump to Code Examples <span aria-hidden="true">↓</span></a>
+
 ---
 
 ## Overview

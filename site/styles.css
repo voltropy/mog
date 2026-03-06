@@ -201,6 +201,25 @@ h4 {
   color: var(--ink);
 }
 
+.jump-to-examples {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.25rem 0 0.9rem;
+  padding: 0.48rem 0.9rem;
+  border-radius: 999px;
+  text-decoration: none;
+  font-weight: 600;
+  color: #08142e;
+  background: linear-gradient(150deg, #f0fbff, #e8f4ff);
+  border: 1px solid rgba(13, 17, 23, 0.12);
+}
+
+.jump-to-examples:hover {
+  color: #04234b;
+  border-color: rgba(13, 17, 23, 0.26);
+}
+
 .guide-toc-list {
   margin: 0;
   padding: 0;
