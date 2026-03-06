@@ -27,8 +27,8 @@ module.exports = async function (eleventyConfig) {
   if (!mogLanguage.id) {
     mogLanguage.id = "mog";
   }
-  const { getHighlighter } = await import("shiki");
-  const highlighter = await getHighlighter({
+  const { createHighlighter } = await import("shiki");
+  const highlighter = await createHighlighter({
     themes: ["github-dark", "github-light"],
     langs: [
       "text",

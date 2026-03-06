@@ -1,6 +1,8 @@
 {
-  "name": "Mog",
+  "name": "mog",
+  "displayName": "Mog",
   "scopeName": "source.mog",
+  "aliases": ["Mog"],
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
@@ -16,12 +18,12 @@
       "patterns": [
         {
           "name": "comment.block.mog",
-          "begin": "\/\*",
-          "end": "\*\/"
+          "begin": "\\/\\*",
+          "end": "\\*\/"
         },
         {
           "name": "comment.line.double-slash.mog",
-          "match": "\/\/.*$"
+          "match": "\\/\\/.*$"
         }
       ]
     },
@@ -30,17 +32,7 @@
         {
           "name": "string.quoted.double.mog",
           "begin": "\"",
-          "end": "\"",
-          "patterns": [
-            {
-              "name": "constant.character.escape.mog",
-              "match": "\\\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]{1,6}\}|u[0-9A-Fa-f]{4}|[abfnrtv\\\"'])"
-            },
-            {
-              "name": "meta.interpolation.mog",
-              "match": "\\{[^{}]*\\}"
-            }
-          ]
+          "end": "\""
         }
       ]
     },
@@ -48,7 +40,7 @@
       "patterns": [
         {
           "name": "keyword.control.mog",
-          "match": "\\b(await|async|fn|for|while|if|else|match|return|break|continue|defer|true|false|nil|none|ok|err|requires|optional|throws|try|catch|finally|import|from|export|in)\\b"
+          "match": "\\b(await|async|fn|for|while|if|else|match|return|break|continue|defer|requires|optional|throws|try|catch|finally|import|from|export|in|true|false|nil|none|ok|err)\\b"
         }
       ]
     },
@@ -64,7 +56,7 @@
       "patterns": [
         {
           "name": "constant.language.mog",
-          "match": "\\b(null|true|false|none|ok|err)\\b"
+          "match": "\\b(nil|none|true|false)\\b"
         }
       ]
     },
