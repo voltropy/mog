@@ -1,6 +1,6 @@
 # Mog
 
-A small, statically-typed, embeddable language for ML workflows and LLM agent scripting. Has a pure-Rust toolchain: Rust compiler, Rust runtime (~6K lines), and an in-process QBE backend (`rqbe`, a safe Rust rewrite of QBE). A legacy TypeScript compiler also exists. Think of it as a statically-typed Lua with tensors, async I/O, and a capability model where the host provides all I/O and ML operations.
+A small, statically-typed, embeddable language for ML workflows and LLM agent scripting. Has a pure-Rust toolchain: Rust compiler, Rust runtime (~6K lines), and an in-process QBE backend (`rqbe`, a safe Rust rewrite of QBE). Think of it as a statically-typed Lua with tensors, async I/O, and a capability model where the host provides all I/O and ML operations.
 
 - **[Language Guide](docs/guide.md)** — Full tutorial from first program through async, modules, embedding, and plugins.
 - **[Showcase](showcase.mog)** — One file demonstrating every language feature (755 lines).
@@ -32,13 +32,11 @@ Mog is explicitly **not** for systems programming, standalone applications, or r
 5. **Host provides I/O** — the language has no built-in file, network, or system access. All side effects go through capabilities explicitly granted by the embedding host.
 6. **Tensors as data, ML as capability** — the language provides n-dimensional arrays with hardware-relevant dtypes (f16, bf16, f32, f64) and element read/write. All ML operations (matmul, activations, autograd) are provided by the host via capabilities, not built into the language.
 
-## Toolchains
+## Toolchain
 
-Mog has two compiler implementations. The **Rust toolchain** is the primary and recommended one — both the compiler and runtime are pure Rust.
+The compiler and runtime are pure Rust.
 
-### Rust Toolchain (recommended)
-
-The Rust compiler (`mogc`) is a standalone native binary. It uses `rqbe`, an in-process QBE backend written in safe Rust (~15K lines), to produce fast native code with minimal compile times. The Rust runtime (`runtime-rs/`, ~6K lines) provides GC, async, strings, arrays, maps, tensors, and plugin support — replacing the legacy C runtime.
+The Rust compiler (`mogc`) is a standalone native binary. It uses `rqbe`, an in-process QBE backend written in safe Rust (~15K lines), to produce fast native code with minimal compile times. The Rust runtime (`runtime-rs/`, ~6K lines) provides GC, async, strings, arrays, maps, tensors, and plugin support.
 
 **Build the compiler:**
 
@@ -73,7 +71,7 @@ mogc program.mog --plugin mylib --plugin-version 1.0.0 -o mylib.dylib
 mogc program.mog --link host.rs -o program
 ```
 
-**Requirements:** A C compiler (`cc`) must be on `$PATH` for linking. The QBE backend (`rqbe`) is built in-process — no external `qbe` binary is needed. The Rust runtime (`runtime-rs/`) is the default; the legacy C runtime (`runtime/`) is no longer required.
+**Requirements:** A C compiler (`cc`) must be on `$PATH` for linking. The QBE backend (`rqbe`) is built in-process — no external `qbe` binary is needed.
 
 **Embedding from Rust:**
 
@@ -99,42 +97,15 @@ MogCompileResult *r = mog_compile(c, source, source_len, NULL);
 const char *ir = mog_result_ir(r);
 ```
 
-### TypeScript Toolchain (legacy)
-
-The original TypeScript compiler runs on Bun. It supports both an LLVM backend (full optimization) and a QBE backend. The Rust toolchain is preferred for new work — the TypeScript version remains functional but is no longer the primary implementation.
-
-**Install dependencies:**
+**Testing:**
 
 ```bash
-bun install
-```
-
-**Usage:**
-
-```bash
-# Compile a Mog program (uses LLVM backend by default)
-bun run src/index.ts program.mog
-
-# Run the executable
-./program
-```
-
-**Requirements:** Bun, LLVM (`llc` and `clang` from Homebrew LLVM), and the legacy C runtime. For the QBE backend path, also needs `qbe` on `$PATH`.
-
-**Testing (both toolchains):**
-
-```bash
-# TypeScript tests (1,338 tests across 30 files)
-bun test
-
-# Rust compiler tests (1,146+ tests across 13 files)
+# Compiler tests (1,146+ tests across 13 files)
 cargo test --manifest-path compiler/Cargo.toml
 
 # rqbe backend tests (186 tests)
 cargo test --manifest-path rqbe/Cargo.toml
 ```
-
-The TypeScript test suite is larger because it covers both the LLVM and QBE backends. The Rust compiler targets the rqbe backend only.
 
 ## Language Overview
 
@@ -524,18 +495,18 @@ The core language is fully implemented and tested. ML operations are not languag
 | **Type system** | `int`, `float`, `bool`, `string`, `?T` (Optional), `Result<T>`, type aliases, `as` casts, numeric precision types (`i8`–`i64`, `u8`–`u64`, `f16`, `bf16`, `f32`, `f64`) |
 | **Variables** | `:=` binding, `=` reassignment, type inference, explicit annotation |
 | **Functions** | `fn` with return types, single-expression bodies, closures/lambdas as first-class values, named arguments with default values |
-| **Async** | `async fn`, `await`, `spawn`, `all()`, `race()`, coroutine-based with host event loop (LLVM + QBE backends) |
+| **Async** | `async fn`, `await`, `spawn`, `all()`, `race()`, coroutine-based with host event loop |
 | **Control flow** | `if`/`else`/`elif`, if-as-expression, `while`, `for i in 0..N`, `for item in array`, `for i, item in array`, `for key, value in map`, `break`, `continue`, `match` with literal/variant/wildcard patterns |
 | **Error handling** | `Result<T>` with `ok`/`err`, `?` propagation, `try`/`catch`, `match` on Result/Optional |
 | **Composite types** | Arrays (`.push`, `.pop`, `.len`, `.contains`, `.sort`, `.reverse`, `.slice`, `.join()`, `.filter()`, `.map()`), Maps (create, get, set, iterate, `.has()`), Structs (declare, construct, field access/mutation), SoA (`soa Struct[N]` with AoS syntax) |
 | **Strings** | UTF-8 literals, f-string interpolation, `.len`, `.upper()`, `.lower()`, `.trim()`, `.split()`, `.contains()`, `.starts_with()`, `.ends_with()`, `.replace()`, `str()` conversion, `s[start:end]` slice syntax, `+` operator concatenation, `parse_float()` |
 | **Math builtins** | `sqrt`, `sin`, `cos`, `tan`, `exp`, `log`, `floor`, `ceil`, `abs`, `pow`, `asin`, `acos`, `atan2`, `log2`, `round`, `min`, `max`, `PI`, `E` |
-| **Host capabilities** | `requires`/`optional` declarations, `.mogdecl` files, C API for registration, `fs` (read/write/append/exists/remove/size), `process` (sleep/getenv/cwd/exit/timestamp), `env` (custom host functions, including async) |
+| **Host capabilities** | `requires`/`optional` declarations, `.mogdecl` files, Rust and C APIs for registration, `fs` (read/write/append/exists/remove/size), `process` (sleep/getenv/cwd/exit/timestamp), `env` (custom host functions, including async) |
 | **Module system** | `package`, `import`, `pub`, `mog.mod`, name mangling, circular import detection |
 | **Tensors** | N-dimensional arrays with dtype, creation (literal, `.zeros()`, `.ones()`, `.randn()`), `.shape`, `.ndim`, `.reshape()`, `.transpose()`, element read/write. ML operations (matmul, activations, autograd) provided by host capabilities. |
 | **Match exhaustiveness** | Warnings for non-exhaustive `match` on `Result<T>` and `?T` types |
-| **Backends** | Rust compiler with in-process `rqbe` backend (recommended, standalone `mogc` binary, safe Rust ~15K lines), TypeScript compiler with LLVM IR + QBE backends (legacy, runs on Bun) |
-| **Runtime** | Rust runtime (`runtime-rs/`, ~6K lines, primary): mark-and-sweep GC, async event loop, strings, arrays, maps, tensors, plugin support. Legacy C runtime (`runtime/`): mark-and-sweep GC, `select()`-based async event loop with fd watchers and timers |
+| **Backends** | Rust compiler with in-process `rqbe` backend (standalone `mogc` binary, safe Rust ~15K lines) |
+| **Runtime** | Rust runtime (`runtime-rs/`, ~6K lines): mark-and-sweep GC, async event loop, strings, arrays, maps, tensors, plugin support |
 | **Safety** | Cooperative interrupt polling at loop back-edges, `mog_request_interrupt()` host API, `mog_arm_timeout(ms)` for CPU time limits, automatic timeout via `MogLimits.max_cpu_ms` |
 | **Plugins** | Compile .mog to .dylib/.so shared libraries, `mog_load_plugin()`, `mog_plugin_call()`, capability sandboxing via `mog_load_plugin_sandboxed()`, plugin metadata (`MogPluginInfo`), `pub fn` export visibility |
 | **Operators** | Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison, logical (`and`, `or`, `not`), bitwise (`&`, `\|`, `^`, `~`, `<<`, `>>`), `?` propagation, `..` range, `as` cast |
@@ -545,25 +516,23 @@ The core language is fully implemented and tested. ML operations are not languag
 | Feature | Description |
 |---|---|
 | **Generics** | Out of scope per spec — Mog uses concrete types and type aliases instead |
-| **`http`, `model`, `ml`, `log`, `db` reference implementations** | Reference host capability implementations. The capability system itself works — hosts can register any capability via the C API. These are convenience implementations for common use cases. |
+| **`http`, `model`, `ml`, `log`, `db` reference implementations** | Reference host capability implementations. The capability system itself works — hosts can register any capability via the Rust or C API. These are convenience implementations for common use cases. |
 
 ## Future Work
 
 ### In-Process Assembler
 
-The QBE backend currently bottlenecks on the system assembler (`as`). For large programs, QBE itself takes ~13ms but `as` takes ~59ms — 71% of backend time. Three options to eliminate this:
+The QBE backend currently bottlenecks on the system assembler (`as`). For large programs, `rqbe` itself takes ~13ms but `as` takes ~59ms — 71% of backend time. Three options to eliminate this:
 
-1. **Minimal ARM64 assembler in C** (~3-4 weeks). Write a purpose-built assembler handling only the ~54 ARM64 instruction mnemonics QBE actually emits, plus Mach-O object file output. ARM64's fixed 4-byte encoding makes this tractable. Expected: ~2-5ms for 7K lines of assembly, saving ~55ms.
+1. **Minimal ARM64 assembler in Rust** (~3-4 weeks). Write a purpose-built assembler handling only the ~54 ARM64 instruction mnemonics `rqbe` actually emits, plus Mach-O object file output. ARM64's fixed 4-byte encoding makes this tractable. Expected: ~2-5ms for 7K lines of assembly, saving ~55ms.
 
-2. **Modify QBE to emit machine code directly** (~2-3 weeks). Replace QBE's text emitters with binary encoders in `arm64/emit.c`, emitting Mach-O `.o` files directly. Eliminates the text→parse→encode round-trip entirely. Cleanest long-term solution but requires deeper QBE modifications.
+2. **Modify `rqbe` to emit machine code directly** (~2-3 weeks). Replace `rqbe`'s text emitters with binary encoders, emitting Mach-O `.o` files directly. Eliminates the text->parse->encode round-trip entirely. Cleanest long-term solution but requires deeper `rqbe` modifications.
 
 3. **Skip assembly, JIT to memory** (~2 weeks). For development/REPL use cases, encode ARM64 directly into an executable memory page and jump to it. No assembler or linker needed. Limited to same-machine execution.
 
 ## Architecture
 
-Mog has two independent compiler implementations. The Rust toolchain (compiler + runtime + rqbe backend) is the primary system. The TypeScript compiler and C runtime remain as legacy.
-
-### Rust Compiler (recommended)
+### Compiler
 
 ```
 compiler/
@@ -588,32 +557,11 @@ compiler/
 rqbe/                 In-process QBE backend (safe Rust, ~15K lines, 186 tests)
 ```
 
-The Rust compiler uses the `rqbe` in-process QBE backend — a safe Rust rewrite of QBE (~15K lines) that runs in-process, eliminating the need for an external `qbe` binary. It produces `mogc`, a standalone native binary with no runtime dependencies beyond a C compiler for linking. The crate also builds as a C library (`libmog.dylib` / `libmog.a`) for embedding in C/C++ hosts.
+The compiler uses the `rqbe` in-process QBE backend — a safe Rust rewrite of QBE (~15K lines) that runs in-process, eliminating the need for an external `qbe` binary. It produces `mogc`, a standalone native binary with no runtime dependencies beyond a C compiler for linking. The crate also builds as a C library (`libmog.dylib` / `libmog.a`) for embedding in C/C++ hosts.
 
-### TypeScript Compiler (legacy)
+### Runtime
 
-```
-src/
-  index.ts          CLI entry point
-  lexer.ts          Tokenization (84 token types, 31 keywords)
-  parser.ts         AST generation (62 node types)
-  analyzer.ts       Type checking, capability checking, scope resolution
-  types.ts          Type system (21 type classes)
-  compiler.ts       Compiler orchestration
-  llvm_codegen.ts   LLVM IR generation (68 codegen methods)
-  qbe_codegen.ts    QBE IL generation (lightweight backend)
-  mog_backend_ffi.ts  Bun FFI bindings to in-process QBE
-  linker.ts         Links IR to native executable
-  capability.ts     .mogdecl parser for host FFI declarations
-  module.ts         Module resolver with circular import detection
-  stdlib.ts         Standard library functions
-```
-
-The TypeScript compiler runs on Bun and supports two backends: LLVM IR (full optimization, requires Homebrew LLVM) and QBE (faster compilation). It has the larger test suite (1,338 tests across 30 files) because it covers both backends.
-
-### Rust Runtime (primary)
-
-The Rust runtime (`runtime-rs/`, ~6K lines) is the primary runtime for the Rust toolchain. It provides GC, strings, arrays, maps, tensors, async event loop, and plugin support — all in pure Rust.
+The Rust runtime (`runtime-rs/`, ~6K lines) provides GC, strings, arrays, maps, tensors, async event loop, and plugin support — all in pure Rust.
 
 ```
 runtime-rs/         Rust runtime (~6K lines)
@@ -621,43 +569,22 @@ runtime-rs/         Rust runtime (~6K lines)
 examples/
   host.rs               Rust host application with custom capabilities
   guide_search_host.rs  Guide search embedding example
+  timer.mog             Timer example
   plugins/
     plugin_host.rs      Rust plugin host example
     async_plugin_demo/  Complete example: runtime compilation + dlopen + async
-```
 
-Build the Rust runtime:
-
-```bash
-cargo build --release --manifest-path runtime-rs/Cargo.toml
-```
-
-### C Runtime (legacy)
-
-The legacy C runtime is used by the TypeScript compiler:
-
-```
-runtime/
-  runtime.c         C runtime (GC, strings, arrays, maps, tensors, I/O)
-  mog.h             Public C API for host embedding
-  mog_vm.c          VM for host FFI capability dispatch, interrupt flag, timeout
-  mog_async.c       Event loop, futures, coroutine resume, all/race
-  mog_async.h       Async runtime headers
-  posix_host.c      Built-in fs and process capability providers
-  mog_plugin.h      Plugin loading C API (dlopen, sandboxing)
-  mog_plugin.c      Plugin load/call/unload implementation
-  mog_backend.c     In-process QBE + assembler bridge (TS FFI target)
+mogfmt/             Code formatter (Rust crate)
+benchmarks/         Benchmark suite (Rust crate, compares Mog vs Go vs Rust)
 
 capabilities/
   *.mogdecl         Capability type declarations for host FFI
 ```
 
-Build the legacy C runtime:
+Build the runtime:
 
 ```bash
-cd runtime
-cc -c -O2 runtime.c mog_vm.c mog_async.c posix_host.c mog_plugin.c
-ar rcs ../build/runtime.a runtime.o mog_vm.o mog_async.o posix_host.o mog_plugin.o
+cargo build --release --manifest-path runtime-rs/Cargo.toml
 ```
 
 ## Embedding
@@ -666,50 +593,11 @@ Mog is designed to be embedded in a host application. The host provides capabili
 
 **Rust host examples:** See `examples/host.rs` and `examples/guide_search_host.rs` for complete Rust embedding examples. The compiler supports `--link file.rs` to link a Rust host file directly into the compiled binary.
 
-**C embedding:**
-
-```c
-#include "mog.h"
-
-MogVM *vm = mog_vm_new();
-mog_register_capability(vm, "math", math_functions, 3);
-mog_register_capability(vm, "log", log_functions, 2);
-
-// Validate script requirements
-mog_validate_capabilities(vm, script_requires, script_optionals);
-
-// Call into Mog
-MogValue result = mog_cap_call(vm, "math", "add", args);
-
-// Safety: set CPU time limit (auto-interrupts infinite loops)
-MogLimits limits = { .max_cpu_ms = 5000 };  // 5 second timeout
-mog_vm_set_limits(vm, limits);
-
-// Or manually interrupt from another thread:
-mog_request_interrupt();
-```
+**C embedding:** The compiler builds as a `cdylib` and `staticlib` (`libmog.dylib` / `libmog.a`), exposing a C API via `compiler/include/mog_compiler.h`. See the [Embedding from C](#embedding-from-c) section above for the compilation API.
 
 ### Plugins
 
 Compile Mog code to shared libraries (`.dylib`/`.so`) and load them at runtime. On macOS, plugins are linked with `-undefined dynamic_lookup` so they share the host's runtime globals (VM, event loop, GC) — no duplicate state. A stub object provides `mog_interrupt_flag` for ARM64 ADRP addressing in plugins.
-
-```c
-#include "mog_plugin.h"
-
-// Load a pre-compiled Mog plugin
-MogPlugin *plugin = mog_load_plugin("./math_plugin.dylib", vm);
-
-// Call exported functions by name
-MogValue args[] = { mog_int(10) };
-MogValue result = mog_plugin_call(plugin, "fibonacci", args, 1);
-printf("fibonacci(10) = %lld\n", result.data.i);  // 55
-
-// Sandbox: restrict which capabilities a plugin can access
-const char *allowed[] = { "log", NULL };
-MogPlugin *safe = mog_load_plugin_sandboxed("./untrusted.dylib", vm, allowed);
-
-mog_unload_plugin(plugin);
-```
 
 Plugin binaries are integrity-checked using BLAKE3 hashes. `compile_plugin()` returns the hash alongside the compiled path, and `mog_load_plugin_verified()` re-computes the hash before loading — rejecting tampered files before any code executes.
 
