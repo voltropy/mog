@@ -84,14 +84,27 @@ pub extern "C" fn array_alloc(
 ) -> *mut u8 {
     unsafe {
         let arr_ptr = gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY);
+        if arr_ptr.is_null() {
+            return ptr::null_mut();
+        }
+
+        let dim_bytes = (std::mem::size_of::<u64>()) * dimension_count as usize;
+        let array_dimensions = gc_alloc(dim_bytes) as *mut u64;
+        if array_dimensions.is_null() {
+            return ptr::null_mut();
+        }
+
+        let array_strides = gc_alloc(dim_bytes) as *mut u64;
+        if array_strides.is_null() {
+            return ptr::null_mut();
+        }
+
         let arr = as_arr_mut(arr_ptr);
 
         arr.element_size = element_size;
         arr.dimension_count = dimension_count;
-
-        let dim_bytes = (std::mem::size_of::<u64>()) * dimension_count as usize;
-        arr.dimensions = gc_alloc(dim_bytes) as *mut u64;
-        arr.strides = gc_alloc(dim_bytes) as *mut u64;
+        arr.dimensions = array_dimensions;
+        arr.strides = array_strides;
 
         ptr::copy_nonoverlapping(dimensions, arr.dimensions, dimension_count as usize);
 
@@ -102,6 +115,9 @@ pub extern "C" fn array_alloc(
         }
 
         arr.data = gc_alloc((element_size * total_elements) as usize);
+        if arr.data.is_null() {
+            return ptr::null_mut();
+        }
 
         arr_ptr
     }

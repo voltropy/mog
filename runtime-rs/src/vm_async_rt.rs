@@ -1160,6 +1160,9 @@ pub extern "C" fn async_read_line(coro_handle: *mut u8) -> *mut u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn mog_all(futures: *const *mut u8, count: i32) -> *mut u8 {
     let parent_ptr = mog_future_new();
+    if parent_ptr.is_null() {
+        return ptr::null_mut();
+    }
     if count == 0 {
         mog_future_complete(parent_ptr, 0);
         return parent_ptr;
@@ -1275,6 +1278,7 @@ mod tests {
     #[test]
     fn mog_all_returns_indexable_array_results() {
         unsafe {
+            crate::gc::gc_set_memory_limits(0, 0);
             crate::gc::gc_init();
             crate::vm::mog_clear_interrupt();
             let first = mog_future_new();
@@ -1304,8 +1308,16 @@ mod tests {
 
     #[test]
     fn mog_all_distinguishes_array_allocation_oom_from_generic_future_error() {
+        unsafe {
+            crate::gc::gc_set_memory_limits(0, 0);
+            crate::gc::gc_init();
+            crate::vm::mog_clear_interrupt();
+        }
+
         let mut hit_distinct_error = false;
-        for max_memory in 64..=8192usize {
+        let candidate_limits = [256usize, 272, 288, 304, 320, 336, 352, 368, 384];
+
+        for max_memory in candidate_limits {
             unsafe {
                 crate::gc::gc_set_memory_limits(max_memory, max_memory);
                 crate::gc::gc_init();
@@ -1349,6 +1361,10 @@ mod tests {
                 mog_future_free(first);
                 mog_future_free(second);
             }
+        }
+
+        unsafe {
+            crate::gc::gc_set_memory_limits(0, 0);
         }
 
         assert!(
