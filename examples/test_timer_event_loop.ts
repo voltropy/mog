@@ -120,8 +120,8 @@ function sleep(ms: number): Promise<void> {
 requires timer;
 
 pub async fn run_two_timers() -> int {
-  first: int = timer.setTimeout(45);
-  second: int = timer.setTimeout(65);
+  first := timer.setTimeout(45);
+  second := timer.setTimeout(65);
   values := await all([first, second]);
   return values[0] + values[1];
 }
@@ -162,6 +162,7 @@ pub async fn run_two_timers() -> int {
     mog_register_timer_host: { args: [FFIType.ptr], returns: FFIType.i32 },
     mog_set_timer_dispatcher: { args: [FFIType.ptr], returns: FFIType.void },
     mog_clear_timer_dispatcher: { args: [], returns: FFIType.void },
+    gc_init: { args: [], returns: FFIType.void },
     mog_loop_new: { args: [], returns: FFIType.ptr },
     mog_loop_set_global: { args: [FFIType.ptr], returns: FFIType.void },
     mog_loop_free: { args: [FFIType.ptr], returns: FFIType.void },
@@ -203,6 +204,7 @@ pub async fn run_two_timers() -> int {
   }, 5);
 
   try {
+    runtime.gc_init();
     vmPtr = runtime.mog_vm_new();
     assert(vmPtr !== 0, "mog_vm_new returned NULL");
 

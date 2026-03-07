@@ -9,6 +9,21 @@ use crate::gc::{gc_external_alloc, gc_external_free};
 use std::ffi::c_void;
 use std::ptr;
 
+fn build_all_results_array(sub_results: *const i64, count: i32) -> *mut u8 {
+    let dimensions = [count as u64];
+    let values = crate::array::array_alloc(8, 1, dimensions.as_ptr());
+    if values.is_null() {
+        return ptr::null_mut();
+    }
+
+    for i in 0..count as usize {
+        unsafe {
+            crate::array::array_set(values, i as i64, *sub_results.add(i));
+        }
+    }
+    values
+}
+
 type MogTimerDispatch = extern "C" fn(*mut u8, *mut u8, i64);
 
 static mut MOG_TIMER_DISPATCH: *const c_void = ptr::null();
@@ -258,10 +273,20 @@ pub extern "C" fn mog_future_complete(f: *mut u8, value: i64) {
                         }
                     }
                     if parent.sub_done >= parent.sub_count {
-                        // All sub-futures done — complete parent with pointer to results
-                        let results_ptr = parent.sub_results as i64;
+                        let sub_results_ptr = parent.sub_results;
                         let parent_ptr = future.parent as *mut u8;
-                        mog_future_complete(parent_ptr, results_ptr);
+                        let array_ptr = build_all_results_array(sub_results_ptr, parent.sub_count);
+                        if array_ptr.is_null() {
+                            mog_future_set_error(parent_ptr, -1);
+                            return;
+                        }
+                        parent.result = array_ptr as i64;
+                        if !parent.sub_results.is_null() {
+                            gc_external_free(parent.sub_results as *mut u8);
+                            parent.sub_results = ptr::null_mut();
+                        }
+                        // All sub-futures done — complete parent with pointer to array
+                        mog_future_complete(parent_ptr, parent.result);
                     }
                 } else {
                     // race() combinator — first to finish wins
@@ -1191,8 +1216,15 @@ pub extern "C" fn mog_all(futures: *const *mut u8, count: i32) -> *mut u8 {
         parent.sub_done = already_done;
 
         if already_done >= count {
+            let array_ptr = build_all_results_array(parent.sub_results, count);
+            if array_ptr.is_null() {
+                mog_future_set_error(parent_ptr, -1);
+                return parent_ptr;
+            }
+            parent.result = array_ptr as i64;
+            gc_external_free(parent.sub_results as *mut u8);
+            parent.sub_results = ptr::null_mut();
             parent.state = MOG_FUTURE_READY;
-            parent.result = parent.sub_results as i64;
             if !G_LOOP.is_null() {
                 (*G_LOOP).pending_count -= 1; // was incremented in mog_future_new
             }
@@ -1229,4 +1261,39 @@ pub extern "C" fn mog_race(futures: *const *mut u8, count: i32) -> *mut u8 {
     }
 
     parent_ptr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ptr;
+
+    #[test]
+    fn mog_all_returns_indexable_array_results() {
+        unsafe {
+            crate::gc::gc_init();
+            let first = mog_future_new();
+            let second = mog_future_new();
+            assert_ne!(first, ptr::null_mut());
+            assert_ne!(second, ptr::null_mut());
+
+            mog_future_complete(first, 45);
+            mog_future_complete(second, 65);
+
+            let futures = [first, second];
+            let parent = mog_all(futures.as_ptr(), 2);
+            assert_ne!(parent, ptr::null_mut());
+            assert_eq!(mog_future_is_ready(parent), 1);
+
+            let result = mog_future_get_result(parent) as *mut u8;
+            assert_ne!(result, ptr::null_mut());
+            assert_eq!(crate::array::array_length(result), 2);
+            assert_eq!(crate::array::array_get(result, 0), 45);
+            assert_eq!(crate::array::array_get(result, 1), 65);
+
+            mog_future_free(parent);
+            mog_future_free(first);
+            mog_future_free(second);
+        }
+    }
 }
