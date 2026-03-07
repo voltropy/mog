@@ -158,9 +158,8 @@
               }
 
               const maxScroll = tocContainer.scrollHeight - tocContainer.clientHeight;
-              if ((delta < 0 && tocContainer.scrollTop <= 0) || (delta > 0 && tocContainer.scrollTop >= maxScroll)) {
-                event.preventDefault();
-              }
+              event.preventDefault();
+              tocContainer.scrollTop = Math.max(0, Math.min(maxScroll, tocContainer.scrollTop + delta));
             },
             { passive: false }
           );
