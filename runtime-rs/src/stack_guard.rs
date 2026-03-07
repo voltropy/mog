@@ -218,7 +218,7 @@ pub extern "C" fn mog_stack_guard_init() -> i32 {
 
         // -- Install SIGSEGV handler --
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = sigsegv_handler as libc::sighandler_t;
+        sa.sa_sigaction = sigsegv_handler as *const () as libc::sighandler_t;
         sa.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
         libc::sigemptyset(&raw mut sa.sa_mask);
 

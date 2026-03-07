@@ -551,7 +551,7 @@ pub extern "C" fn mog_register_timer_host(vm: *mut u8) -> i32 {
         return -1;
     }
 
-    if unsafe { mog_has_capability(vm, CAP_TIMER_NAME.as_ptr()) } != 0 {
+    if mog_has_capability(vm, CAP_TIMER_NAME.as_ptr()) != 0 {
         return 0;
     }
 
@@ -566,7 +566,7 @@ pub extern "C" fn mog_register_timer_host(vm: *mut u8) -> i32 {
         },
     ];
 
-    unsafe { mog_register_capability(vm, CAP_TIMER_NAME.as_ptr(), ENTRIES.as_ptr()) }
+    mog_register_capability(vm, CAP_TIMER_NAME.as_ptr(), ENTRIES.as_ptr())
 }
 
 #[unsafe(no_mangle)]
@@ -1060,7 +1060,6 @@ pub extern "C" fn mog_loop_step(loop_ptr: *mut u8) -> i32 {
                                     crate::vm::mog_request_interrupt();
                                     mog_future_complete(watcher_future, 0);
                                     gc_external_free(watcher as *mut u8);
-                                    w = next;
                                     progress = true;
                                     watcher = next;
                                     continue;
@@ -1298,95 +1297,87 @@ mod tests {
 
     #[test]
     fn mog_all_returns_indexable_array_results() {
-        unsafe {
-            crate::gc::gc_set_memory_limits(0, 0);
+        crate::gc::gc_set_memory_limits(0, 0);
+        crate::gc::gc_init();
+        crate::vm::mog_clear_interrupt();
+        let first = mog_future_new();
+        let second = mog_future_new();
+        assert_ne!(first, ptr::null_mut());
+        assert_ne!(second, ptr::null_mut());
+
+        mog_future_complete(first, 45);
+        mog_future_complete(second, 65);
+
+        let futures = [first, second];
+        let parent = mog_all(futures.as_ptr(), 2);
+        assert_ne!(parent, ptr::null_mut());
+        assert_eq!(mog_future_is_ready(parent), 1);
+
+        let result = mog_future_get_result(parent) as *mut u8;
+        assert_ne!(result, ptr::null_mut());
+        assert_eq!(crate::array::array_length(result), 2);
+        assert_eq!(crate::array::array_get(result, 0), 45);
+        assert_eq!(crate::array::array_get(result, 1), 65);
+
+        mog_future_free(parent);
+        mog_future_free(first);
+        mog_future_free(second);
+    }
+
+    #[test]
+    fn mog_all_distinguishes_array_allocation_oom_from_generic_future_error() {
+        crate::gc::gc_set_memory_limits(0, 0);
+        crate::gc::gc_init();
+        crate::vm::mog_clear_interrupt();
+
+        let mut hit_distinct_error = false;
+        let candidate_limits = [256usize, 272, 288, 304, 320, 336, 352, 368, 384];
+
+        for max_memory in candidate_limits {
+            crate::gc::gc_set_memory_limits(max_memory, max_memory);
             crate::gc::gc_init();
             crate::vm::mog_clear_interrupt();
+
             let first = mog_future_new();
             let second = mog_future_new();
-            assert_ne!(first, ptr::null_mut());
-            assert_ne!(second, ptr::null_mut());
+            if first.is_null() || second.is_null() {
+                if !first.is_null() {
+                    mog_future_free(first);
+                }
+                if !second.is_null() {
+                    mog_future_free(second);
+                }
+                continue;
+            }
 
             mog_future_complete(first, 45);
             mog_future_complete(second, 65);
 
             let futures = [first, second];
             let parent = mog_all(futures.as_ptr(), 2);
-            assert_ne!(parent, ptr::null_mut());
-            assert_eq!(mog_future_is_ready(parent), 1);
+            if parent.is_null() {
+                mog_future_free(first);
+                mog_future_free(second);
+                continue;
+            }
 
-            let result = mog_future_get_result(parent) as *mut u8;
-            assert_ne!(result, ptr::null_mut());
-            assert_eq!(crate::array::array_length(result), 2);
-            assert_eq!(crate::array::array_get(result, 0), 45);
-            assert_eq!(crate::array::array_get(result, 1), 65);
+            assert_eq!(mog_future_is_ready(parent), 1);
+            let result = mog_future_get_result(parent);
+
+            if result == ERR_ALL_RESULT_ARRAY_OOM {
+                hit_distinct_error = true;
+                mog_future_free(parent);
+                mog_future_free(first);
+                mog_future_free(second);
+                break;
+            }
 
             mog_future_free(parent);
             mog_future_free(first);
             mog_future_free(second);
         }
-    }
 
-    #[test]
-    fn mog_all_distinguishes_array_allocation_oom_from_generic_future_error() {
-        unsafe {
-            crate::gc::gc_set_memory_limits(0, 0);
-            crate::gc::gc_init();
-            crate::vm::mog_clear_interrupt();
-        }
-
-        let mut hit_distinct_error = false;
-        let candidate_limits = [256usize, 272, 288, 304, 320, 336, 352, 368, 384];
-
-        for max_memory in candidate_limits {
-            unsafe {
-                crate::gc::gc_set_memory_limits(max_memory, max_memory);
-                crate::gc::gc_init();
-                crate::vm::mog_clear_interrupt();
-
-                let first = mog_future_new();
-                let second = mog_future_new();
-                if first.is_null() || second.is_null() {
-                    if !first.is_null() {
-                        mog_future_free(first);
-                    }
-                    if !second.is_null() {
-                        mog_future_free(second);
-                    }
-                    continue;
-                }
-
-                mog_future_complete(first, 45);
-                mog_future_complete(second, 65);
-
-                let futures = [first, second];
-                let parent = mog_all(futures.as_ptr(), 2);
-                if parent.is_null() {
-                    mog_future_free(first);
-                    mog_future_free(second);
-                    continue;
-                }
-
-                assert_eq!(mog_future_is_ready(parent), 1);
-                let result = mog_future_get_result(parent);
-
-                if result == ERR_ALL_RESULT_ARRAY_OOM {
-                    hit_distinct_error = true;
-                    mog_future_free(parent);
-                    mog_future_free(first);
-                    mog_future_free(second);
-                    break;
-                }
-
-                mog_future_free(parent);
-                mog_future_free(first);
-                mog_future_free(second);
-            }
-        }
-
-        unsafe {
-            crate::gc::gc_set_memory_limits(0, 0);
-        }
+        crate::gc::gc_set_memory_limits(0, 0);
 
         assert!(
             hit_distinct_error,

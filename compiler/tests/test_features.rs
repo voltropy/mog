@@ -55,16 +55,6 @@ fn inner_stmts(ast: &mog::ast::Statement) -> &[mog::ast::Statement] {
     stmts
 }
 
-/// Find a function declaration by name in top-level statements.
-fn find_fn_decl<'a>(stmts: &'a [mog::ast::Statement], name: &str) -> &'a mog::ast::Statement {
-    stmts
-        .iter()
-        .find(
-            |s| matches!(&s.kind, StatementKind::FunctionDeclaration { name: n, .. } if n == name),
-        )
-        .unwrap_or_else(|| panic!("no FunctionDeclaration named '{name}'"))
-}
-
 fn has_error_containing(errors: &[mog::analyzer::SemanticError], substr: &str) -> bool {
     errors
         .iter()
@@ -742,7 +732,7 @@ fn function_codegen_type_alias() {
             }
         }
     "#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
@@ -830,14 +820,14 @@ fn string_lexer_empty_string() {
 #[test]
 fn string_analyzer_literal_infers() {
     let src = r#"fn main() -> i64 { name := "Alice"; return 0; }"#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
 #[test]
 fn string_analyzer_fstring_infers() {
     let src = r#"fn main() -> i64 { name := "Alice"; greeting := f"Hello, {name}!"; return 0; }"#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
@@ -850,14 +840,14 @@ fn string_analyzer_methods_compile() {
         trimmed := name.trim();
         return 0;
     }"#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
 #[test]
 fn string_analyzer_str_builtin() {
     let src = r#"fn main() -> i64 { s := str(42); return 0; }"#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
@@ -1047,7 +1037,7 @@ fn string_codegen_fstring() {
             return 0;
         }
     "#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
@@ -1060,7 +1050,7 @@ fn string_codegen_str_int_conversion() {
             return 0;
         }
     "#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
@@ -1096,7 +1086,7 @@ fn string_codegen_utf8_literal() {
             return 0;
         }
     "#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
@@ -1109,7 +1099,7 @@ fn string_codegen_utf8_cjk() {
             return 0;
         }
     "#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 
@@ -1123,7 +1113,7 @@ fn string_codegen_backward_compat_ptr() {
             return 0;
         }
     "#;
-    let (ir, errors) = compile_src(src);
+    let (_ir, errors) = compile_src(src);
     assert!(errors.is_empty(), "errors: {:?}", errors);
 }
 

@@ -840,9 +840,7 @@ pub fn rega(f: &mut Fn, target: &Target) {
     let ntmp = f.tmps.len() as u32;
     let nblk = f.rpo.len();
     let mut regu: u64 = 0;
-    let mut stmov: u32 = 0;
-    let mut stblk: u32 = 0;
-    let _ = &stblk; // used for debug stats
+    let mut _stmov: u32 = 0;
     let mut pm = PMState::new();
 
     // 1. Setup
@@ -922,7 +920,7 @@ pub fn rega(f: &mut Fn, target: &Target) {
         end[n].copy_from(&cur);
 
         // Process the block's instructions.
-        doblk(f, b_idx, &mut cur, target, &mut regu, &mut pm, &mut stmov);
+        doblk(f, b_idx, &mut cur, target, &mut regu, &mut pm, &mut _stmov);
 
         // Update in set and remove phi destinations.
         f.blks[b_idx].r#in.copy_from(&cur.b);
@@ -1032,8 +1030,6 @@ pub fn rega(f: &mut Fn, target: &Target) {
         if j == 0 {
             continue;
         }
-        stmov += j as u32;
-
         // Prepend the generated copies to the block's instructions.
         let old_ins = f.blks[s_idx].ins.clone();
         let mut combined = new_ins;
@@ -1138,8 +1134,6 @@ pub fn rega(f: &mut Fn, target: &Target) {
             b1.loop_depth = (f.blks[b_idx].loop_depth + f.blks[s_idx].loop_depth) / 2;
             b1.name = format!("{}_{}", f.blks[b_idx].name, f.blks[s_idx].name);
             b1.ins = new_ins;
-            stmov += b1.ins.len() as u32;
-            stblk += 1;
             b1.jmp.typ = Jmp::Jmp_;
             b1.s1 = Some(s_bid);
             f.blks.push(b1);

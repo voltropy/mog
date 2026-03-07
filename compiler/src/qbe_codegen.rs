@@ -196,18 +196,6 @@ impl QBECodeGen {
         }
     }
 
-    /// Ensure a register is `d` type. If it's `l`, convert it with sltof.
-    fn ensure_double(&mut self, reg: &str) -> String {
-        if self.float_regs.contains(reg) {
-            reg.to_string()
-        } else {
-            let r = self.fresh_reg();
-            self.emit(&format!("  {} =d sltof {}", r, reg));
-            self.mark_float_reg(&r);
-            r
-        }
-    }
-
     // --- String Escaping for QBE ---
     fn escape_string_for_qbe(s: &str) -> String {
         let mut result = String::new();
