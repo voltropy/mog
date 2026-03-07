@@ -95,10 +95,11 @@
 
           const li = activeLink.closest(".guide-toc-item");
           if (li && tocContainer) {
-            const pad = 10;
-            const maxScroll = tocContainer.scrollHeight - tocContainer.clientHeight;
-            const nextTop = li.offsetTop - pad;
-            tocContainer.scrollTop = Math.max(0, Math.min(maxScroll, Math.round(nextTop)));
+            li.scrollIntoView({
+              behavior: "auto",
+              block: "nearest",
+              inline: "nearest"
+            });
           }
         }
 
@@ -139,26 +140,8 @@
         onScroll();
         window.addEventListener("scroll", onScroll, { passive: true });
 
-        if (tocContainer) {
-          tocContainer.addEventListener(
-            "wheel",
-            (event) => {
-              if (tocContainer.scrollHeight <= tocContainer.clientHeight) {
-                return;
-              }
-
-              const delta = event.deltaY;
-              if (Math.abs(delta) < Math.abs(event.deltaX)) {
-                return;
-              }
-
-              const maxScroll = tocContainer.scrollHeight - tocContainer.clientHeight;
-              event.preventDefault();
-              tocContainer.scrollTop = Math.round(Math.max(0, Math.min(maxScroll, tocContainer.scrollTop + delta)));
-            },
-            { passive: false }
-          );
-        }
+        // Let the browser handle sidebar wheel scrolling natively. `overscroll-behavior`
+        // keeps page scroll-chaining from taking over in supported browsers.
       })();
     </script>
     <script>
