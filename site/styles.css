@@ -166,7 +166,7 @@ h4 {
 
 .guide-toc {
   position: sticky;
-  top: 6rem;
+  top: 0.1rem;
   max-height: calc(100vh - 7rem);
   overflow: auto;
   overscroll-behavior: contain;
