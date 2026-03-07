@@ -454,6 +454,37 @@ h4 {
   }
 
   .guide-wrap {
-    padding: 1.2rem;
+    padding: 1rem 0.85rem;
+    overflow-x: hidden;
+  }
+
+  .guide-wrap h1 {
+    font-size: 1.4rem;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+
+  .guide-wrap h2 {
+    font-size: 1.2rem;
+  }
+
+  .guide-wrap h3 {
+    font-size: 1.05rem;
+  }
+
+  .guide-wrap table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .guide-wrap .shiki {
+    font-size: 0.82rem;
+  }
+
+  .guide-wrap blockquote {
+    padding: 0.6rem 0.75rem;
+    margin-left: 0;
+    margin-right: 0;
   }
 }
