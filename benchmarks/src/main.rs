@@ -499,6 +499,7 @@ fn load_interrupt_check_cases(bench_dir: &Path) -> Vec<InterruptCheckCase> {
     vec![
         ("tight while loop", "interrupt-tight-while.mog"),
         ("tight for-range loop", "interrupt-tight-for-range.mog"),
+        ("work-heavy while loop", "interrupt-work-heavy-while.mog"),
     ]
     .into_iter()
     .map(|(label, file)| {

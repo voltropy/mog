@@ -28,6 +28,8 @@ fn main() {
     let mut output_path: Option<String> = None;
     let mut emit_ir = false;
     let mut opt_level = OptLevel::O0;
+    let mut adaptive_loop_interrupt_checks = false;
+    let mut loop_interrupt_check_target_micros: u64 = 1_000;
     let mut plugin_name: Option<String> = None;
     let mut plugin_version = "0.1.0".to_string();
     let mut extra_link: Vec<String> = Vec::new();
@@ -62,6 +64,31 @@ fn main() {
                     process::exit(1);
                 }
                 plugin_version = args[i].clone();
+            }
+            "--adaptive-loop-interrupt-checks" => adaptive_loop_interrupt_checks = true,
+            "--adaptive-loop-interrupt-target-micros" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!(
+                        "error: --adaptive-loop-interrupt-target-micros requires a number of microseconds"
+                    );
+                    process::exit(1);
+                }
+                loop_interrupt_check_target_micros = match args[i].parse::<u64>() {
+                    Ok(v) if v > 0 => v,
+                    Ok(_) => {
+                        eprintln!(
+                            "error: --adaptive-loop-interrupt-target-micros must be greater than 0"
+                        );
+                        process::exit(1);
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "error: --adaptive-loop-interrupt-target-micros requires a numeric value"
+                        );
+                        process::exit(1);
+                    }
+                };
             }
             "--link" => {
                 i += 1;
@@ -102,6 +129,18 @@ fn main() {
         }
     };
 
+    let source_file = PathBuf::from(&input);
+
+    let compile_options = CompileOptions {
+        backend: Backend::Qbe,
+        optimization: opt_level,
+        adaptive_loop_interrupt_checks,
+        loop_interrupt_check_target_micros,
+        source_path: Some(source_file.clone()),
+        extra_link_objects: extra_link.iter().map(PathBuf::from).collect(),
+        ..Default::default()
+    };
+
     // Plugin mode
     if let Some(name) = plugin_name {
         match compile_plugin(&source, &name, &plugin_version) {
@@ -119,15 +158,11 @@ fn main() {
         return;
     }
 
-    let source_file = PathBuf::from(&input);
-
     // IR-only mode
     if emit_ir {
         let options = CompileOptions {
-            backend: Backend::Qbe,
-            optimization: opt_level,
             source_path: Some(source_file.clone()),
-            ..Default::default()
+            ..compile_options.clone()
         };
         let result = compile(&source, &options);
         for w in &result.warnings {
@@ -152,14 +187,8 @@ fn main() {
             .unwrap_or_else(|| PathBuf::from("a.out"))
     });
 
-    let options = CompileOptions {
-        backend: Backend::Qbe,
-        optimization: opt_level,
-        output_path: Some(out.clone()),
-        source_path: Some(source_file.clone()),
-        extra_link_objects: extra_link.iter().map(PathBuf::from).collect(),
-        ..Default::default()
-    };
+    let mut options = compile_options;
+    options.output_path = Some(out);
 
     match compile_to_binary(&source, &options) {
         Ok(path) => {
@@ -183,6 +212,11 @@ fn print_usage(program: &str) {
     eprintln!("  -o <path>              Output path (default: input stem)");
     eprintln!("  --emit-ir              Print QBE IR to stdout instead of compiling");
     eprintln!("  -O0, -O1, -O2         Optimization level (default: -O0)");
+    eprintln!("  --adaptive-loop-interrupt-checks");
+    eprintln!(
+        "  --adaptive-loop-interrupt-target-micros <n>"
+    );
+    eprintln!("                         Adaptive loop interval target delay in microseconds");
     eprintln!("  --link <path>          Extra .c/.o/.a file to link (can repeat)");
     eprintln!("  --plugin <name>        Compile as shared library plugin");
     eprintln!("  --plugin-version <v>   Plugin version (default: 0.1.0)");

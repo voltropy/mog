@@ -100,6 +100,12 @@ pub struct CompileOptions {
     pub source_path: Option<PathBuf>,
     /// Whether loop back-edges emit timer-interrupt checks.
     pub loop_interrupt_checks: bool,
+    /// If true, emit timer-interrupt checks every _n_ loop iterations based on
+    /// estimated per-iteration body cost.
+    pub adaptive_loop_interrupt_checks: bool,
+    /// Target worst-case loop delay when adaptive checking is enabled, in
+    /// microseconds.
+    pub loop_interrupt_check_target_micros: u64,
     /// Extra object files, C source files, or static libraries to link into
     /// the final binary.
     pub extra_link_objects: Vec<PathBuf>,
@@ -116,6 +122,8 @@ impl Default for CompileOptions {
             plugin_version: None,
             source_path: None,
             loop_interrupt_checks: true,
+            adaptive_loop_interrupt_checks: false,
+            loop_interrupt_check_target_micros: 1_000,
             extra_link_objects: Vec::new(),
         }
     }
@@ -207,17 +215,21 @@ pub fn compile(source: &str, options: &CompileOptions) -> CompileResult {
             if options.plugin_mode {
                 let name = options.plugin_name.as_deref().unwrap_or("plugin");
                 let version = options.plugin_version.as_deref().unwrap_or("0.1.0");
-                crate::qbe_codegen::generate_plugin_qbe_ir_with_interrupts(
+                crate::qbe_codegen::generate_plugin_qbe_ir_with_interrupts_and_adaptive(
                     &ast,
                     name,
                     version,
                     options.loop_interrupt_checks,
+                    options.adaptive_loop_interrupt_checks,
+                    options.loop_interrupt_check_target_micros,
                 )
             } else {
-                crate::qbe_codegen::generate_qbe_ir_with_caps_and_interrupts(
+                crate::qbe_codegen::generate_qbe_ir_with_caps_and_interrupts_and_adaptive(
                     &ast,
                     analyzer.get_capability_decls(),
                     options.loop_interrupt_checks,
+                    options.adaptive_loop_interrupt_checks,
+                    options.loop_interrupt_check_target_micros,
                 )
             }
         }

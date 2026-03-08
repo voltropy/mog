@@ -11,7 +11,7 @@ This chapter walks through the basics of writing and running Mog code. By the en
 
 ## Hello, World
 
-Every Mog program needs a `main` function. Here is the simplest complete program:
+A Mog host runtime can provide a `main()` function as the entry point, though not all do. Here is a simple program using one:
 
 ```mog
 fn main() -> int {
@@ -20,7 +20,7 @@ fn main() -> int {
 }
 ```
 
-`fn main() -> int` declares the entry point. The `-> int` annotation means the function returns an integer — by convention, `0` signals success. The `println` function prints a string followed by a newline. The `return 0;` statement exits the program.
+`fn main() -> int` declares an entry point. The `-> int` annotation means the function returns an integer — by convention, `0` signals success. The `println` function prints a string followed by a newline. The `return 0;` statement exits the program.
 
 Semicolons are required after every statement. Curly braces delimit blocks. If you are coming from Go or Rust, this will feel natural. If you are coming from Python, the semicolons may take a few minutes to get used to.
 
@@ -71,7 +71,6 @@ fn distance(a: Point, b: Point) -> float {
   return sqrt((dx * dx) + (dy * dy));
 }
 
-// Top-level: entry point
 fn main() -> int {
   p1 := Point { x: 3.0, y: 0.0 };
   p2 := Point { x: 0.0, y: 4.0 };
@@ -6437,7 +6436,7 @@ pub fn sphere_volume(radius: float) -> float {
 
 Both files belong to `package geometry`. They share the same namespace — functions in one file can call private functions in the other, because they're in the same package.
 
-The `package main` package is special. It must contain a `fn main()` entry point. Every executable Mog program has exactly one `package main`:
+The `package main` package is special. When a host runtime uses `main()` as the entry point, this package must contain a `fn main()` function:
 
 ```mog
 package main;
@@ -7735,7 +7734,7 @@ static MogValue host_db_query(MogVM *vm, MogArgs *args) {
 
 ## Resource Limits and Timeouts
 
-An embedded script should never be able to freeze or crash the host. Mog provides three mechanisms for resource control.
+An embedded script should never be able to freeze or crash the host. Mog provides four mechanisms for resource control.
 
 ### Memory Limits
 
@@ -7812,6 +7811,27 @@ if (mog_interrupt_requested()) {
 
 > **Tip:** The cooperative interrupt model means a script that blocks inside a host function (e.g., a long-running Rust or C call) cannot be interrupted until it returns to Mog code. Keep host functions short, or implement your own cancellation within long-running host functions.
 
+### Stack Overflow Protection
+
+Mog compiles to native code that uses the real call stack. A deeply recursive script — or a malicious one — could overflow the host process stack, crashing the entire application. To prevent this, the runtime allocates a separate stack for Mog code and places a guard page at its bottom.
+
+**How it works.** During initialization (`gc_init`), the runtime `mmap`s a 1 MB region for the Mog stack. The bottom 16 KB of this region is marked `PROT_NONE` — any read or write to it triggers a hardware fault. A signal handler (installed on a dedicated signal stack via `sigaltstack`) catches the fault, checks whether the faulting address falls within the guard region, and if so, uses `siglongjmp` to return control to the host.
+
+Every host-to-Mog transition — calling the main program, invoking a plugin function, or resuming a coroutine — switches the stack pointer to the Mog stack before entering compiled code, and switches it back on return. This happens automatically; neither the host nor the script needs to do anything.
+
+If a Mog function recurses past the guard page, the hardware fault fires, the signal handler catches it, and the runtime returns a stack overflow error to the host instead of crashing:
+
+```
+$ ./my_host
+mog: stack overflow
+```
+
+The host process survives. It can log the error, free the VM, and continue running. Subsequent calls into Mog work normally — the guard page is restored after each recovery.
+
+This design adds zero per-call overhead. There are no software depth counters, no bounds checks at function entry, and no fuel metering. The only cost is the `mmap` during initialization and two `mov sp` instructions per host-to-Mog transition. The hardware MMU does all the checking.
+
+> **Note:** The guard page protects against stack overflow from deep recursion in Mog code. It does not protect against stack overflow in host-provided capability functions, which run on the host's own stack. If a capability function is itself deeply recursive, the host is responsible for its own stack safety.
+
 ### Complete Timeout Example
 
 ```c
@@ -7852,6 +7872,8 @@ Mog's embedding model provides several layers of safety:
 **GC-managed memory.** The script cannot leak memory or cause use-after-free. The VM's garbage collector handles all allocations.
 
 **Cooperative interrupts.** The compiler inserts interrupt checks at every loop back-edge. An infinite loop can always be stopped by the host — no need for SIGKILL or process termination.
+
+**Guard page stack protection.** Mog code runs on a dedicated stack with a hardware-enforced guard page. Deep recursion hits the guard page and returns an error to the host instead of crashing the process. No per-call overhead — the MMU does the checking.
 
 **Capability validation.** Before execution, `mog_validate_capabilities()` confirms that every capability the script requires is registered. Missing capabilities are caught before a single instruction runs.
 

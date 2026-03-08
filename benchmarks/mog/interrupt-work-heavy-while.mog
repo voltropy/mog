@@ -1,0 +1,21 @@
+// interrupt-work-heavy-while.mog
+// Runtime benchmark for loop-edge interrupt check overhead when each iteration does more arithmetic work.
+
+fn main() -> int {
+    i := 0;
+    sum := 0;
+
+    while (i < 10000000) {
+        a := (i * 3) + 1;
+        b := (a * 5) - i;
+        c := (b / 3) + (a * 2);
+        d := (c * 7) - (b / 2);
+        e := (d / 11) + (c * 13);
+        f := (((e - a) + b) - c) + d;
+        sum = sum + f;
+        i = i + 1;
+    }
+
+    println(sum);
+    return 0;
+}

@@ -8,6 +8,15 @@ use crate::types::{FloatKind, IntegerKind, Type};
 use std::collections::{HashMap, HashSet};
 
 const CORO_HEADER_SIZE: u32 = 24;
+const HOT_LOOP_CHECK_TARGET_MICROS: u64 = 1_000;
+const HOT_LOOP_CHECK_COST_SCALE: u64 = 64;
+const HOT_LOOP_CHECK_MIN_INTERVAL: u64 = 1;
+const HOT_LOOP_CHECK_MAX_INTERVAL: u64 = 65_536;
+const HOT_LOOP_COST_IN_REG_OP: u64 = 1;
+const HOT_LOOP_COST_LOAD: u64 = 4;
+const HOT_LOOP_COST_STORE: u64 = 6;
+const HOT_LOOP_COST_CALL: u64 = 24;
+const HOT_LOOP_COST_CONTROL: u64 = 2;
 
 pub struct QBECodeGen {
     output: String,
@@ -50,6 +59,8 @@ pub struct QBECodeGen {
     /// `stored` instead of `storel` when storing them to memory.
     float_regs: HashSet<String>,
     emit_loop_interrupt_checks: bool,
+    emit_adaptive_loop_interrupt_checks: bool,
+    loop_interrupt_check_target_micros: u64,
 }
 
 impl QBECodeGen {
@@ -93,11 +104,18 @@ impl QBECodeGen {
             function_param_info: HashMap::new(),
             float_regs: HashSet::new(),
             emit_loop_interrupt_checks: true,
+            emit_adaptive_loop_interrupt_checks: false,
+            loop_interrupt_check_target_micros: HOT_LOOP_CHECK_TARGET_MICROS,
         }
     }
 
     fn set_loop_interrupt_checks(&mut self, enabled: bool) {
         self.emit_loop_interrupt_checks = enabled;
+    }
+
+    fn set_adaptive_loop_interrupt_checks(&mut self, enabled: bool, target_micros: u64) {
+        self.emit_adaptive_loop_interrupt_checks = enabled;
+        self.loop_interrupt_check_target_micros = target_micros.max(1);
     }
 
     // --- Register & Label Management ---
@@ -2252,6 +2270,12 @@ impl QBECodeGen {
                 let test_lbl = self.fresh_label();
                 let body_lbl = self.fresh_label();
                 let end_lbl = self.fresh_label();
+                let interrupt_interval = self.estimate_loop_interrupt_interval(&body);
+                let interrupt_counter_slot =
+                    self.allocate_loop_interrupt_counter_slot(interrupt_interval);
+                let use_adaptive_step = self.emit_adaptive_loop_interrupt_checks
+                    && interrupt_interval > HOT_LOOP_CHECK_MIN_INTERVAL
+                    && interrupt_counter_slot.is_some();
                 self.loop_stack.push((end_lbl.clone(), test_lbl.clone()));
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", test_lbl));
@@ -2261,8 +2285,26 @@ impl QBECodeGen {
                 self.emit(&format!("    jnz {}, {}, {}", cond_w, body_lbl, end_lbl));
                 self.emit(&format!("{}", body_lbl));
                 self.gen_block_stmts(&body.statements);
-                self.emit_interrupt_check();
-                self.emit(&format!("    jmp {}", test_lbl));
+                if !self.block_terminated {
+                    if use_adaptive_step {
+                        let step_lbl = self.fresh_label();
+                        self.emit(&format!("    jmp {}", step_lbl));
+                        self.emit(&format!("{}", step_lbl));
+                        self.emit_loop_interrupt_check(
+                            interrupt_counter_slot.as_deref(),
+                            interrupt_interval,
+                        );
+                        self.emit(&format!("    jmp {}", test_lbl));
+                    } else {
+                        self.emit_loop_interrupt_check(None, interrupt_interval);
+                        self.emit(&format!("    jmp {}", test_lbl));
+                    }
+                }
+                if use_adaptive_step {
+                    // Adaptive check branch already emitted jump-to-test after checking.
+                } else {
+                    // keep behavior unchanged for non-adaptive mode
+                }
                 self.emit(&format!("{}", end_lbl));
                 self.loop_stack.pop();
             }
@@ -2274,6 +2316,9 @@ impl QBECodeGen {
             } => {
                 let s = self.gen_expr(start);
                 let e = self.gen_expr(end);
+                let interrupt_interval = self.estimate_loop_interrupt_interval(&body);
+                let interrupt_counter_slot =
+                    self.allocate_loop_interrupt_counter_slot(interrupt_interval);
                 let slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", slot));
                 self.emit(&format!("    storel {}, {}", s, slot));
@@ -2302,7 +2347,10 @@ impl QBECodeGen {
                 let inc = self.fresh_reg();
                 self.emit(&format!("    {} =l add {}, 1", inc, cur));
                 self.emit(&format!("    storel {}, {}", inc, slot));
-                self.emit_interrupt_check();
+                self.emit_loop_interrupt_check(
+                    interrupt_counter_slot.as_deref(),
+                    interrupt_interval,
+                );
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", end_lbl));
                 self.loop_stack.pop();
@@ -2316,6 +2364,9 @@ impl QBECodeGen {
                 // Same as ForLoop
                 let s = self.gen_expr(start);
                 let e = self.gen_expr(end);
+                let interrupt_interval = self.estimate_loop_interrupt_interval(&body);
+                let interrupt_counter_slot =
+                    self.allocate_loop_interrupt_counter_slot(interrupt_interval);
                 let slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", slot));
                 self.emit(&format!("    storel {}, {}", s, slot));
@@ -2344,7 +2395,10 @@ impl QBECodeGen {
                 let inc = self.fresh_reg();
                 self.emit(&format!("    {} =l add {}, 1", inc, cur));
                 self.emit(&format!("    storel {}, {}", inc, slot));
-                self.emit_interrupt_check();
+                self.emit_loop_interrupt_check(
+                    interrupt_counter_slot.as_deref(),
+                    interrupt_interval,
+                );
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", end_lbl));
                 self.loop_stack.pop();
@@ -2358,6 +2412,9 @@ impl QBECodeGen {
                 let arr = self.gen_expr(array);
                 let len = self.fresh_reg();
                 self.emit(&format!("    {} =l call $array_length(l {})", len, arr));
+                let interrupt_interval = self.estimate_loop_interrupt_interval(&body);
+                let interrupt_counter_slot =
+                    self.allocate_loop_interrupt_counter_slot(interrupt_interval);
                 let idx_slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", idx_slot));
                 self.emit(&format!("    storel 0, {}", idx_slot));
@@ -2394,7 +2451,10 @@ impl QBECodeGen {
                 let inc = self.fresh_reg();
                 self.emit(&format!("    {} =l add {}, 1", inc, cur_idx));
                 self.emit(&format!("    storel {}, {}", inc, idx_slot));
-                self.emit_interrupt_check();
+                self.emit_loop_interrupt_check(
+                    interrupt_counter_slot.as_deref(),
+                    interrupt_interval,
+                );
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", end_lbl));
                 self.loop_stack.pop();
@@ -2413,6 +2473,9 @@ impl QBECodeGen {
                 } else {
                     self.emit(&format!("    {} =l call $array_length(l {})", len, arr));
                 }
+                let interrupt_interval = self.estimate_loop_interrupt_interval(&body);
+                let interrupt_counter_slot =
+                    self.allocate_loop_interrupt_counter_slot(interrupt_interval);
                 // For maps: use a hidden counter separate from the key variable
                 let counter_slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", counter_slot));
@@ -2476,7 +2539,10 @@ impl QBECodeGen {
                 let inc = self.fresh_reg();
                 self.emit(&format!("    {} =l add {}, 1", inc, cur_idx));
                 self.emit(&format!("    storel {}, {}", inc, counter_slot));
-                self.emit_interrupt_check();
+                self.emit_loop_interrupt_check(
+                    interrupt_counter_slot.as_deref(),
+                    interrupt_interval,
+                );
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", end_lbl));
                 self.loop_stack.pop();
@@ -2490,6 +2556,9 @@ impl QBECodeGen {
                 let m = self.gen_expr(map);
                 let len = self.fresh_reg();
                 self.emit(&format!("    {} =l call $map_size(l {})", len, m));
+                let interrupt_interval = self.estimate_loop_interrupt_interval(&body);
+                let interrupt_counter_slot =
+                    self.allocate_loop_interrupt_counter_slot(interrupt_interval);
                 let idx_slot = self.fresh_reg();
                 self.emit_alloc(&format!("    {} =l alloc8 8", idx_slot));
                 self.emit(&format!("    storel 0, {}", idx_slot));
@@ -2539,7 +2608,10 @@ impl QBECodeGen {
                 let inc = self.fresh_reg();
                 self.emit(&format!("    {} =l add {}, 1", inc, cur_idx));
                 self.emit(&format!("    storel {}, {}", inc, idx_slot));
-                self.emit_interrupt_check();
+                self.emit_loop_interrupt_check(
+                    interrupt_counter_slot.as_deref(),
+                    interrupt_interval,
+                );
                 self.emit(&format!("    jmp {}", test_lbl));
                 self.emit(&format!("{}", end_lbl));
                 self.loop_stack.pop();
@@ -2661,6 +2733,355 @@ impl QBECodeGen {
         self.emit("    call $mog_request_interrupt()");
         self.emit_interrupt_return();
         self.emit(&format!("{}", cont_lbl));
+    }
+
+    fn emit_loop_interrupt_check(&mut self, counter_slot: Option<&str>, interval: u64) {
+        if !self.emit_loop_interrupt_checks {
+            return;
+        }
+        if !self.emit_adaptive_loop_interrupt_checks || interval <= HOT_LOOP_CHECK_MIN_INTERVAL {
+            self.emit_interrupt_check();
+            return;
+        }
+        match counter_slot {
+            Some(slot) => self.emit_adaptive_interrupt_check(slot, interval),
+            None => self.emit_interrupt_check(),
+        }
+    }
+
+    fn emit_adaptive_interrupt_check(&mut self, counter_slot: &str, interval: u64) {
+        let counter = self.fresh_reg();
+        self.emit(&format!("    {} =l loadl {}", counter, counter_slot));
+        let next = self.fresh_reg();
+        self.emit(&format!("    {} =l add {}, 1", next, counter));
+        self.emit(&format!("    storel {}, {}", next, counter_slot));
+        let cmp = self.fresh_reg();
+        self.emit(&format!("    {} =w ceql {}, {}", cmp, next, interval));
+        let check_lbl = self.fresh_label();
+        let cont_lbl = self.fresh_label();
+        self.emit(&format!("    jnz {}, {}, {}", cmp, check_lbl, cont_lbl));
+        self.emit(&format!("{}", check_lbl));
+        self.emit(&format!("    storel 0, {}", counter_slot));
+        self.emit_interrupt_check();
+        self.emit(&format!("{}", cont_lbl));
+    }
+
+    fn allocate_loop_interrupt_counter_slot(&mut self, interval: u64) -> Option<String> {
+        if !self.emit_adaptive_loop_interrupt_checks {
+            return None;
+        }
+        if interval <= HOT_LOOP_CHECK_MIN_INTERVAL {
+            return None;
+        }
+        let slot = self.fresh_reg();
+        self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+        self.emit(&format!("    storel 0, {}", slot));
+        Some(slot)
+    }
+
+    fn estimate_loop_interrupt_interval(&self, body: &Block) -> u64 {
+        if !self.emit_adaptive_loop_interrupt_checks {
+            return HOT_LOOP_CHECK_MIN_INTERVAL;
+        }
+        let body_cost = self.estimate_block_cost(body);
+        let interval = (self.loop_interrupt_check_target_micros.saturating_mul(1_000))
+            .checked_div(body_cost.saturating_mul(HOT_LOOP_CHECK_COST_SCALE))
+            .unwrap_or(1);
+        interval
+            .clamp(
+                HOT_LOOP_CHECK_MIN_INTERVAL,
+                HOT_LOOP_CHECK_MAX_INTERVAL,
+            )
+            .max(HOT_LOOP_CHECK_MIN_INTERVAL)
+    }
+
+    fn estimate_block_cost(&self, block: &Block) -> u64 {
+        block
+            .statements
+            .iter()
+            .map(|stmt| self.estimate_stmt_cost(stmt))
+            .sum::<u64>()
+            .max(1)
+    }
+
+    fn estimate_stmt_cost(&self, stmt: &Statement) -> u64 {
+        match &stmt.kind {
+            StatementKind::Program { statements, .. } => {
+                statements.iter().map(|s| self.estimate_stmt_cost(s)).sum()
+            }
+            StatementKind::PackageDeclaration { .. } => 1,
+            StatementKind::ImportDeclaration { .. } => 1,
+            StatementKind::StructDefinition { .. } => 1,
+            StatementKind::TypeAliasDeclaration { .. } => 1,
+            StatementKind::RequiresDeclaration { .. } => 1,
+            StatementKind::OptionalDeclaration { .. } => 1,
+            StatementKind::ExpressionStatement { expression } => {
+                self.estimate_expr_cost(expression) + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::VariableDeclaration { value: Some(value), .. } => {
+                self.estimate_expr_cost(value) + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::VariableDeclaration { value: None, .. } => HOT_LOOP_COST_CONTROL,
+            StatementKind::Assignment { value, .. } => {
+                self.estimate_expr_cost(value) + HOT_LOOP_COST_STORE
+            }
+            StatementKind::Block { statements, .. } => {
+                statements
+                    .iter()
+                    .map(|s| self.estimate_stmt_cost(s))
+                    .sum::<u64>()
+                    .max(1)
+            }
+            StatementKind::Return { value: Some(v), .. } => {
+                self.estimate_expr_cost(v) + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::Return { value: None, .. } => HOT_LOOP_COST_CONTROL,
+            StatementKind::Conditional {
+                condition,
+                true_branch,
+                false_branch,
+            } => {
+                self.estimate_expr_cost(condition)
+                    + self.estimate_block_cost(true_branch)
+                    + false_branch
+                        .as_ref()
+                        .map(|branch| self.estimate_block_cost(branch))
+                        .unwrap_or(1)
+                    + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::WithBlock { context, body } => {
+                self.estimate_expr_cost(context) + self.estimate_block_cost(body)
+            }
+            StatementKind::TryCatch {
+                try_body,
+                catch_body,
+                ..
+            } => {
+                self.estimate_block_cost(try_body)
+                    + self.estimate_block_cost(catch_body)
+                    + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::WhileLoop { test, body } => {
+                self.estimate_expr_cost(test) + self.estimate_block_cost(body) + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::ForLoop { start, end, body, .. } => {
+                self.estimate_expr_cost(start)
+                    + self.estimate_expr_cost(end)
+                    + self.estimate_block_cost(body)
+                    + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::ForInRange { start, end, body, .. } => {
+                self.estimate_expr_cost(start)
+                    + self.estimate_expr_cost(end)
+                    + self.estimate_block_cost(body)
+                    + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::ForEachLoop { array, body, .. } => {
+                self.estimate_expr_cost(array)
+                    + self.estimate_block_cost(body)
+                    + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::ForInIndex {
+                iterable, body, ..
+            }
+            | StatementKind::ForInMap { map: iterable, body, .. } => {
+                self.estimate_expr_cost(iterable) + self.estimate_block_cost(body) + HOT_LOOP_COST_CONTROL
+            }
+            StatementKind::FunctionDeclaration { body, .. }
+            | StatementKind::AsyncFunctionDeclaration { body, .. } => {
+                self.estimate_block_cost(body)
+            }
+            StatementKind::Break | StatementKind::Continue => HOT_LOOP_COST_CONTROL,
+        }
+    }
+
+    fn estimate_expr_cost(&self, expr: &Expr) -> u64 {
+        match &expr.kind {
+            ExprKind::Identifier { .. } => 1,
+            ExprKind::NumberLiteral { .. } => 1,
+            ExprKind::BooleanLiteral { .. } => 1,
+            ExprKind::StringLiteral { .. } => 1,
+            ExprKind::TemplateLiteral { parts } => {
+                HOT_LOOP_COST_CONTROL
+                    + parts
+                        .iter()
+                        .map(|part| match part {
+                            TemplatePart::String(_) => 1,
+                            TemplatePart::Expr(e) => self.estimate_expr_cost(e),
+                        })
+                        .sum::<u64>()
+            }
+            ExprKind::ArrayLiteral { elements } => {
+                HOT_LOOP_COST_CALL + elements.iter().map(|e| self.estimate_expr_cost(e)).sum::<u64>()
+            }
+            ExprKind::ArrayFill {
+                value,
+                count,
+            } => HOT_LOOP_COST_CALL + self.estimate_expr_cost(value) + self.estimate_expr_cost(count),
+            ExprKind::MapLiteral { entries, .. } => {
+                HOT_LOOP_COST_CALL
+                    + entries
+                        .iter()
+                        .map(|entry| self.estimate_expr_cost(&entry.value))
+                        .sum::<u64>()
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                HOT_LOOP_COST_CALL
+                    + fields
+                        .iter()
+                        .map(|f| self.estimate_expr_cost(&f.value))
+                        .sum::<u64>()
+            }
+            ExprKind::SoALiteral { columns } => {
+                HOT_LOOP_COST_CALL
+                    + columns
+                        .iter()
+                        .map(|column| {
+                            HOT_LOOP_COST_CALL
+                                + column
+                                    .values
+                                    .iter()
+                                    .map(|value| self.estimate_expr_cost(value))
+                                    .sum::<u64>()
+                        })
+                        .sum::<u64>()
+            }
+            ExprKind::SoAConstructor { capacity, .. } => {
+                HOT_LOOP_COST_CALL
+                    + capacity
+                        .map(|_| HOT_LOOP_COST_LOAD)
+                        .unwrap_or_default()
+            }
+            ExprKind::TensorConstruction { args, .. } => {
+                HOT_LOOP_COST_CALL + args.iter().map(|e| self.estimate_expr_cost(e)).sum::<u64>()
+            }
+            ExprKind::BinaryExpression {
+                left,
+                right,
+                operator,
+            } => {
+                let base = match operator.as_str() {
+                    "&&" | "||" => HOT_LOOP_COST_CONTROL * 2,
+                    "/" | "%" => 2 * HOT_LOOP_COST_IN_REG_OP,
+                    "==" | "!=" | "<" | "<=" | ">" | ">=" => HOT_LOOP_COST_CONTROL * 2,
+                    _ => HOT_LOOP_COST_IN_REG_OP,
+                };
+                self.estimate_expr_cost(left) + self.estimate_expr_cost(right) + base
+            }
+            ExprKind::UnaryExpression { operand, .. } => {
+                self.estimate_expr_cost(operand) + HOT_LOOP_COST_IN_REG_OP
+            }
+            ExprKind::CallExpression {
+                callee,
+                arguments,
+                named_args,
+            } => {
+                let args_cost: u64 = arguments
+                    .iter()
+                    .map(|arg| self.estimate_expr_cost(arg))
+                    .sum();
+                let named_args_cost: u64 = named_args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|arg| self.estimate_expr_cost(&arg.value))
+                            .sum()
+                    })
+                    .unwrap_or(0);
+                HOT_LOOP_COST_CALL + self.estimate_expr_cost(callee) + args_cost + named_args_cost
+            }
+            ExprKind::IndexExpression { object, index } => {
+                self.estimate_expr_cost(object)
+                    + self.estimate_expr_cost(index)
+                    + HOT_LOOP_COST_LOAD
+            }
+            ExprKind::SliceExpression { object, start, end, .. } => {
+                self.estimate_expr_cost(object)
+                    + self.estimate_expr_cost(start)
+                    + self.estimate_expr_cost(end)
+                    + HOT_LOOP_COST_CONTROL
+            }
+            ExprKind::AssignmentExpression {
+                target: Some(target),
+                value,
+                ..
+            } => {
+                self.estimate_expr_cost(target)
+                    + self.estimate_expr_cost(value)
+                    + HOT_LOOP_COST_STORE
+            }
+            ExprKind::AssignmentExpression {
+                name: None,
+                target: None,
+                value,
+            } => self.estimate_expr_cost(value) + HOT_LOOP_COST_CONTROL,
+            ExprKind::AssignmentExpression { name: Some(name), value, .. } => {
+                if name.is_empty() {
+                    self.estimate_expr_cost(value) + HOT_LOOP_COST_CONTROL
+                } else {
+                    self.estimate_expr_cost(value) + HOT_LOOP_COST_STORE
+                }
+            }
+            ExprKind::CastExpression { value, .. } => {
+                self.estimate_expr_cost(value) + HOT_LOOP_COST_IN_REG_OP
+            }
+            ExprKind::MemberExpression { object, .. } => {
+                self.estimate_expr_cost(object) + HOT_LOOP_COST_LOAD
+            }
+            ExprKind::IfExpression {
+                condition,
+                true_branch,
+                false_branch,
+            } => {
+                self.estimate_expr_cost(condition)
+                    + self.estimate_block_cost(true_branch)
+                    + self.estimate_false_expr_cost(false_branch)
+                + HOT_LOOP_COST_CONTROL
+            }
+            ExprKind::MatchExpression { subject, arms } => {
+                HOT_LOOP_COST_CONTROL
+                    + self.estimate_expr_cost(subject)
+                    + arms
+                        .iter()
+                        .map(|arm| self.estimate_expr_cost(&arm.body))
+                        .sum::<u64>()
+            }
+            ExprKind::BlockExpression { block } => self.estimate_block_cost(block),
+            ExprKind::Lambda { body, .. } => self.estimate_block_cost(body) + HOT_LOOP_COST_CONTROL,
+            ExprKind::OkExpression { value } => self.estimate_expr_cost(value) + HOT_LOOP_COST_CONTROL,
+            ExprKind::ErrExpression { value } => self.estimate_expr_cost(value) + HOT_LOOP_COST_CONTROL,
+            ExprKind::SomeExpression { value } => self.estimate_expr_cost(value) + HOT_LOOP_COST_CONTROL,
+            ExprKind::NoneExpression => HOT_LOOP_COST_CONTROL,
+            ExprKind::PropagateExpression { value }
+            | ExprKind::AwaitExpression { argument: value }
+            | ExprKind::SpawnExpression { argument: value }
+            | ExprKind::IsSomeExpression { value, .. }
+            | ExprKind::IsNoneExpression { value, .. }
+            | ExprKind::IsOkExpression { value, .. }
+            | ExprKind::IsErrExpression { value, .. } => {
+                self.estimate_expr_cost(value) + HOT_LOOP_COST_CONTROL
+            }
+            ExprKind::LLMExpression {
+                prompt,
+                model_size,
+                reasoning_effort,
+                context,
+                ..
+            } => {
+                self.estimate_expr_cost(prompt)
+                    + self.estimate_expr_cost(model_size)
+                    + self.estimate_expr_cost(reasoning_effort)
+                    + self.estimate_expr_cost(context)
+                    + HOT_LOOP_COST_CALL
+            }
+        }
+    }
+
+    fn estimate_false_expr_cost(&self, branch: &IfElseBranch) -> u64 {
+        match branch {
+            IfElseBranch::Block(block) => self.estimate_block_cost(block),
+            IfElseBranch::IfExpression(expr) => self.estimate_expr_cost(expr),
+        }
     }
 
     fn emit_interrupt_return(&mut self) {
@@ -4713,14 +5134,12 @@ pub fn generate_qbe_ir(ast: &Statement) -> String {
 }
 
 pub fn generate_qbe_ir_with_interrupts(ast: &Statement, emit_loop_interrupt_checks: bool) -> String {
-    let mut codegen = QBECodeGen::new();
-    codegen.set_loop_interrupt_checks(emit_loop_interrupt_checks);
-    codegen.generate(ast);
-    let mut result = String::new();
-    result.push_str(&codegen.data_section);
-    result.push_str(&codegen.lambda_funcs);
-    result.push_str(&codegen.output);
-    result
+    generate_qbe_ir_with_interrupts_and_adaptive(
+        ast,
+        emit_loop_interrupt_checks,
+        false,
+        HOT_LOOP_CHECK_TARGET_MICROS,
+    )
 }
 
 pub fn generate_qbe_ir_with_caps(ast: &Statement, caps: HashMap<String, CapabilityDecl>) -> String {
@@ -4732,8 +5151,48 @@ pub fn generate_qbe_ir_with_caps_and_interrupts(
     caps: HashMap<String, CapabilityDecl>,
     emit_loop_interrupt_checks: bool,
 ) -> String {
+    generate_qbe_ir_with_caps_and_interrupts_and_adaptive(
+        ast,
+        caps,
+        emit_loop_interrupt_checks,
+        false,
+        HOT_LOOP_CHECK_TARGET_MICROS,
+    )
+}
+
+pub fn generate_qbe_ir_with_interrupts_and_adaptive(
+    ast: &Statement,
+    emit_loop_interrupt_checks: bool,
+    adaptive_loop_interrupt_checks: bool,
+    loop_interrupt_check_target_micros: u64,
+) -> String {
     let mut codegen = QBECodeGen::new();
     codegen.set_loop_interrupt_checks(emit_loop_interrupt_checks);
+    codegen.set_adaptive_loop_interrupt_checks(
+        adaptive_loop_interrupt_checks,
+        loop_interrupt_check_target_micros,
+    );
+    codegen.generate(ast);
+    let mut result = String::new();
+    result.push_str(&codegen.data_section);
+    result.push_str(&codegen.lambda_funcs);
+    result.push_str(&codegen.output);
+    result
+}
+
+pub fn generate_qbe_ir_with_caps_and_interrupts_and_adaptive(
+    ast: &Statement,
+    caps: HashMap<String, CapabilityDecl>,
+    emit_loop_interrupt_checks: bool,
+    adaptive_loop_interrupt_checks: bool,
+    loop_interrupt_check_target_micros: u64,
+) -> String {
+    let mut codegen = QBECodeGen::new();
+    codegen.set_loop_interrupt_checks(emit_loop_interrupt_checks);
+    codegen.set_adaptive_loop_interrupt_checks(
+        adaptive_loop_interrupt_checks,
+        loop_interrupt_check_target_micros,
+    );
     codegen.set_capability_decls(caps);
     codegen.generate(ast);
     let mut result = String::new();
@@ -4753,8 +5212,30 @@ pub fn generate_plugin_qbe_ir_with_interrupts(
     version: &str,
     emit_loop_interrupt_checks: bool,
 ) -> String {
+    generate_plugin_qbe_ir_with_interrupts_and_adaptive(
+        ast,
+        name,
+        version,
+        emit_loop_interrupt_checks,
+        false,
+        HOT_LOOP_CHECK_TARGET_MICROS,
+    )
+}
+
+pub fn generate_plugin_qbe_ir_with_interrupts_and_adaptive(
+    ast: &Statement,
+    name: &str,
+    version: &str,
+    emit_loop_interrupt_checks: bool,
+    adaptive_loop_interrupt_checks: bool,
+    loop_interrupt_check_target_micros: u64,
+) -> String {
     let mut codegen = QBECodeGen::new();
     codegen.set_loop_interrupt_checks(emit_loop_interrupt_checks);
+    codegen.set_adaptive_loop_interrupt_checks(
+        adaptive_loop_interrupt_checks,
+        loop_interrupt_check_target_micros,
+    );
     codegen.set_plugin_mode(name, version);
     codegen.generate(ast);
     let mut result = String::new();
