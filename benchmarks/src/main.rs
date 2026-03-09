@@ -7,6 +7,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::process;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -28,6 +29,8 @@ struct Args {
     iterations: usize,
     warmup: usize,
     mode: BenchMode,
+    adaptive_loop_interrupt_checks: bool,
+    loop_interrupt_check_target_micros: u64,
 }
 
 fn parse_args() -> Args {
@@ -35,6 +38,8 @@ fn parse_args() -> Args {
         iterations: 5,
         warmup: 2,
         mode: BenchMode::Full,
+        adaptive_loop_interrupt_checks: false,
+        loop_interrupt_check_target_micros: 1_000,
     };
     let argv: Vec<String> = env::args().collect();
     let mut i = 1;
@@ -46,6 +51,33 @@ fn parse_args() -> Args {
             "--interrupt-check-bench" => {
                 args.mode = BenchMode::InterruptChecks;
             }
+            "--adaptive-loop-interrupt-checks" => {
+                args.adaptive_loop_interrupt_checks = true;
+            }
+            "--adaptive-loop-interrupt-target-micros" => {
+                i += 1;
+                if i >= argv.len() {
+                    eprintln!(
+                        "error: --adaptive-loop-interrupt-target-micros requires a number of microseconds"
+                    );
+                    process::exit(1);
+                }
+                args.loop_interrupt_check_target_micros = match argv[i].parse::<u64>() {
+                    Ok(v) if v > 0 => v,
+                    Ok(_) => {
+                        eprintln!(
+                            "error: --adaptive-loop-interrupt-target-micros must be greater than 0"
+                        );
+                        process::exit(1);
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "error: --adaptive-loop-interrupt-target-micros requires a numeric value"
+                        );
+                        process::exit(1);
+                    }
+                };
+            }
             "--iterations" => {
                 i += 1;
                 args.iterations = argv[i].parse().expect("--iterations requires a number");
@@ -56,7 +88,7 @@ fn parse_args() -> Args {
             }
             "--help" | "-h" => {
                 eprintln!(
-                    "Usage: mog-bench [--iterations N] [--warmup N] [--host-stop-bench] [--interrupt-check-bench]"
+                    "Usage: mog-bench [--iterations N] [--warmup N] [--host-stop-bench] [--interrupt-check-bench] [--adaptive-loop-interrupt-checks] [--adaptive-loop-interrupt-target-micros N]"
                 );
                 std::process::exit(0);
             }
@@ -248,11 +280,20 @@ fn time_host_stop_case(
     ))
 }
 
-fn compile_interrupt_binary(case: &InterruptCheckCase, loop_interrupt_checks: bool) -> Option<PathBuf> {
+fn compile_interrupt_binary(
+    case: &InterruptCheckCase,
+    loop_interrupt_checks: bool,
+    adaptive_loop_interrupt_checks: bool,
+    loop_interrupt_check_target_micros: u64,
+) -> Option<PathBuf> {
     let counter = INTERRUPT_CHECK_COUNTER.fetch_add(1, Ordering::SeqCst);
     let pid = std::process::id();
     let variant = if loop_interrupt_checks {
-        "checked"
+        if adaptive_loop_interrupt_checks {
+            "checked-adaptive"
+        } else {
+            "checked"
+        }
     } else {
         "unchecked"
     };
@@ -262,6 +303,8 @@ fn compile_interrupt_binary(case: &InterruptCheckCase, loop_interrupt_checks: bo
         output_path: Some(out_path.clone()),
         source_path: Some(case.source_path.clone()),
         loop_interrupt_checks,
+        adaptive_loop_interrupt_checks,
+        loop_interrupt_check_target_micros,
         ..Default::default()
     };
 
@@ -305,9 +348,17 @@ fn time_interrupt_check_case(
     case: &InterruptCheckCase,
     warmup: usize,
     iterations: usize,
+    adaptive_loop_interrupt_checks: bool,
+    loop_interrupt_check_target_micros: u64,
 ) -> Option<InterruptCheckResult> {
-    let checked_binary = compile_interrupt_binary(case, true)?;
-    let unchecked_binary = compile_interrupt_binary(case, false)?;
+    let checked_binary = compile_interrupt_binary(
+        case,
+        true,
+        adaptive_loop_interrupt_checks,
+        loop_interrupt_check_target_micros,
+    )?;
+    let unchecked_binary =
+        compile_interrupt_binary(case, false, false, loop_interrupt_check_target_micros)?;
     let lines = count_lines(&case.source);
 
     let checked_label = format!("{} (checks)", case.label);
@@ -680,15 +731,26 @@ fn run_interrupt_check_suite(args: &Args, bench_dir: &Path) {
     let cases = load_interrupt_check_cases(bench_dir);
     let mut results: Vec<InterruptCheckResult> = Vec::new();
     let mut skipped = 0usize;
+    let checks_mode = if args.adaptive_loop_interrupt_checks {
+        format!("adaptive (target {}us)", args.loop_interrupt_check_target_micros)
+    } else {
+        "every loop edge".to_string()
+    };
 
     println!(
-        "interrupt-check benchmark iterations={}  warmup={}",
+        "interrupt-check benchmark iterations={}  warmup={}  mode={checks_mode}",
         args.iterations, args.warmup
     );
     println!("timing binary execution only; each case is compiled once with checks and once without");
 
     for case in &cases {
-        match time_interrupt_check_case(case, args.warmup, args.iterations) {
+        match time_interrupt_check_case(
+            case,
+            args.warmup,
+            args.iterations,
+            args.adaptive_loop_interrupt_checks,
+            args.loop_interrupt_check_target_micros,
+        ) {
             Some(result) => results.push(result),
             None => skipped += 1,
         }
@@ -697,7 +759,12 @@ fn run_interrupt_check_suite(args: &Args, bench_dir: &Path) {
     if results.is_empty() {
         eprintln!("no interrupt-check benchmark cases ran (all skipped)");
     } else {
-        print_interrupt_check_header("loop-edge interrupt-check slowdown");
+        let header = if args.adaptive_loop_interrupt_checks {
+            "adaptive loop interrupt-check slowdown"
+        } else {
+            "loop-edge interrupt-check slowdown"
+        };
+        print_interrupt_check_header(header);
         for result in &results {
             print_interrupt_check_row(result);
         }

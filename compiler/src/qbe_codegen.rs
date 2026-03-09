@@ -149,9 +149,32 @@ impl QBECodeGen {
 
     fn emit_alloc(&mut self, line: &str) {
         self.entry_allocs.push(line.to_string());
-        // Zero-initialize every alloc slot
+        // Zero-initialize every alloc slot.
         if let Some(reg) = line.split('=').next().map(|s| s.trim()) {
             self.entry_allocs.push(format!("  storel 0, {}", reg));
+        }
+    }
+
+    /// Register all stack slots allocated in this function as GC roots.
+    fn emit_rooted_allocs(&mut self) {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        let mut roots: Vec<String> = Vec::new();
+        for alloc_line in &self.entry_allocs {
+            let line = alloc_line.trim();
+            if !line.contains(" =l alloc") {
+                continue;
+            }
+            let Some((slot, _rest)) = line.split_once(" =") else {
+                continue;
+            };
+            let slot = slot.trim();
+            if seen.insert(slot.to_string()) {
+                roots.push(slot.to_string());
+            }
+        }
+        for slot in roots {
+            self.emit(&format!("    call $gc_add_root(l {})", slot));
         }
     }
 
@@ -879,28 +902,35 @@ impl QBECodeGen {
         let dims_slot = self.fresh_reg();
         self.emit_alloc(&format!("    {} =l alloc8 8", dims_slot));
         self.emit(&format!("    storel {}, {}", capacity, dims_slot));
+        let arr_slot = self.fresh_reg();
+        self.emit_alloc(&format!("    {} =l alloc8 8", arr_slot));
         let arr = self.fresh_reg();
         self.emit(&format!(
             "    {} =l call $array_alloc(l 8, l 1, l {})",
             arr, dims_slot
         ));
-        arr
+        self.emit(&format!("    storel {}, {}", arr, arr_slot));
+        arr_slot
     }
 
     fn gen_array_literal(&mut self, elements: &[Expr]) -> String {
         // Allocate empty, then push each element
         let arr = self.emit_array_alloc("0");
+        let arr_ptr = self.fresh_reg();
+        self.emit(&format!("    {} =l loadl {}", arr_ptr, arr));
         for elem in elements {
             let v = self.gen_expr(elem);
             let v = self.ensure_long(&v);
-            self.emit(&format!("    call $array_push(l {}, l {})", arr, v));
+            self.emit(&format!("    call $array_push(l {}, l {})", arr_ptr, v));
         }
-        arr
+        arr_ptr
     }
 
     fn gen_array_fill(&mut self, value: &Expr, count: &Expr) -> String {
         let cnt = self.gen_expr(count);
         let arr = self.emit_array_alloc("0");
+        let arr_ptr = self.fresh_reg();
+        self.emit(&format!("    {} =l loadl {}", arr_ptr, arr));
         let val = self.gen_expr(value);
         let i_slot = self.fresh_reg();
         self.emit_alloc(&format!("    {} =l alloc8 8", i_slot));
@@ -917,13 +947,13 @@ impl QBECodeGen {
         self.emit(&format!("    jnz {}, {}, {}", cmp, body_lbl, end_lbl));
         self.emit(&format!("{}", body_lbl));
         let val = self.ensure_long(&val);
-        self.emit(&format!("    call $array_push(l {}, l {})", arr, val));
+        self.emit(&format!("    call $array_push(l {}, l {})", arr_ptr, val));
         let inc = self.fresh_reg();
         self.emit(&format!("    {} =l add {}, 1", inc, i));
         self.emit(&format!("    storel {}, {}", inc, i_slot));
         self.emit(&format!("    jmp {}", loop_lbl));
         self.emit(&format!("{}", end_lbl));
-        arr
+        arr_ptr
     }
 
     fn gen_map_literal(&mut self, entries: &[MapEntry]) -> String {
@@ -1427,7 +1457,7 @@ impl QBECodeGen {
                 "storel"
             };
             self.emit(&format!("    {} %p.{}, {}", op, p.name, slot));
-            self.variable_registers.insert(p.name.clone(), slot);
+            self.variable_registers.insert(p.name.clone(), slot.clone());
             self.variable_types
                 .insert(p.name.clone(), p.param_type.clone());
         }
@@ -1462,8 +1492,14 @@ impl QBECodeGen {
         }
 
         // Generate body
-        self.emit("    call $gc_push_frame()");
+        let saved_body = std::mem::take(&mut self.current_func_lines);
         self.gen_block_stmts(&body.statements);
+        let body_lines = std::mem::take(&mut self.current_func_lines);
+        self.current_func_lines = saved_body;
+
+        self.emit("    call $gc_push_frame()");
+        self.emit_rooted_allocs();
+        self.current_func_lines.extend(body_lines);
         if !self.block_terminated {
             self.emit("    call $gc_pop_frame()");
             if *return_type == Type::Void {
@@ -3158,7 +3194,7 @@ impl QBECodeGen {
                 "storel"
             };
             self.emit(&format!("    {} %p.{}, {}", op, p.name, slot));
-            self.variable_registers.insert(p.name.clone(), slot);
+            self.variable_registers.insert(p.name.clone(), slot.clone());
             self.variable_types
                 .insert(p.name.clone(), p.param_type.clone());
         }
@@ -3173,8 +3209,14 @@ impl QBECodeGen {
         self.function_types
             .insert(func_name.clone(), return_type.clone());
 
-        self.emit("    call $gc_push_frame()");
+        let saved_body = std::mem::take(&mut self.current_func_lines);
         self.gen_block_stmts(&body.statements);
+        let body_lines = std::mem::take(&mut self.current_func_lines);
+        self.current_func_lines = saved_body;
+
+        self.emit("    call $gc_push_frame()");
+        self.emit_rooted_allocs();
+        self.current_func_lines.extend(body_lines);
         if !self.block_terminated {
             self.emit("    call $gc_pop_frame()");
             if *return_type == Type::Void {
@@ -3409,13 +3451,19 @@ impl QBECodeGen {
         for p in params {
             let slot = self.fresh_reg();
             self.emit_alloc(&format!("    {} =l alloc8 8", slot));
-            self.variable_registers.insert(p.name.clone(), slot);
+            self.variable_registers.insert(p.name.clone(), slot.clone());
             self.variable_types
                 .insert(p.name.clone(), p.param_type.clone());
         }
 
-        self.emit("    call $gc_push_frame()");
+        let saved_body = std::mem::take(&mut self.current_func_lines);
         self.gen_block_stmts(&body.statements);
+        let body_lines = std::mem::take(&mut self.current_func_lines);
+        self.current_func_lines = saved_body;
+
+        self.emit("    call $gc_push_frame()");
+        self.emit_rooted_allocs();
+        self.current_func_lines.extend(body_lines);
         if !self.block_terminated {
             // Implicit return: complete future with 0
             self.emit(&format!("    call $mog_future_complete(l %c.future, l 0)"));
@@ -3820,10 +3868,15 @@ impl QBECodeGen {
         let saved_ret = self.current_function_return_type.take();
         self.reset_counters();
 
-        self.emit("    call $gc_push_frame()");
+        let saved_body = std::mem::take(&mut self.current_func_lines);
         for stmt in stmts {
             self.gen_statement(stmt);
         }
+        let body_lines = std::mem::take(&mut self.current_func_lines);
+        self.current_func_lines = saved_body;
+        self.emit("    call $gc_push_frame()");
+        self.emit_rooted_allocs();
+        self.current_func_lines.extend(body_lines);
         self.emit("    call $gc_pop_frame()");
         self.emit("    ret");
 

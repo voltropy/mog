@@ -24,6 +24,21 @@ Mog is a statically typed, compiled, embedded language (think statically typed L
 - Even without a full security audit, Mog is already useful for agents extending themselves with their own code.
 - MIT licensed, contributions welcome. https://github.com/voltropy/mog
 
+```mog
+import agent;       // Agent, Message, Role types
+optional log;       // silently ignored if not provided
+
+// post-compaction hook: re-inject key context that may have been lost
+pub fn on_post_compaction(session: agent.Session) {
+  log.info("post-compaction hook: injecting reminder");
+
+  session.messages.push(agent.Message {
+    role: agent.Role.system,
+    content: "IMPORTANT: Always run tests before committing.",
+  });
+}
+```
+
 ## Why Mog?
 
 A general-purpose AI agent should be able to continuously extend and modify itself. Over time, an agent should grow into a personal server that manages tasks in all kinds of ways. To do that, the agent needs to write its own code -- and that code needs to be safe.

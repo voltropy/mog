@@ -12,12 +12,23 @@
 
 use std::ptr;
 
+const ARRAY_BOUNDS_ERROR_EXIT: i32 = 2;
+
+fn abort_array_oob(index: i64, length: i64) -> ! {
+    eprintln!("runtime error: array index out of bounds: index={index}, length={length}");
+    std::process::exit(ARRAY_BOUNDS_ERROR_EXIT);
+}
+
 const OBJ_ARRAY: i32 = 1;
 const OBJ_STRING: i32 = 5;
 
 unsafe extern "C" {
     fn gc_alloc_kind(size: usize, kind: i32) -> *mut u8;
     fn gc_alloc(size: usize) -> *mut u8;
+    fn gc_add_root(slot: *mut *mut u8);
+    fn gc_remove_root(slot: *mut *mut u8);
+    fn gc_get_threshold() -> usize;
+    fn gc_set_threshold(t: usize);
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +83,15 @@ unsafe fn alloc_string(len: usize) -> *mut u8 {
     unsafe { gc_alloc_kind(len + 1, OBJ_STRING) }
 }
 
+#[inline]
+unsafe fn with_gc_disabled<R>(f: impl FnOnce() -> R) -> R {
+    let threshold = gc_get_threshold();
+    gc_set_threshold(usize::MAX);
+    let result = f();
+    gc_set_threshold(threshold);
+    result
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -83,67 +103,90 @@ pub extern "C" fn array_alloc(
     dimensions: *const u64,
 ) -> *mut u8 {
     unsafe {
-        let arr_ptr = gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY);
-        if arr_ptr.is_null() {
-            return ptr::null_mut();
-        }
+        with_gc_disabled(|| {
+            let mut arr_ptr = gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY);
+            if arr_ptr.is_null() {
+                return ptr::null_mut();
+            }
+            let arr_root = std::ptr::addr_of_mut!(arr_ptr);
+            gc_add_root(arr_root);
 
-        let dim_bytes = (std::mem::size_of::<u64>()) * dimension_count as usize;
-        let array_dimensions = gc_alloc(dim_bytes) as *mut u64;
-        if array_dimensions.is_null() {
-            return ptr::null_mut();
-        }
+            let dim_bytes = (std::mem::size_of::<u64>()) * dimension_count as usize;
+            let array_dimensions = gc_alloc(dim_bytes) as *mut u64;
+            if array_dimensions.is_null() {
+                gc_remove_root(arr_root);
+                return ptr::null_mut();
+            }
 
-        let array_strides = gc_alloc(dim_bytes) as *mut u64;
-        if array_strides.is_null() {
-            return ptr::null_mut();
-        }
+            let array_strides = gc_alloc(dim_bytes) as *mut u64;
+            if array_strides.is_null() {
+                gc_remove_root(arr_root);
+                return ptr::null_mut();
+            }
 
-        let arr = as_arr_mut(arr_ptr);
+            let arr = as_arr_mut(arr_ptr);
 
-        arr.element_size = element_size;
-        arr.dimension_count = dimension_count;
-        arr.dimensions = array_dimensions;
-        arr.strides = array_strides;
+            arr.element_size = element_size;
+            arr.dimension_count = dimension_count;
+            arr.dimensions = array_dimensions;
+            arr.strides = array_strides;
 
-        ptr::copy_nonoverlapping(dimensions, arr.dimensions, dimension_count as usize);
+            ptr::copy_nonoverlapping(dimensions, arr.dimensions, dimension_count as usize);
 
-        let mut total_elements: u64 = 1;
-        for i in 0..dimension_count as usize {
-            *arr.strides.add(i) = total_elements;
-            total_elements *= *arr.dimensions.add(i);
-        }
+            let mut total_elements: u64 = 1;
+            for i in 0..dimension_count as usize {
+                *arr.strides.add(i) = total_elements;
+                total_elements *= *arr.dimensions.add(i);
+            }
 
-        arr.data = gc_alloc((element_size * total_elements) as usize);
-        if arr.data.is_null() {
-            return ptr::null_mut();
-        }
+            arr.data = gc_alloc((element_size * total_elements) as usize);
+            if arr.data.is_null() {
+                gc_remove_root(arr_root);
+                return ptr::null_mut();
+            }
 
-        arr_ptr
+            gc_remove_root(arr_root);
+            arr_ptr
+        })
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn array_push(arr: *mut u8, value: i64) {
     unsafe {
-        let arr = as_arr_mut(arr);
-        if arr.dimension_count == 0 {
-            return;
-        }
+        with_gc_disabled(|| {
+            let mut arr = arr;
+            if arr.is_null() {
+                crate::vm::mog_request_interrupt();
+                return;
+            }
+            let arr_root = std::ptr::addr_of_mut!(arr);
+            gc_add_root(arr_root);
+            let arr = as_arr_mut(arr);
+            if arr.dimension_count == 0 {
+                gc_remove_root(arr_root);
+                return;
+            }
 
-        let old_len = *arr.dimensions;
-        let new_len = old_len + 1;
+            let old_len = *arr.dimensions;
+            let new_len = old_len + 1;
+            let new_data = gc_alloc((arr.element_size * new_len) as usize);
+            if new_data.is_null() {
+                gc_remove_root(arr_root);
+                crate::vm::mog_request_interrupt();
+                return;
+            }
+            if old_len > 0 && !arr.data.is_null() {
+                ptr::copy_nonoverlapping(arr.data, new_data, (arr.element_size * old_len) as usize);
+            }
 
-        let new_data = gc_alloc((arr.element_size * new_len) as usize);
-        if old_len > 0 && !arr.data.is_null() {
-            ptr::copy_nonoverlapping(arr.data, new_data, (arr.element_size * old_len) as usize);
-        }
+            let p = new_data.add((old_len * arr.element_size) as usize) as *mut u64;
+            ptr::write_unaligned(p, value as u64);
 
-        let p = new_data.add((old_len * arr.element_size) as usize) as *mut u64;
-        ptr::write_unaligned(p, value as u64);
-
-        arr.data = new_data;
-        *arr.dimensions = new_len;
+            arr.data = new_data;
+            *arr.dimensions = new_len;
+            gc_remove_root(arr_root);
+        })
     }
 }
 
@@ -168,6 +211,15 @@ pub extern "C" fn array_pop(arr: *mut u8) -> i64 {
 pub extern "C" fn array_get(arr: *const u8, index: i64) -> i64 {
     unsafe {
         let arr = as_arr(arr);
+        if arr.dimension_count == 0 {
+            abort_array_oob(index, 0);
+        }
+
+        let len = arr.dimensions.read() as i64;
+        if index < 0 || index as u64 >= arr.dimensions.read() {
+            abort_array_oob(index, len);
+        }
+
         read_elem(arr, index as u64) as i64
     }
 }
@@ -176,6 +228,15 @@ pub extern "C" fn array_get(arr: *const u8, index: i64) -> i64 {
 pub extern "C" fn array_set(arr: *mut u8, index: i64, value: i64) {
     unsafe {
         let arr = as_arr(arr);
+        if arr.dimension_count == 0 {
+            abort_array_oob(index, 0);
+        }
+
+        let len = arr.dimensions.read() as i64;
+        if index < 0 || index as u64 >= arr.dimensions.read() {
+            abort_array_oob(index, len);
+        }
+
         write_elem(arr, index as u64, value as u64);
     }
 }
@@ -194,30 +255,51 @@ pub extern "C" fn array_length(arr: *const u8) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn array_slice(arr: *const u8, start: i64, end: i64) -> *mut u8 {
     unsafe {
-        let src = as_arr(arr);
-        let start = start as u64;
-        let mut slice_len = end as u64 - start;
-        let src_len = *src.dimensions;
-        if slice_len > src_len - start {
-            slice_len = src_len - start;
-        }
+        with_gc_disabled(|| {
+            let src = as_arr(arr);
+            let start = start as u64;
+            let mut slice_len = end as u64 - start;
+            let src_len = *src.dimensions;
+            if slice_len > src_len - start {
+                slice_len = src_len - start;
+            }
 
-        let slice_ptr = gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY);
-        let sl = as_arr_mut(slice_ptr);
-        sl.element_size = src.element_size;
-        sl.dimension_count = 1;
-        sl.dimensions = gc_alloc(std::mem::size_of::<u64>()) as *mut u64;
-        *sl.dimensions = slice_len;
-        sl.strides = gc_alloc(std::mem::size_of::<u64>()) as *mut u64;
-        *sl.strides = 1;
-        sl.data = gc_alloc((src.element_size * slice_len) as usize);
+            let mut slice_ptr = gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY);
+            if slice_ptr.is_null() {
+                return ptr::null_mut();
+            }
+            let slice_root = std::ptr::addr_of_mut!(slice_ptr);
+            gc_add_root(slice_root);
 
-        for i in 0..slice_len {
-            let val = read_elem(src, start + i);
-            write_elem(sl, i, val);
-        }
+            let sl = as_arr_mut(slice_ptr);
+            sl.element_size = src.element_size;
+            sl.dimension_count = 1;
+            sl.dimensions = gc_alloc(std::mem::size_of::<u64>()) as *mut u64;
+            if sl.dimensions.is_null() {
+                gc_remove_root(slice_root);
+                return ptr::null_mut();
+            }
+            *sl.dimensions = slice_len;
+            sl.strides = gc_alloc(std::mem::size_of::<u64>()) as *mut u64;
+            if sl.strides.is_null() {
+                gc_remove_root(slice_root);
+                return ptr::null_mut();
+            }
+            *sl.strides = 1;
+            sl.data = gc_alloc((src.element_size * slice_len) as usize);
+            if sl.data.is_null() {
+                gc_remove_root(slice_root);
+                return ptr::null_mut();
+            }
 
-        slice_ptr
+            for i in 0..slice_len {
+                let val = read_elem(src, start + i);
+                write_elem(sl, i, val);
+            }
+
+            gc_remove_root(slice_root);
+            slice_ptr
+        })
     }
 }
 

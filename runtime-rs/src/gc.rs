@@ -27,7 +27,7 @@ const LARGE_OBJECT_THRESHOLD: usize = 4096;
 const MAX_CACHED_MAPPINGS: usize = 16;
 
 /// Maximum GC root slots per shadow-stack frame.
-const MAX_FRAME_SLOTS: usize = 256;
+const MAX_FRAME_SLOTS: usize = 1024;
 
 /// Trigger a collection when usage is this close to the memory cap.
 const MEM_LIMIT_SOFT_SLACK: usize = 64 * 1024;
@@ -624,6 +624,37 @@ unsafe fn ptr_to_block(ptr: *mut u8) -> *mut Block {
     unsafe { ptr.sub(BLOCK_SIZE) as *mut Block }
 }
 
+#[inline]
+unsafe fn gc_ptr_to_block(ptr: *mut u8) -> *mut Block {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let addr = ptr as usize;
+    if addr < BLOCK_SIZE {
+        return ptr::null_mut();
+    }
+
+    let candidate = (addr - BLOCK_SIZE) as *mut Block;
+    if is_block_on_heap(candidate) {
+        candidate
+    } else {
+        ptr::null_mut()
+    }
+}
+
+#[inline]
+unsafe fn is_block_on_heap(block: *mut Block) -> bool {
+    let mut cursor = HEAP;
+    while !cursor.is_null() {
+        if cursor == block {
+            return true;
+        }
+        cursor = (*cursor).next;
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Tracing functions — called during the mark phase to discover children
 // ---------------------------------------------------------------------------
@@ -785,7 +816,7 @@ unsafe fn gc_mark_roots() {
                 let slot = (*frame).slots[i];
                 let user_ptr = *slot;
                 if !user_ptr.is_null() {
-                    let block = ptr_to_block(user_ptr);
+                    let block = gc_ptr_to_block(user_ptr);
                     if !block.is_null() {
                         gc_mark(block as *mut u8);
                     }
@@ -1074,6 +1105,11 @@ pub extern "C" fn gc_set_threshold(t: usize) {
     unsafe {
         ALLOC_THRESHOLD = t;
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gc_get_threshold() -> usize {
+    unsafe { ALLOC_THRESHOLD }
 }
 
 #[cfg(test)]

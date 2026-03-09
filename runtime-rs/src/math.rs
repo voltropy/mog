@@ -1,4 +1,5 @@
 //! Math builtins and vector/matrix operations for the Mog runtime.
+use std::ptr;
 
 // ---------------------------------------------------------------------------
 // GC externs
@@ -6,6 +7,8 @@
 unsafe extern "C" {
     fn gc_alloc(size: usize) -> *mut u8;
     fn gc_alloc_kind(size: usize, kind: i32) -> *mut u8;
+    fn gc_add_root(slot: *mut *mut u8);
+    fn gc_remove_root(slot: *mut *mut u8);
 }
 
 /// ObjectKind::OBJ_ARRAY = 1
@@ -34,46 +37,86 @@ struct Array {
 
 /// Allocate a new 1-D Array of f64 (element_size = 8) with `len` elements.
 unsafe fn array_alloc_1d(len: u64) -> *mut Array {
-    let arr = unsafe { gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY) } as *mut Array;
+    let mut arr = unsafe { gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY) } as *mut Array;
+    if arr.is_null() {
+        return ptr::null_mut();
+    }
+    let arr_root: *mut *mut u8 = std::ptr::addr_of_mut!(arr).cast();
     unsafe {
+        gc_add_root(arr_root);
+
         (*arr).element_size = 8;
         (*arr).dimension_count = 1;
 
         let dims = gc_alloc(std::mem::size_of::<u64>()) as *mut u64;
+        if dims.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         *dims = len;
         (*arr).dimensions = dims;
 
         let strides = gc_alloc(std::mem::size_of::<u64>()) as *mut u64;
+        if strides.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         *strides = 1;
         (*arr).strides = strides;
 
         let data = gc_alloc((len as usize) * 8);
+        if data.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         (*arr).data = data;
+
+        gc_remove_root(arr_root);
+        arr
     }
-    arr
 }
 
 /// Allocate a new 2-D Array of f64 with `rows x cols`.
 unsafe fn array_alloc_2d(rows: u64, cols: u64) -> *mut Array {
-    let arr = unsafe { gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY) } as *mut Array;
+    let mut arr = unsafe { gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY) } as *mut Array;
+    if arr.is_null() {
+        return ptr::null_mut();
+    }
+    let arr_root: *mut *mut u8 = std::ptr::addr_of_mut!(arr).cast();
     unsafe {
+        gc_add_root(arr_root);
+
         (*arr).element_size = 8;
         (*arr).dimension_count = 2;
 
         let dims = gc_alloc(2 * std::mem::size_of::<u64>()) as *mut u64;
+        if dims.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         *dims = rows;
         *dims.add(1) = cols;
         (*arr).dimensions = dims;
 
         let strides = gc_alloc(2 * std::mem::size_of::<u64>()) as *mut u64;
+        if strides.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         *strides = cols;
         *strides.add(1) = 1;
         (*arr).strides = strides;
 
         let data = gc_alloc((rows as usize) * (cols as usize) * 8);
+        if data.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         (*arr).data = data;
+
+        gc_remove_root(arr_root);
+        arr
     }
-    arr
 }
 
 /// Get pointer to f64 data of an Array.

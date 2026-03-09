@@ -1,6 +1,7 @@
 //! Tensor (n-dimensional array of f32) operations for the Mog runtime.
 
 use std::io::Write;
+use std::ptr;
 
 // ---------------------------------------------------------------------------
 // GC externs
@@ -8,6 +9,8 @@ use std::io::Write;
 unsafe extern "C" {
     fn gc_alloc(size: usize) -> *mut u8;
     fn gc_alloc_kind(size: usize, kind: i32) -> *mut u8;
+    fn gc_add_root(slot: *mut *mut u8);
+    fn gc_remove_root(slot: *mut *mut u8);
 }
 
 /// ObjectKind::OBJ_TENSOR = 7
@@ -76,14 +79,27 @@ unsafe fn as_tensor_mut(ptr: *mut u8) -> &'static mut MogTensor {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tensor_create(ndim: i64, shape: *const i64, dtype: i64) -> *mut u8 {
     unsafe {
-        let t = gc_alloc_kind(std::mem::size_of::<MogTensor>(), OBJ_TENSOR) as *mut MogTensor;
+        let mut t = gc_alloc_kind(std::mem::size_of::<MogTensor>(), OBJ_TENSOR) as *mut MogTensor;
+        if t.is_null() {
+            return ptr::null_mut();
+        }
+        let tensor_root: *mut *mut u8 = std::ptr::addr_of_mut!(t).cast();
+        gc_add_root(tensor_root);
 
         (*t).ndim = ndim;
         (*t).dtype = dtype;
 
         // Allocate and fill shape
         let shape_buf = gc_alloc((ndim as usize) * std::mem::size_of::<i64>()) as *mut i64;
+        if shape_buf.is_null() {
+            gc_remove_root(tensor_root);
+            return ptr::null_mut();
+        }
         let strides_buf = gc_alloc((ndim as usize) * std::mem::size_of::<i64>()) as *mut i64;
+        if strides_buf.is_null() {
+            gc_remove_root(tensor_root);
+            return ptr::null_mut();
+        }
 
         let mut size: i64 = 1;
         // Compute row-major strides from the right
@@ -99,9 +115,14 @@ pub unsafe extern "C" fn tensor_create(ndim: i64, shape: *const i64, dtype: i64)
 
         // Allocate zero-initialized data
         let data = gc_alloc((size as usize) * std::mem::size_of::<f32>()) as *mut f32;
+        if data.is_null() {
+            gc_remove_root(tensor_root);
+            return ptr::null_mut();
+        }
         std::ptr::write_bytes(data, 0, size as usize);
         (*t).data = data;
 
+        gc_remove_root(tensor_root);
         t as *mut u8
     }
 }
@@ -195,24 +216,43 @@ pub unsafe extern "C" fn tensor_shape(t: *const u8) -> *mut u8 {
         let t = as_tensor(t);
         let ndim = t.ndim as usize;
 
-        let arr = gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY) as *mut Array;
+        let mut arr = gc_alloc_kind(std::mem::size_of::<Array>(), OBJ_ARRAY) as *mut Array;
+        if arr.is_null() {
+            return ptr::null_mut();
+        }
+        let arr_root: *mut *mut u8 = std::ptr::addr_of_mut!(arr).cast();
+        gc_add_root(arr_root);
+
         (*arr).element_size = 8; // i64 / u64
         (*arr).dimension_count = 1;
 
         let dims = gc_alloc(std::mem::size_of::<u64>()) as *mut u64;
+        if dims.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         *dims = ndim as u64;
         (*arr).dimensions = dims;
 
         let strides = gc_alloc(std::mem::size_of::<u64>()) as *mut u64;
+        if strides.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         *strides = 1;
         (*arr).strides = strides;
 
         let data = gc_alloc(ndim * std::mem::size_of::<u64>()) as *mut u64;
+        if data.is_null() {
+            gc_remove_root(arr_root);
+            return ptr::null_mut();
+        }
         for i in 0..ndim {
             *data.add(i) = *t.shape.add(i) as u64;
         }
         (*arr).data = data as *mut u8;
 
+        gc_remove_root(arr_root);
         arr as *mut u8
     }
 }

@@ -11,6 +11,8 @@ use core::slice;
 unsafe extern "C" {
     fn gc_alloc_kind(size: usize, kind: i32) -> *mut u8;
     fn gc_alloc(size: usize) -> *mut u8;
+    fn gc_add_root(slot: *mut *mut u8);
+    fn gc_remove_root(slot: *mut *mut u8);
 }
 
 const OBJ_MAP: i32 = 2;
@@ -79,9 +81,18 @@ unsafe fn find_entry(mut entry: *mut MapEntry, key: &[u8]) -> *mut MapEntry {
 #[unsafe(no_mangle)]
 pub extern "C" fn map_new(capacity: u64) -> *mut u8 {
     unsafe {
-        let map_ptr = gc_alloc_kind(size_of::<Map>(), OBJ_MAP) as *mut Map;
+        let mut map_ptr = gc_alloc_kind(size_of::<Map>(), OBJ_MAP) as *mut Map;
+        if map_ptr.is_null() {
+            return ptr::null_mut();
+        }
+        let map_root: *mut *mut u8 = std::ptr::addr_of_mut!(map_ptr).cast();
+        gc_add_root(map_root);
         let buckets_bytes = size_of::<*mut MapEntry>() * capacity as usize;
         let buckets = gc_alloc(buckets_bytes) as *mut *mut MapEntry;
+        if buckets.is_null() {
+            gc_remove_root(map_root);
+            return ptr::null_mut();
+        }
 
         // Zero-initialise the bucket array.
         ptr::write_bytes(buckets, 0, capacity as usize);
@@ -90,6 +101,7 @@ pub extern "C" fn map_new(capacity: u64) -> *mut u8 {
         (*map_ptr).size = 0;
         (*map_ptr).buckets = buckets;
 
+        gc_remove_root(map_root);
         map_ptr as *mut u8
     }
 }
@@ -109,8 +121,20 @@ pub extern "C" fn map_set(map_ptr: *mut u8, key: *const u8, key_len: u64, value:
         }
 
         // Allocate a new entry and prepend to the bucket chain.
-        let entry = gc_alloc_kind(size_of::<MapEntry>(), OBJ_ENTRY) as *mut MapEntry;
-        let key_copy = gc_alloc(key_len as usize);
+        let mut entry = gc_alloc_kind(size_of::<MapEntry>(), OBJ_ENTRY) as *mut MapEntry;
+        if entry.is_null() {
+            return;
+        }
+        let entry_root: *mut *mut u8 = std::ptr::addr_of_mut!(entry).cast();
+        gc_add_root(entry_root);
+
+        let mut key_copy = gc_alloc(key_len as usize);
+        if key_copy.is_null() {
+            gc_remove_root(entry_root);
+            return;
+        }
+        let key_copy_root: *mut *mut u8 = std::ptr::addr_of_mut!(key_copy).cast();
+        gc_add_root(key_copy_root);
         ptr::copy_nonoverlapping(key, key_copy, key_len as usize);
 
         (*entry).key = key_copy;
@@ -118,7 +142,9 @@ pub extern "C" fn map_set(map_ptr: *mut u8, key: *const u8, key_len: u64, value:
         (*entry).value = value;
         (*entry).next = *map.buckets.add(idx);
 
+        gc_remove_root(key_copy_root);
         *map.buckets.add(idx) = entry;
+        gc_remove_root(entry_root);
         map.size += 1;
     }
 }

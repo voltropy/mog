@@ -10,6 +10,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use blake3;
 
@@ -58,6 +59,8 @@ impl OptLevel {
     }
 }
 
+static COMPILER_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn default_qbe_target() -> &'static rqbe::Target {
     #[cfg(target_os = "macos")]
     {
@@ -102,6 +105,8 @@ pub struct CompileOptions {
     pub loop_interrupt_checks: bool,
     /// If true, emit timer-interrupt checks every _n_ loop iterations based on
     /// estimated per-iteration body cost.
+    ///
+    /// Disabled by default; enable explicitly via the compiler flag.
     pub adaptive_loop_interrupt_checks: bool,
     /// Target worst-case loop delay when adaptive checking is enabled, in
     /// microseconds.
@@ -283,7 +288,8 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
     }
 
     // --- temp directory ----------------------------------------------------
-    let tmp = env::temp_dir().join(format!("mog-{}", std::process::id()));
+    let tmp_index = COMPILER_TMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let tmp = env::temp_dir().join(format!("mog-{}-{}", std::process::id(), tmp_index));
     fs::create_dir_all(&tmp).map_err(|e| vec![format!("failed to create temp dir: {e}")])?;
 
     let asm_path = tmp.join("out.s");

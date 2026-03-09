@@ -10,6 +10,8 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 use mog::compiler::{compile_to_binary, CompileOptions};
 
@@ -23,6 +25,7 @@ struct RunOutcome {
     elapsed: Duration,
     timed_out: bool,
     exit_code: Option<i32>,
+    signal: Option<i32>,
 }
 
 static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -101,6 +104,8 @@ fn compile_hosted_binary(source: &str, limits: HostLimits, label: &str) -> Optio
     let host_path = std::env::temp_dir().join(format!("mog-sec-host-{pid}-{counter}.c"));
     let out_path = std::env::temp_dir().join(format!("mog-sec-bin-{pid}-{counter}.out"));
 
+    eprintln!("compiling security harness {label}: {out_path:?}");
+
     fs::write(&host_path, host_source_for(limits)).unwrap();
 
     let options = CompileOptions {
@@ -136,19 +141,29 @@ fn run_with_timeout(executable: &Path, timeout: Duration) -> RunOutcome {
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait().unwrap() {
+            #[cfg(unix)]
+            let signal = status.signal();
+            #[cfg(not(unix))]
+            let signal = None;
             return RunOutcome {
                 elapsed: start.elapsed(),
                 timed_out: false,
                 exit_code: status.code(),
+                signal,
             };
         }
         if start.elapsed() >= timeout {
             let _ = child.kill();
-            let _ = child.wait();
+            let status = child.wait().unwrap();
+            #[cfg(unix)]
+            let signal = status.signal();
+            #[cfg(not(unix))]
+            let signal = None;
             return RunOutcome {
                 elapsed: start.elapsed(),
                 timed_out: true,
-                exit_code: None,
+                exit_code: status.code(),
+                signal,
             };
         }
 
@@ -170,14 +185,49 @@ fn expect_fast_stop(source: &str, limits: HostLimits, source_name: &str, stop_gu
     );
     assert!(
         run.exit_code.is_some(),
-        "guest process was terminated by signal for {source_name}: elapsed={:?}",
-        run.elapsed
+        "guest process was terminated by signal for {source_name}: elapsed={:?}, signal={:?}",
+        run.elapsed,
+        run.signal
     );
     assert!(
         run.elapsed < stop_guard,
         "host stop path for {source_name} exceeded limit: elapsed={:?}",
         run.elapsed
     );
+}
+
+fn expect_fast_error_exit(
+    source: &str,
+    limits: HostLimits,
+    source_name: &str,
+    stop_guard: Duration,
+) -> Option<i32> {
+    let binary = match compile_hosted_binary(source, limits, source_name) {
+        Some(path) => path,
+        None => return None,
+    };
+
+    let run = run_with_timeout(&binary, stop_guard);
+    assert!(
+        !run.timed_out,
+        "host did not regain control for {source_name}: elapsed={:?}",
+        run.elapsed
+    );
+    let exit_code = match run.exit_code {
+        Some(code) => code,
+        None => panic!("guest process was terminated by signal for {source_name}: elapsed={:?}", run.elapsed),
+    };
+    assert!(
+        exit_code != 0,
+        "guest program should fail for {source_name}: exit_code={exit_code}"
+    );
+    assert!(
+        run.elapsed < stop_guard,
+        "host stop path for {source_name} exceeded limit: elapsed={:?}",
+        run.elapsed
+    );
+
+    Some(exit_code)
 }
 
 #[test]
@@ -356,4 +406,29 @@ fn main() -> int {
         "nested-timeout",
         Duration::from_millis(700),
     );
+}
+
+#[test]
+fn array_access_beyond_end_stops_program_with_error() {
+    let source = r#"
+fn main() -> int {
+    arr := [10, 20, 30];
+    return arr[3];
+}"#;
+
+    let Some(exit_code) = expect_fast_error_exit(
+        source,
+        HostLimits {
+            max_memory: 16 * 1024 * 1024,
+            max_cpu_ms: 200,
+            initial_memory: 4 * 1024 * 1024,
+        },
+        "array-out-of-bounds",
+        Duration::from_millis(500),
+    ) else {
+        return;
+    };
+
+    assert!(exit_code > 0);
+    assert_eq!(exit_code, 2);
 }
