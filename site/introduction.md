@@ -24,6 +24,12 @@ Mog is a statically typed, compiled, embedded language (think statically typed L
 - Even without a full security audit, Mog is already useful for agents extending themselves with their own code.
 - MIT licensed, contributions welcome. https://github.com/voltropy/mog
 
+## Examples
+
+### Agent hook
+
+An agent hook that runs after context compaction. The first two lines are the entire security story: `import` pulls in host-defined types, `optional` capabilities degrade gracefully, and structs are constructed inline.
+
 ```mog
 import agent;       // Agent, Message, Role types
 optional log;       // silently ignored if not provided
@@ -38,6 +44,10 @@ pub fn on_post_compaction(session: agent.Session) {
   });
 }
 ```
+
+### Async HTTP with retry
+
+An async HTTP fetcher with retry logic -- 17 lines, no boilerplate. `async`/`await` suspends without blocking, `match` destructures `Result` values, and f-strings interpolate expressions directly.
 
 ```mog
 async fn fetch_with_retry(url: string, max_retries: int) -> Result<string> {
@@ -58,6 +68,10 @@ async fn fetch_with_retry(url: string, max_retries: int) -> Result<string> {
   return err("unreachable");
 }
 ```
+
+### FFT on tensors
+
+A radix-2 FFT on `tensor<f32>` data -- real numeric code, not a toy. Mog has no operator precedence, so mixed arithmetic requires explicit parentheses. Type conversions like `size as float` and `cos(angle) as f32` are always explicit -- no implicit coercion.
 
 ```mog
 // Fast Fourier Transform (Cooley-Tukey, radix-2, in-place)
