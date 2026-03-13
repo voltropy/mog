@@ -83,7 +83,11 @@ fn make_process_cap() -> CapabilityDecl {
         capability process {
             async fn sleep(ms: int) -> int;
             fn getenv(name: string) -> string;
+            fn cwd() -> string;
             fn exit(code: int) -> int;
+            fn timestamp() -> int;
+            fn argc() -> int;
+            fn arg(index: int) -> string;
         }
     "#,
     )
@@ -608,13 +612,17 @@ fn test_cap_parse_process() {
         capability process {
             async fn sleep(ms: int) -> int;
             fn getenv(name: string) -> string;
+            fn cwd() -> string;
             fn exit(code: int) -> int;
+            fn timestamp() -> int;
+            fn argc() -> int;
+            fn arg(index: int) -> string;
         }
     "#,
     )
     .expect("should parse");
     assert_eq!(decl.name, "process");
-    assert_eq!(decl.functions.len(), 3);
+    assert_eq!(decl.functions.len(), 7);
 
     assert_eq!(decl.functions[0].name, "sleep");
     assert!(decl.functions[0].is_async);
@@ -626,8 +634,29 @@ fn test_cap_parse_process() {
     assert!(!decl.functions[1].is_async);
     assert_eq!(decl.functions[1].return_type, Type::String);
 
-    assert_eq!(decl.functions[2].name, "exit");
-    assert_eq!(decl.functions[2].return_type, Type::int());
+    assert_eq!(decl.functions[2].name, "cwd");
+    assert!(!decl.functions[2].is_async);
+    assert_eq!(decl.functions[2].params.len(), 0);
+    assert_eq!(decl.functions[2].return_type, Type::String);
+
+    assert_eq!(decl.functions[3].name, "exit");
+    assert_eq!(decl.functions[3].return_type, Type::int());
+
+    assert_eq!(decl.functions[4].name, "timestamp");
+    assert!(!decl.functions[4].is_async);
+    assert_eq!(decl.functions[4].params.len(), 0);
+    assert_eq!(decl.functions[4].return_type, Type::int());
+
+    assert_eq!(decl.functions[5].name, "argc");
+    assert!(!decl.functions[5].is_async);
+    assert_eq!(decl.functions[5].params.len(), 0);
+    assert_eq!(decl.functions[5].return_type, Type::int());
+
+    assert_eq!(decl.functions[6].name, "arg");
+    assert!(!decl.functions[6].is_async);
+    assert_eq!(decl.functions[6].params.len(), 1);
+    assert_eq!(decl.functions[6].params[0].0, "index");
+    assert_eq!(decl.functions[6].return_type, Type::String);
 }
 
 #[test]
@@ -884,6 +913,44 @@ async fn fetch() -> i64 {
         ir.contains("call") || ir.contains("http") || ir.contains("get"),
         "async cap call should appear in IR, IR:\n{}",
         ir
+    );
+}
+
+#[test]
+fn test_cap_analyzer_process_argc() {
+    let caps = caps_map(vec![make_process_cap()]);
+    let src = "requires process\nfn main() -> int { n: int = process.argc(); return n; }";
+    let (_ast, errors) = analyze_with_caps(src, caps);
+    let unknown_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            e.message.to_lowercase().contains("unknown")
+                || e.message.to_lowercase().contains("undefined")
+        })
+        .collect();
+    assert!(
+        unknown_errors.is_empty(),
+        "process.argc() should be recognized with cap, got: {:?}",
+        unknown_errors
+    );
+}
+
+#[test]
+fn test_cap_analyzer_process_arg() {
+    let caps = caps_map(vec![make_process_cap()]);
+    let src = "requires process\nfn main() -> int { s: string = process.arg(0); return 0; }";
+    let (_ast, errors) = analyze_with_caps(src, caps);
+    let unknown_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            e.message.to_lowercase().contains("unknown")
+                || e.message.to_lowercase().contains("undefined")
+        })
+        .collect();
+    assert!(
+        unknown_errors.is_empty(),
+        "process.arg() should be recognized with cap, got: {:?}",
+        unknown_errors
     );
 }
 

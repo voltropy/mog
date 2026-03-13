@@ -811,6 +811,123 @@ fn capability_call_extracts_result() {
     assert!(ir.contains("loadl"), "expected loadl to get result");
 }
 
+// Subset of the process capability — only the functions under test.
+// Capability dispatch is name-based (mog_cap_call_out takes string names),
+// so a subset with different ordering is safe for codegen tests.
+fn make_process_cap() -> HashMap<String, CapabilityDecl> {
+    let mut caps = HashMap::new();
+    caps.insert(
+        "process".to_string(),
+        CapabilityDecl {
+            name: "process".to_string(),
+            functions: vec![
+                CapabilityFn {
+                    name: "exit".to_string(),
+                    params: vec![("code".to_string(), Type::int())],
+                    return_type: Type::int(),
+                    is_async: false,
+                },
+                CapabilityFn {
+                    name: "argc".to_string(),
+                    params: vec![],
+                    return_type: Type::int(),
+                    is_async: false,
+                },
+                CapabilityFn {
+                    name: "arg".to_string(),
+                    params: vec![("index".to_string(), Type::int())],
+                    return_type: Type::String,
+                    is_async: false,
+                },
+            ],
+        },
+    );
+    caps
+}
+
+#[test]
+fn capability_process_argc_invokes_dispatcher() {
+    let ir = qbe_with_caps(
+        "requires process\nn := process.argc()\nprintln(n)",
+        make_process_cap(),
+    );
+    assert!(
+        ir.contains("call $mog_cap_call_out"),
+        "expected mog_cap_call_out for process.argc()"
+    );
+}
+
+#[test]
+fn capability_process_argc_passes_zero_args() {
+    let ir = qbe_with_caps(
+        "requires process\nn := process.argc()\nprintln(n)",
+        make_process_cap(),
+    );
+    // Zero-arg capability calls end with "l 0, w 0)" — null args buffer, 0 count
+    assert!(
+        ir.contains("l 0, w 0)"),
+        "expected zero args (l 0, w 0) in cap call for argc()"
+    );
+}
+
+#[test]
+fn capability_process_argc_extracts_result() {
+    let ir = qbe_with_caps(
+        "requires process\nn := process.argc()\nprintln(n)",
+        make_process_cap(),
+    );
+    // Result extraction: add offset 8 to output buffer, then loadl
+    assert!(
+        ir.contains("=l add ") && ir.contains("loadl"),
+        "expected result extraction (add + loadl) for argc()"
+    );
+}
+
+#[test]
+fn capability_process_arg_invokes_dispatcher() {
+    let ir = qbe_with_caps(
+        "requires process\ns := process.arg(0)\nprintln(s)",
+        make_process_cap(),
+    );
+    assert!(
+        ir.contains("call $mog_cap_call_out"),
+        "expected mog_cap_call_out for process.arg()"
+    );
+}
+
+#[test]
+fn capability_process_arg_passes_one_arg() {
+    let ir = qbe_with_caps(
+        "requires process\ns := process.arg(0)\nprintln(s)",
+        make_process_cap(),
+    );
+    assert!(
+        ir.contains("w 1)"),
+        "expected 1 arg in cap call for arg(0)"
+    );
+}
+
+#[test]
+fn capability_process_arg_allocates_args_buffer() {
+    let ir = qbe_with_caps(
+        "requires process\ns := process.arg(0)\nprintln(s)",
+        make_process_cap(),
+    );
+    assert!(
+        ir.contains("call $gc_alloc"),
+        "expected gc_alloc for args buffer"
+    );
+}
+
+#[test]
+fn main_entry_calls_mog_set_argv() {
+    let ir = qbe("fn main() { println(\"hello\") }");
+    assert!(
+        ir.contains("call $mog_set_argv(w %argc, l %argv)"),
+        "expected mog_set_argv call in main entry"
+    );
+}
+
 // ==========================================================================
 // Plugin mode
 // ==========================================================================
@@ -911,8 +1028,8 @@ fn main_entry_renames_to_program_user() {
 fn main_entry_generates_exported_main() {
     let ir = qbe("fn main() { println(\"hello world\") }");
     assert!(
-        ir.contains("export function w $main()"),
-        "expected exported $main"
+        ir.contains("export function w $main(w %argc, l %argv)"),
+        "expected exported $main with argc/argv"
     );
 }
 
@@ -1157,7 +1274,7 @@ fn string_concatenation_calls_string_concat() {
 #[test]
 fn toplevel_generates_main_export() {
     let ir = qbe("println(\"hi\")");
-    assert!(ir.contains("export function w $main()"));
+    assert!(ir.contains("export function w $main(w %argc, l %argv)"));
 }
 
 #[test]
