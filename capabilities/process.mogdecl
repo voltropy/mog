@@ -1,5 +1,5 @@
 // process — Process capability (POSIX host)
-// Provides process-level operations: sleep, env vars, exit.
+// Provides process-level operations: sleep, env vars, cwd, exit, timestamps, arguments.
 
 capability process {
   // Sleep for given milliseconds (genuinely async via event loop timer)
@@ -16,4 +16,10 @@ capability process {
   
   // Get current timestamp in milliseconds since epoch
   fn timestamp() -> int
+
+  // Get the number of command-line arguments
+  fn argc() -> int
+
+  // Get command-line argument at given index
+  fn arg(index: int) -> string
 }

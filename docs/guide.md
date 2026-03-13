@@ -7017,8 +7017,11 @@ async fn main() -> int {
   home := process.getenv("HOME");
   print("home directory: {home}");
 
-  // Exit with a specific code
-  process.exit(0);
+  // Access command-line arguments
+  n := process.argc();
+  for i in 0..n {
+    print(process.arg(i));
+  }
 
   return 0;
 }
@@ -7033,6 +7036,8 @@ The full `process` interface:
 | `cwd` | `() -> string` | Current working directory |
 | `getenv` | `(name: string) -> string` | Read environment variable |
 | `exit` | `(code: int) -> int` | Terminate the program |
+| `argc` | `() -> int` | Number of command-line arguments |
+| `arg` | `(index: int) -> string` | Get command-line argument at index |
 
 ## Practical Examples
 
