@@ -148,10 +148,20 @@ impl QBECodeGen {
     }
 
     fn emit_alloc(&mut self, line: &str) {
+        self.emit_alloc_typed(line, false);
+    }
+    fn emit_alloc_float(&mut self, line: &str) {
+        self.emit_alloc_typed(line, true);
+    }
+    fn emit_alloc_typed(&mut self, line: &str, is_float: bool) {
         self.entry_allocs.push(line.to_string());
         // Zero-initialize every alloc slot.
         if let Some(reg) = line.split('=').next().map(|s| s.trim()) {
-            self.entry_allocs.push(format!("  storel 0, {}", reg));
+            if is_float {
+                self.entry_allocs.push(format!("  stored d_0.0, {}", reg));
+            } else {
+                self.entry_allocs.push(format!("  storel 0, {}", reg));
+            }
         }
     }
 
@@ -730,7 +740,7 @@ impl QBECodeGen {
         value: &Expr,
     ) -> String {
         let val = self.gen_expr(value);
-        let val_store_op = self.store_op_for_expr(value);
+        let val_store_op = self.store_op_for_reg(&val);
         if let Some(n) = name {
             // Simple variable assignment or walrus declaration
             if let Some(reg) = self.variable_registers.get(n).cloned() {
@@ -738,7 +748,13 @@ impl QBECodeGen {
             } else {
                 // New variable declaration via :=
                 let slot = self.fresh_reg();
-                self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+                let is_float_val = val_store_op == "stored";
+                if is_float_val {
+                    self.emit_alloc_float(&format!("    {} =l alloc8 8", slot));
+                    self.float_regs.insert(slot.clone());
+                } else {
+                    self.emit_alloc(&format!("    {} =l alloc8 8", slot));
+                }
                 self.emit(&format!("    {} {}, {}", val_store_op, val, slot));
                 self.variable_registers.insert(n.clone(), slot.clone());
                 // Infer type
@@ -789,6 +805,16 @@ impl QBECodeGen {
                             capacity: Some(capacity.unwrap_or(0)),
                         },
                     );
+                } else if let ExprKind::StructLiteral { struct_name, .. } = &value.kind {
+                    if let Some(sname) = struct_name {
+                        self.variable_types.insert(
+                            n.clone(),
+                            Type::Custom(sname.clone()),
+                        );
+                    }
+                } else if self.is_float_operand(value) {
+                    self.variable_types
+                        .insert(n.clone(), Type::Float(FloatKind::F64));
                 }
             }
             val
@@ -4125,7 +4151,8 @@ impl QBECodeGen {
         }
         if let Some(slot) = self.variable_registers.get(name).cloned() {
             let reg = self.fresh_reg();
-            let is_float = matches!(self.variable_types.get(name), Some(t) if t.is_float());
+            let is_float = matches!(self.variable_types.get(name), Some(t) if t.is_float())
+                || self.float_regs.contains(&slot);
             if is_float {
                 self.emit(&format!("  {} =d loadd {}", reg, slot));
                 self.mark_float_reg(&reg);
