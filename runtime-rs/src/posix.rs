@@ -153,6 +153,22 @@ static_cstr!(ERR_PROC_SLEEP_MISSING, "process.sleep: missing ms");
 static_cstr!(ERR_PROC_GETENV_MISSING, "process.getenv: missing name");
 static_cstr!(ERR_PROC_GETENV_BAD, "process.getenv: name must be a string");
 static_cstr!(ERR_PROC_CWD_FAIL, "process.cwd: getcwd failed");
+static_cstr!(ERR_PROC_ARG_BOUNDS, "process.arg: index out of bounds");
+static_cstr!(ERR_PROC_ARG_BAD,    "process.arg: index must be an int");
+
+// ---------------------------------------------------------------------------
+// argc/argv storage — set once before runtime init
+// ---------------------------------------------------------------------------
+static mut MOG_ARGC: i32       = 0;
+static mut MOG_ARGV: *const *const u8 = ptr::null();
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mog_set_argv(argc: i32, argv: *const *const u8) {
+    if !argv.is_null() {
+        MOG_ARGC = argc;
+        MOG_ARGV = argv;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Capability entry struct — matches the C MogCapEntry layout.
@@ -461,11 +477,31 @@ static FS_ENTRIES: &[MogCapEntry] = &[
         name: b"file_size\0".as_ptr(),
         func: Some(fs_file_size),
     },
-    MogCapEntry {
-        name: ptr::null(),
-        func: None,
-    },
 ];
+
+extern "C" fn process_argc(_vm: *mut u8, _args: *const MogValue, _nargs: i32) -> MogValue {
+    MogValue::int(unsafe { MOG_ARGC } as i64)
+}
+
+extern "C" fn process_arg(_vm: *mut u8, args: *const MogValue, nargs: i32) -> MogValue {
+    unsafe {
+        let idx = arg_int(args, 0, nargs) as i32;
+        if idx < 0 || idx >= MOG_ARGC {
+            return MogValue::error(ERR_PROC_ARG_BOUNDS.as_ptr());
+        }
+        let ptr = *MOG_ARGV.offset(idx as isize);
+        if ptr.is_null() {
+            return MogValue::string(b"\0".as_ptr());
+        }
+        let len = libc::strlen(ptr as *const libc::c_char);
+        let dest = gc_external_alloc(len + 1);
+        if dest.is_null() {
+            return MogValue::string(b"\0".as_ptr());
+        }
+        ptr::copy_nonoverlapping(ptr, dest, len + 1);
+        MogValue::string(dest)
+    }
+}
 
 static PROCESS_ENTRIES: &[MogCapEntry] = &[
     MogCapEntry {
@@ -487,6 +523,14 @@ static PROCESS_ENTRIES: &[MogCapEntry] = &[
     MogCapEntry {
         name: b"exit\0".as_ptr(),
         func: Some(process_exit),
+    },
+    MogCapEntry {
+        name: b"argc\0".as_ptr(),
+        func: Some(process_argc),
+    },
+    MogCapEntry {
+        name: b"arg\0".as_ptr(),
+        func: Some(process_arg),
     },
     MogCapEntry {
         name: ptr::null(),

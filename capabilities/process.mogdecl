@@ -16,4 +16,10 @@ capability process {
   
   // Get current timestamp in milliseconds since epoch
   fn timestamp() -> int
+
+  // Get number of command-line arguments
+  fn argc() -> int
+
+  // Get command-line argument at index
+  fn arg(index: int) -> string
 }
