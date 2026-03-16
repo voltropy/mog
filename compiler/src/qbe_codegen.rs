@@ -752,6 +752,7 @@ impl QBECodeGen {
                 if is_float_val {
                     self.emit_alloc_float(&format!("    {} =l alloc8 8", slot));
                     self.float_regs.insert(slot.clone());
+                    self.variable_types.insert(n.clone(), Type::Float(FloatKind::F64));
                 } else {
                     self.emit_alloc(&format!("    {} =l alloc8 8", slot));
                 }
