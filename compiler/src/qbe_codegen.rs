@@ -3929,7 +3929,8 @@ impl QBECodeGen {
         let is_async_main =
             self.async_functions.contains("main") || self.async_functions.contains("program_user");
 
-        let mut main_ir = String::from("export function w $main() {\n@start\n");
+        let mut main_ir = String::from("export function w $main(w %argc, l %argv) {\n@start\n");
+        main_ir.push_str("    call $mog_set_argv(w %argc, l %argv)\n");
         main_ir.push_str("    call $gc_init()\n");
         // gc_init already calls mog_stack_guard_init internally, but also
         // emit an explicit call so standalone builds without the Rust runtime
